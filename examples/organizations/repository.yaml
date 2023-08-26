@@ -1,0 +1,19 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: sample-repository
+spec:
+  forProvider:
+    description: This is a sample repository
+    orgRef: 
+      name: pgh-sample-organization
+    permissions:
+      users:
+      - userRef: 
+          name: pgh-sample-user
+        role: push
+      teams:
+      - teamRef:
+          name: sample-team
+        role: pull
+

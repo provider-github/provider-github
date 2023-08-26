@@ -1,0 +1,8 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Organization
+metadata:
+  name: pgh-sample-organization
+spec: 
+  deletionPolicy: "Orphan"
+  forProvider:
+    description: this is a sample organization
