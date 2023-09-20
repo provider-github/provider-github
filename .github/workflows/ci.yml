@@ -13,11 +13,12 @@ env:
   GO_VERSION: '1.20'
   GOLANGCI_VERSION: 'v1.54.0'
   DOCKER_BUILDX_VERSION: 'v0.9.1'
-
   # Common users. We can't run a step 'if secrets.XXX != ""' but we can run a
   # step 'if env.XXX' != ""', so we copy these to succinctly test whether
   # credentials have been provided before trying to run steps that need them.
   UPBOUND_MARKETPLACE_PUSH_ROBOT_USR: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
+  DOCKER_USR: ${{ secrets.DOCKER_USR }}
+
 jobs:
   detect-noop:
     runs-on: ubuntu-22.04
@@ -190,13 +191,12 @@ jobs:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
           install: true
 
-      - name: Login to Upbound
+      - name: Login to Docker
         uses: docker/login-action@v1
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
+        if: env.DOCKER_USR != ''
         with:
-          registry: xpkg.upbound.io
-          username: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-          password: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_PSW }}
+          username: ${{ secrets.DOCKER_USR }}
+          password: ${{ secrets.DOCKER_PSW }}
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -246,5 +246,4 @@ jobs:
           path: _output/**
 
       - name: Publish Artifacts
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
         run: make publish BRANCH_NAME=${GITHUB_REF##*/}
