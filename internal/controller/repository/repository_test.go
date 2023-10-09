@@ -44,7 +44,9 @@ import (
 type repositoryModifier func(*v1alpha1.Repository)
 
 var (
-	repo = "test-repo"
+	repo        = "test-repo"
+	description = "desc"
+	archived    = false
 
 	user1     = "test-user-1"
 	user1Role = "admin"
@@ -93,6 +95,14 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 		f(cr)
 	}
 	return cr
+}
+
+func githubRepository() *github.Repository {
+	return &github.Repository{
+		Name:        &repo,
+		Description: &description,
+		Archived:    &archived,
+	}
 }
 
 func githubCollaborators() []*github.User {
@@ -151,6 +161,9 @@ func TestObserve(t *testing.T) {
 				github: &ghclient.Client{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockEdit: func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error) {
 							return nil, nil, nil
 						},
 						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
@@ -178,6 +191,9 @@ func TestObserve(t *testing.T) {
 				github: &ghclient.Client{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockEdit: func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error) {
 							return nil, nil, nil
 						},
 						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {

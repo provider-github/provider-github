@@ -42,6 +42,13 @@ type RepositoryParameters struct {
 	// OrgSlector selects a reference to an Organization
 	// +optional
 	OrgSelector *xpv1.Selector `json:"orgSelector,omitempty"`
+
+	// Archived sets if a repository should be archived on delete
+	// +optional
+	Archived *bool `json:"archived,omitempty"`
+
+	// Safeguard for accidental deletion
+	ForceDelete *bool `json:"forceDelete,omitempty"`
 }
 
 // RepositoryParameters are the configurable fields of a Repository.
