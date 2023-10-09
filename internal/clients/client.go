@@ -61,6 +61,7 @@ type TeamsClient interface {
 
 type RepositoriesClient interface {
 	Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error)
+	Edit(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
 	ListTeams(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	ListCollaborators(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
 	Create(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)

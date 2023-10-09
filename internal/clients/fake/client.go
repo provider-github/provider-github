@@ -50,6 +50,7 @@ func (m *MockUsersClient) Get(ctx context.Context, user string) (*github.User, *
 
 type MockRepositoriesClient struct {
 	MockGet                func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error)
+	MockEdit               func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
 	MockListTeams          func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	MockListCollaborators  func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
 	MockCreate             func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
@@ -60,6 +61,10 @@ type MockRepositoriesClient struct {
 
 func (m *MockRepositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 	return m.MockGet(ctx, owner, repo)
+}
+
+func (m *MockRepositoriesClient) Edit(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error) {
+	return m.MockEdit(ctx, owner, repo, repository)
 }
 
 func (m *MockRepositoriesClient) AddCollaborator(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {

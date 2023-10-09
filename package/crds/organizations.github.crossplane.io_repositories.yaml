@@ -68,8 +68,15 @@ spec:
                 description: RepositoryParameters are the configurable fields of a
                   Repository.
                 properties:
+                  archived:
+                    description: Archived sets if a repository should be archived
+                      on delete
+                    type: boolean
                   description:
                     type: string
+                  forceDelete:
+                    description: Safeguard for accidental deletion
+                    type: boolean
                   org:
                     description: Org is the Organization for the Membership
                     type: string

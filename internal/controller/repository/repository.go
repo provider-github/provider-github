@@ -20,6 +20,8 @@ import (
 	"context"
 	"reflect"
 
+	"k8s.io/utils/pointer"
+
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -128,7 +130,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	name := meta.GetExternalName(cr)
 
-	_, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
+	repo, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
 	if ghclient.Is404(err) {
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
@@ -159,6 +161,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if !reflect.DeepEqual(util.SortByKey(ghTToPermission), util.SortByKey(crTToPermission)) {
+		return notUpToDate, nil
+	}
+
+	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
+	if archivedCr != *repo.Archived {
 		return notUpToDate, nil
 	}
 
@@ -356,7 +363,18 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 
-	err := updateRepoUsers(ctx, cr, c.github, name)
+	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
+
+	_, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
+		Name:        &name,
+		Description: &cr.Spec.ForProvider.Description,
+		Archived:    &archivedCr,
+	})
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	err = updateRepoUsers(ctx, cr, c.github, name)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
@@ -376,6 +394,11 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	}
 
 	name := meta.GetExternalName(cr)
+
+	forceDelete := pointer.BoolDeref(cr.Spec.ForProvider.ForceDelete, false)
+	if !forceDelete {
+		return errors.New("You can only delete repositories by setting `forceDelete: true`")
+	}
 
 	_, err := c.github.Repositories.Delete(ctx, cr.Spec.ForProvider.Org, name)
 	if err != nil {
