@@ -47,6 +47,7 @@ var (
 	repo        = "test-repo"
 	description = "desc"
 	archived    = false
+	private     = true
 
 	user1     = "test-user-1"
 	user1Role = "admin"
@@ -102,6 +103,7 @@ func githubRepository() *github.Repository {
 		Name:        &repo,
 		Description: &description,
 		Archived:    &archived,
+		Private:     &private,
 	}
 }
 

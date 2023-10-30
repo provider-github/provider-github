@@ -49,6 +49,9 @@ type RepositoryParameters struct {
 
 	// Safeguard for accidental deletion
 	ForceDelete *bool `json:"forceDelete,omitempty"`
+
+	// Private sets the repository to private, if false it will be public
+	Private *bool `json:"private,omitempty"`
 }
 
 // RepositoryParameters are the configurable fields of a Repository.

@@ -169,6 +169,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return notUpToDate, nil
 	}
 
+	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+	if privateCr != *repo.Private {
+		return notUpToDate, nil
+	}
+
 	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalObservation{
@@ -268,6 +273,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	r := &github.Repository{
 		Name:        &name,
 		Description: &cr.Spec.ForProvider.Description,
+		Private:     cr.Spec.ForProvider.Private,
 	}
 
 	_, _, err := c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, r)
@@ -364,11 +370,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	name := meta.GetExternalName(cr)
 
 	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
+	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
 
 	_, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
 		Name:        &name,
 		Description: &cr.Spec.ForProvider.Description,
 		Archived:    &archivedCr,
+		Private:     &privateCr,
 	})
 	if err != nil {
 		return managed.ExternalUpdate{}, err
