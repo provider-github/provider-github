@@ -341,6 +341,10 @@ spec:
                           type: object
                         type: array
                     type: object
+                  private:
+                    description: Private sets the repository to private, if false
+                      it will be public
+                    type: boolean
                 type: object
               managementPolicies:
                 default:
