@@ -369,10 +369,24 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 
+	// Fetch the current repository details to check fork status and visibility.
+	currentRepo, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
 	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
 	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
 
-	_, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
+	currentFork := currentRepo.GetFork()
+	currentVisibility := currentRepo.GetPrivate()
+
+	// Check if the repository is a fork and the visibility is being changed.
+	if currentFork && (currentVisibility != privateCr) {
+		return managed.ExternalUpdate{}, errors.New("Can't update forked repo visibility")
+	}
+
+	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
 		Name:        &name,
 		Description: &cr.Spec.ForProvider.Description,
 		Archived:    &archivedCr,
