@@ -31,7 +31,7 @@ GO111MODULE = on
 # Setup Images
 
 IMAGES = provider-github
-DOCKER_REGISTRY = ghcr.io/fairmoney
+REGISTRY_ORGS = ghcr.io/fairmoney
 -include build/makelib/imagelight.mk
 
 # ====================================================================================
