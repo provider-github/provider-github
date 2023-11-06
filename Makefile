@@ -40,7 +40,7 @@ REGISTRY_ORGS = ghcr.io/fairmoney
 XPKG_REG_ORGS ?= ghcr.io/fairmoney
 # NOTE(hasheddan): skip promoting on xpkg.upbound.io as channel tags are
 # inferred.
-XPKG_REG_ORGS_NO_PROMOTE ?= ghcr.io/fairmoney
+XPKG_REG_ORGS_NO_PROMOTE ?= xpkg.upbound.io
 XPKGS = provider-github
 -include build/makelib/xpkg.mk
 
