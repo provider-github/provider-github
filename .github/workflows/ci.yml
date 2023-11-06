@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - main
+      - master
       - release-*
   pull_request: {}
   workflow_dispatch: {}
@@ -148,7 +148,6 @@ jobs:
     runs-on: ubuntu-22.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-
     steps:
       - name: Checkout
         uses: actions/checkout@v2
