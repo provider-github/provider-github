@@ -1,5 +1,5 @@
 FROM gcr.io/distroless/static@sha256:a01d47d4036cae5a67a9619e3d06fa14a6811a2247b4da72b4233ece4efebd57
-
+LABEL org.opencontainers.image.source=https://github.com/fairmoney/provider-github
 ARG TARGETOS
 ARG TARGETARCH
 

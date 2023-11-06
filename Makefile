@@ -31,15 +31,16 @@ GO111MODULE = on
 # Setup Images
 
 IMAGES = provider-github
+DOCKER_REGISTRY = ghcr.io/fairmoney
 -include build/makelib/imagelight.mk
 
 # ====================================================================================
 # Setup XPKG
 
-XPKG_REG_ORGS ?= docker.io/atarax
+XPKG_REG_ORGS ?= ghcr.io/fairmoney
 # NOTE(hasheddan): skip promoting on xpkg.upbound.io as channel tags are
 # inferred.
-XPKG_REG_ORGS_NO_PROMOTE ?= docker.io/atarax
+XPKG_REG_ORGS_NO_PROMOTE ?= ghcr.io/fairmoney
 XPKGS = provider-github
 -include build/makelib/xpkg.mk
 

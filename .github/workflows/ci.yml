@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - release-*
+      - lg/*
   pull_request: {}
   workflow_dispatch: {}
 
@@ -17,7 +18,6 @@ env:
   # step 'if env.XXX' != ""', so we copy these to succinctly test whether
   # credentials have been provided before trying to run steps that need them.
   UPBOUND_MARKETPLACE_PUSH_ROBOT_USR: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-  DOCKER_USR: ${{ secrets.DOCKER_USR }}
 
 jobs:
   detect-noop:
@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Detect No-op Changes
         id: noop
-        uses: fkirc/skip-duplicate-actions@v5.2.0
+        uses: fairmoney/skip-duplicate-actions@v5.2.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           paths_ignore: '["**.md", "**.png", "**.jpg"]'
@@ -74,7 +74,7 @@ jobs:
       # We could run 'make lint' but we prefer this action because it leaves
       # 'annotations' (i.e. it comments on PRs to point out linter violations).
       - name: Lint
-        uses: golangci/golangci-lint-action@v3
+        uses: fairmoney/golangci-lint-action@pre-node-20
         with:
           version: ${{ env.GOLANGCI_VERSION }}
 
@@ -124,6 +124,26 @@ jobs:
       - name: Show diff
         if: failure() && steps.check-diff.outcome == 'failure'
         run: git diff
+
+  trivy-scan-fs:
+    runs-on: ubuntu-22.04
+    needs: detect-noop
+    if: needs.detect-noop.outputs.noop != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Run Trivy vulnerability scanner in fs mode
+        uses: aquasecurity/trivy-action@fbd16365eb88e12433951383f5e99bd901fc618f # 0.12.0
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          skip-dirs: design
+          scan-ref: '.'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
 
   unit-tests:
     runs-on: ubuntu-22.04
@@ -177,6 +197,8 @@ jobs:
   publish-artifacts:
     runs-on: ubuntu-22.04
     needs: detect-noop
+    permissions:
+      packages: write
     if: needs.detect-noop.outputs.noop != 'true'
 
     steps:
@@ -191,12 +213,12 @@ jobs:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
           install: true
 
-      - name: Login to Docker
+      - name: Login to Github Container Registry
         uses: docker/login-action@v1
-        if: env.DOCKER_USR != ''
         with:
-          username: ${{ secrets.DOCKER_USR }}
-          password: ${{ secrets.DOCKER_PSW }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -247,3 +269,11 @@ jobs:
 
       - name: Publish Artifacts
         run: make publish BRANCH_NAME=${GITHUB_REF##*/}
+
+      - name: Promote Artifacts to Github Container Registry
+        if: github.ref == 'refs/heads/master'
+        run: make -j2 promote
+        env:
+          BRANCH_NAME: master
+          CHANNEL: master
+
