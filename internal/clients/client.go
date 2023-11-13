@@ -28,10 +28,15 @@ import (
 )
 
 type Client struct {
+	Actions       ActionsClient
 	Organizations OrganizationsClient
 	Users         UsersClient
 	Teams         TeamsClient
 	Repositories  RepositoriesClient
+}
+
+type ActionsClient interface {
+	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
 }
 
 type OrganizationsClient interface {
@@ -98,6 +103,7 @@ func NewClient(creds string) (*Client, error) {
 	}
 
 	return &Client{
+		Actions:       ghclient.Actions,
 		Organizations: ghclient.Organizations,
 		Users:         ghclient.Users,
 		Teams:         ghclient.Teams,

@@ -50,6 +50,32 @@ func (mg *Membership) ResolveReferences(ctx context.Context, c client.Reader) er
 	return nil
 }
 
+// ResolveReferences of this Organization.
+func (mg *Organization) ResolveReferences(ctx context.Context, c client.Reader) error {
+	r := reference.NewAPIResolver(c, mg)
+
+	var rsp reference.ResolutionResponse
+	var err error
+
+	rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+		CurrentValue: mg.Spec.ForProvider.Actions.Name,
+		Extract:      reference.ExternalName(),
+		Reference:    mg.Spec.ForProvider.Actions.NameRef,
+		Selector:     mg.Spec.ForProvider.Actions.NameSelector,
+		To: reference.To{
+			List:    &OrganizationList{},
+			Managed: &Organization{},
+		},
+	})
+	if err != nil {
+		return errors.Wrap(err, "mg.Spec.ForProvider.Actions.Name")
+	}
+	mg.Spec.ForProvider.Actions.Name = rsp.ResolvedValue
+	mg.Spec.ForProvider.Actions.NameRef = rsp.ResolvedReference
+
+	return nil
+}
+
 // ResolveReferences of this Repository.
 func (mg *Repository) ResolveReferences(ctx context.Context, c client.Reader) error {
 	r := reference.NewAPIResolver(c, mg)

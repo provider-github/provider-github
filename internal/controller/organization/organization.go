@@ -18,6 +18,7 @@ package organization
 
 import (
 	"context"
+	"fmt"
 
 	"k8s.io/utils/pointer"
 
@@ -141,6 +142,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+	fmt.Print(aResp)
 
 	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {
 		return managed.ExternalObservation{

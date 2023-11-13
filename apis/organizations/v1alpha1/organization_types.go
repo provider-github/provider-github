@@ -25,9 +25,25 @@ import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
 
+type ActionsConfiguration struct {
+	// Org is the Organization for the Membership
+	// +immutable
+	// +crossplane:generate:reference:type=Organization
+	Name string `json:"name,omitempty"`
+
+	// OrgRef is a reference to an Organization
+	// +optional
+	NameRef *xpv1.Reference `json:"nameRef,omitempty"`
+
+	// OrgSlector selects a reference to an Organization
+	// +optional
+	NameSelector *xpv1.Selector `json:"nameSelector,omitempty"`
+}
+
 // OrganizationParameters are the configurable fields of a Organization.
 type OrganizationParameters struct {
-	Description string `json:"description"`
+	Description string               `json:"description"`
+	Actions     ActionsConfiguration `json:"actions"`
 }
 
 // OrganizationObservation are the observable fields of a Organization.
