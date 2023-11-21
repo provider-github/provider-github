@@ -155,15 +155,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceUpToDate: false,
 	}
 
-	// Extract repository names from the list
-	aRepos := make([]string, 0, len(aResp.Repositories))
-	for _, repo := range aResp.Repositories {
-		aRepos = append(aRepos, repo.GetName())
-	}
-	slices.Sort(aRepos)
+	aRepos := getSortedRepoNames(aResp.Repositories)
 
-	crARepos := getEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
-	slices.Sort(crARepos)
+	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 
 	if err != nil {
 		return managed.ExternalObservation{}, err
@@ -210,71 +204,37 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
-	crARepos := getEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
-	if err != nil {
-		return managed.ExternalUpdate{}, err
-	}
-	slices.Sort(crARepos)
+	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
-	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	aResp, _, err := gh.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
 
 	// Extract repository names from the list
-	aRepos := make([]string, 0, len(aResp.Repositories))
-	for _, repo := range aResp.Repositories {
-		aRepos = append(aRepos, repo.GetName())
-	}
-	slices.Sort(aRepos)
+	aRepos := getSortedRepoNames(aResp.Repositories)
 
-	// Identify repositories that should be enabled
-	var missingRepos []string
-	for _, repo := range crARepos {
-		// Check if the repository from CRD is not in GitHub
-		if !util.Contains(aRepos, repo) {
-			missingRepos = append(missingRepos, repo)
-		}
+	missingReposIds, err := getUpdateRepoIds(ctx, gh, name, crARepos, aRepos)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
 	}
-	missingReposIds := make([]int64, 0, len(missingRepos))
-	for _, missingRepo := range missingRepos {
-		repo, _, err := c.github.Repositories.Get(ctx, name, missingRepo)
-		repoID := repo.GetID()
-		missingReposIds = append(missingReposIds, repoID)
-		if err != nil {
-			return managed.ExternalUpdate{}, err
-		}
-	}
-	// Enable actions for missing repositories
+
 	for _, missingRepo := range missingReposIds {
-		_, err := c.github.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
+		_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
 		if err != nil {
 			return managed.ExternalUpdate{}, err
 		}
 	}
 
-	// Identify repositories that should be disabled
-	toDeleteRepos := make([]string, 0, len(aRepos))
-	for _, repo := range aRepos {
-		// Check if the repository from CRD is not in GitHub
-		if !util.Contains(crARepos, repo) {
-			toDeleteRepos = append(toDeleteRepos, repo)
-		}
-	}
-	toDeleteReposIds := make([]int64, 0, len(toDeleteRepos))
-	for _, toDeleteRepo := range toDeleteRepos {
-		repo, _, err := c.github.Repositories.Get(ctx, name, toDeleteRepo)
-		repoID := repo.GetID()
-		toDeleteReposIds = append(toDeleteReposIds, repoID)
-		if err != nil {
-			return managed.ExternalUpdate{}, err
-		}
+	toDeleteReposIds, err := getUpdateRepoIds(ctx, gh, name, aRepos, crARepos)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
 	}
 
 	// Disable actions for missing repositories
 	for _, toDeleteRepo := range toDeleteReposIds {
-		_, err := c.github.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+		_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
 		if err != nil {
 			return managed.ExternalUpdate{}, err
 		}
@@ -293,10 +253,40 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	return nil
 }
 
-func getEnabledReposFromCr(repos []v1alpha1.ActionEnabledRepo) []string {
+func getSortedEnabledReposFromCr(repos []v1alpha1.ActionEnabledRepo) []string {
 	crAEnabledRepos := make([]string, 0, len(repos))
 	for _, repo := range repos {
 		crAEnabledRepos = append(crAEnabledRepos, repo.Repo)
 	}
+	slices.Sort(crAEnabledRepos)
 	return crAEnabledRepos
+}
+
+func getSortedRepoNames(repos []*github.Repository) []string {
+	repoNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		repoNames = append(repoNames, repo.GetName())
+	}
+	slices.Sort(repoNames)
+	return repoNames
+}
+
+func getUpdateRepoIds(ctx context.Context, gh *ghclient.Client, org string, crRepos []string, aRepos []string) ([]int64, error) {
+	var updateRepos []string
+	for _, repo := range crRepos {
+		// Check if the repository from CRD is not in GitHub
+		if !util.Contains(aRepos, repo) {
+			updateRepos = append(updateRepos, repo)
+		}
+	}
+	reposIds := make([]int64, 0, len(updateRepos))
+	for _, repo := range updateRepos {
+		repo, _, err := gh.Repositories.Get(ctx, org, repo)
+		repoID := repo.GetID()
+		reposIds = append(reposIds, repoID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return reposIds, nil
 }
