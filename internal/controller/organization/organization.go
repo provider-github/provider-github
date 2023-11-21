@@ -18,14 +18,8 @@ package organization
 
 import (
 	"context"
-	"fmt"
-
-	"k8s.io/utils/pointer"
-
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"reflect"
+	"slices"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
@@ -35,6 +29,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/provider-github/internal/util"
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/pointer"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
@@ -145,16 +145,35 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
 	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	fmt.Print(aResp)
+
+	notUpToDate := managed.ExternalObservation{
+		ResourceExists:   true,
+		ResourceUpToDate: false,
+	}
+
+	// Extract repository names from the list
+	aRepos := make([]string, 0, len(aResp.Repositories))
+	for _, repo := range aResp.Repositories {
+		aRepos = append(aRepos, repo.GetName())
+	}
+	slices.Sort(aRepos)
+
+	crARepos := getEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+	slices.Sort(crARepos)
+
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+	if !reflect.DeepEqual(aRepos, crARepos) {
+		return notUpToDate, nil
+	}
 
 	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {
-		return managed.ExternalObservation{
-			ResourceExists:   true,
-			ResourceUpToDate: false,
-		}, nil
+		return notUpToDate, nil
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -191,6 +210,76 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
+	crARepos := getEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+	slices.Sort(crARepos)
+
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	// Extract repository names from the list
+	aRepos := make([]string, 0, len(aResp.Repositories))
+	for _, repo := range aResp.Repositories {
+		aRepos = append(aRepos, repo.GetName())
+	}
+	slices.Sort(aRepos)
+
+	// Identify repositories that should be enabled
+	var missingRepos []string
+	for _, repo := range crARepos {
+		// Check if the repository from CRD is not in GitHub
+		if !util.Contains(aRepos, repo) {
+			missingRepos = append(missingRepos, repo)
+		}
+	}
+	missingReposIds := make([]int64, 0, len(missingRepos))
+	for _, missingRepo := range missingRepos {
+		repo, _, err := c.github.Repositories.Get(ctx, name, missingRepo)
+		repoID := repo.GetID()
+		missingReposIds = append(missingReposIds, repoID)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+	// Enable actions for missing repositories
+	for _, missingRepo := range missingReposIds {
+		_, err := c.github.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
+	// Identify repositories that should be disabled
+	toDeleteRepos := make([]string, 0, len(aRepos))
+	for _, repo := range aRepos {
+		// Check if the repository from CRD is not in GitHub
+		if !util.Contains(crARepos, repo) {
+			toDeleteRepos = append(toDeleteRepos, repo)
+		}
+	}
+	toDeleteReposIds := make([]int64, 0, len(toDeleteRepos))
+	for _, toDeleteRepo := range toDeleteRepos {
+		repo, _, err := c.github.Repositories.Get(ctx, name, toDeleteRepo)
+		repoID := repo.GetID()
+		toDeleteReposIds = append(toDeleteReposIds, repoID)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
+	// Disable actions for missing repositories
+	for _, toDeleteRepo := range toDeleteReposIds {
+		_, err := c.github.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -202,4 +291,12 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	cr.Status.SetConditions(xpv1.Deleting())
 
 	return nil
+}
+
+func getEnabledReposFromCr(repos []v1alpha1.ActionEnabledRepo) []string {
+	crAEnabledRepos := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		crAEnabledRepos = append(crAEnabledRepos, repo.Repo)
+	}
+	return crAEnabledRepos
 }

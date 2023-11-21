@@ -37,6 +37,8 @@ type Client struct {
 
 type ActionsClient interface {
 	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
+	AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	RemoveEnabledRepoInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
 }
 
 type OrganizationsClient interface {

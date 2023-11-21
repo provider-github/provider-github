@@ -57,21 +57,24 @@ func (mg *Organization) ResolveReferences(ctx context.Context, c client.Reader) 
 	var rsp reference.ResolutionResponse
 	var err error
 
-	rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
-		CurrentValue: mg.Spec.ForProvider.Actions.Name,
-		Extract:      reference.ExternalName(),
-		Reference:    mg.Spec.ForProvider.Actions.NameRef,
-		Selector:     mg.Spec.ForProvider.Actions.NameSelector,
-		To: reference.To{
-			List:    &OrganizationList{},
-			Managed: &Organization{},
-		},
-	})
-	if err != nil {
-		return errors.Wrap(err, "mg.Spec.ForProvider.Actions.Name")
+	for i4 := 0; i4 < len(mg.Spec.ForProvider.Actions.EnabledRepos); i4++ {
+		rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+			CurrentValue: mg.Spec.ForProvider.Actions.EnabledRepos[i4].Repo,
+			Extract:      reference.ExternalName(),
+			Reference:    mg.Spec.ForProvider.Actions.EnabledRepos[i4].RepoRef,
+			Selector:     mg.Spec.ForProvider.Actions.EnabledRepos[i4].RepoSelector,
+			To: reference.To{
+				List:    &RepositoryList{},
+				Managed: &Repository{},
+			},
+		})
+		if err != nil {
+			return errors.Wrap(err, "mg.Spec.ForProvider.Actions.EnabledRepos[i4].Repo")
+		}
+		mg.Spec.ForProvider.Actions.EnabledRepos[i4].Repo = rsp.ResolvedValue
+		mg.Spec.ForProvider.Actions.EnabledRepos[i4].RepoRef = rsp.ResolvedReference
+
 	}
-	mg.Spec.ForProvider.Actions.Name = rsp.ResolvedValue
-	mg.Spec.ForProvider.Actions.NameRef = rsp.ResolvedReference
 
 	return nil
 }

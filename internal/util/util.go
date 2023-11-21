@@ -70,3 +70,13 @@ func MergeMaps(m1 map[string]string, m2 map[string]string) map[string]string {
 	}
 	return merged
 }
+
+// Contains function to check if a string slice contains a specific string
+func Contains(slice []string, str string) bool {
+	for _, s := range slice {
+		if s == str {
+			return true
+		}
+	}
+	return false
+}

@@ -25,25 +25,29 @@ import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 )
 
+// ActionsConfiguration are the configurable fields of an Organization Actions.
 type ActionsConfiguration struct {
-	// Org is the Organization for the Membership
-	// +immutable
-	// +crossplane:generate:reference:type=Organization
-	Name string `json:"name,omitempty"`
+	EnabledRepos []ActionEnabledRepo `json:"enabledRepos,omitempty"`
+}
 
-	// OrgRef is a reference to an Organization
-	// +optional
-	NameRef *xpv1.Reference `json:"nameRef,omitempty"`
+type ActionEnabledRepo struct {
+	// Name of the repository
+	// +crossplane:generate:reference:type=Repository
+	Repo string `json:"repo,omitempty"`
 
-	// OrgSlector selects a reference to an Organization
+	// RepoRef is a reference to the Repositories
 	// +optional
-	NameSelector *xpv1.Selector `json:"nameSelector,omitempty"`
+	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+
+	// RepoSelector selects a reference to an Repositories
+	// +optional
+	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
 }
 
 // OrganizationParameters are the configurable fields of a Organization.
 type OrganizationParameters struct {
 	Description string               `json:"description"`
-	Actions     ActionsConfiguration `json:"actions"`
+	Actions     ActionsConfiguration `json:"actions,omitempty"`
 }
 
 // OrganizationObservation are the observable fields of a Organization.
