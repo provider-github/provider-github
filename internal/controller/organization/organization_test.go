@@ -20,11 +20,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -45,6 +44,8 @@ var (
 	org              = "test-org"
 	description      = "test description"
 	otherDescription = "other description"
+	repo             = "test-repo"
+	repo2            = "test-repo2"
 )
 
 type organizationModifier func(*v1alpha1.Organization)
@@ -55,10 +56,19 @@ func withDescription() organizationModifier {
 	}
 }
 
-func organization(m ...organizationModifier) *v1alpha1.Organization {
+func organization(repos []string, m ...organizationModifier) *v1alpha1.Organization {
 	cr := &v1alpha1.Organization{}
 
 	cr.Spec.ForProvider.Description = description
+	cr.Spec.ForProvider.Actions = v1alpha1.ActionsConfiguration{
+		EnabledRepos: make([]v1alpha1.ActionEnabledRepo, len(repos)),
+	}
+	for i, repo := range repos {
+		cr.Spec.ForProvider.Actions.EnabledRepos[i] = v1alpha1.ActionEnabledRepo{
+			Repo: repo,
+		}
+	}
+
 	meta.SetExternalName(cr, org)
 
 	for _, f := range m {
@@ -72,6 +82,14 @@ func githubOrganization() *github.Organization {
 		Description: &description,
 		Name:        &org,
 	}
+}
+
+func githubOrgRepoActions() *github.ActionsEnabledOnOrgRepos {
+	repos := []*github.Repository{
+		{Name: &repo},
+		{Name: &repo2},
+	}
+	return &github.ActionsEnabledOnOrgRepos{Repositories: repos}
 }
 
 func TestObserve(t *testing.T) {
@@ -103,10 +121,15 @@ func TestObserve(t *testing.T) {
 							return githubOrganization(), nil, nil
 						},
 					},
+					Actions: &fake.MockActionsClient{
+						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+							return githubOrgRepoActions(), nil, nil
+						},
+					},
 				},
 			},
 			args: args{
-				mg: organization(withDescription()),
+				mg: organization([]string{repo, repo2}, withDescription()),
 			},
 			want: want{
 				o: managed.ExternalObservation{
@@ -124,10 +147,15 @@ func TestObserve(t *testing.T) {
 							return githubOrganization(), nil, nil
 						},
 					},
+					Actions: &fake.MockActionsClient{
+						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+							return githubOrgRepoActions(), nil, nil
+						},
+					},
 				},
 			},
 			args: args{
-				mg: organization(),
+				mg: organization([]string{repo, repo2}),
 			},
 			want: want{
 				o: managed.ExternalObservation{
@@ -145,10 +173,15 @@ func TestObserve(t *testing.T) {
 							return nil, nil, fake.Generate404Response()
 						},
 					},
+					Actions: &fake.MockActionsClient{
+						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+					},
 				},
 			},
 			args: args{
-				mg: organization(),
+				mg: organization([]string{repo, repo2}),
 			},
 			want: want{
 				o: managed.ExternalObservation{

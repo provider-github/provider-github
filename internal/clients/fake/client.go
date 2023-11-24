@@ -7,6 +7,24 @@ import (
 	"github.com/google/go-github/v54/github"
 )
 
+type MockActionsClient struct {
+	MockListEnabledReposInOrg  func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
+	MockAddEnabledReposInOrg   func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	MockRemoveEnabledRepoInOrg func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+}
+
+func (m *MockActionsClient) ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+	return m.MockListEnabledReposInOrg(ctx, owner, opts)
+}
+
+func (m *MockActionsClient) AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
+	return m.MockAddEnabledReposInOrg(ctx, owner, repositoryID)
+}
+
+func (m *MockActionsClient) RemoveEnabledRepoInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
+	return m.MockRemoveEnabledRepoInOrg(ctx, owner, repositoryID)
+}
+
 type MockOrganizationsClient struct {
 	MockGet                 func(ctx context.Context, org string) (*github.Organization, *github.Response, error)
 	MockEdit                func(ctx context.Context, name string, org *github.Organization) (*github.Organization, *github.Response, error)
