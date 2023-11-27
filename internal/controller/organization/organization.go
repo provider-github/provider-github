@@ -18,13 +18,8 @@ package organization
 
 import (
 	"context"
-
-	"k8s.io/utils/pointer"
-
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"reflect"
+	"slices"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
@@ -34,6 +29,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/provider-github/internal/util"
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/pointer"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
@@ -142,11 +143,31 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+
+	notUpToDate := managed.ExternalObservation{
+		ResourceExists:   true,
+		ResourceUpToDate: false,
+	}
+
+	aRepos := getSortedRepoNames(aResp.Repositories)
+
+	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+	if !reflect.DeepEqual(aRepos, crARepos) {
+		return notUpToDate, nil
+	}
+
 	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {
-		return managed.ExternalObservation{
-			ResourceExists:   true,
-			ResourceUpToDate: false,
-		}, nil
+		return notUpToDate, nil
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -183,6 +204,42 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
+	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	aResp, _, err := gh.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	// Extract repository names from the list
+	aRepos := getSortedRepoNames(aResp.Repositories)
+
+	missingReposIds, err := getUpdateRepoIds(ctx, gh, name, crARepos, aRepos)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	for _, missingRepo := range missingReposIds {
+		_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
+	toDeleteReposIds, err := getUpdateRepoIds(ctx, gh, name, aRepos, crARepos)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	// Disable actions for missing repositories
+	for _, toDeleteRepo := range toDeleteReposIds {
+		_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -194,4 +251,42 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	cr.Status.SetConditions(xpv1.Deleting())
 
 	return nil
+}
+
+func getSortedEnabledReposFromCr(repos []v1alpha1.ActionEnabledRepo) []string {
+	crAEnabledRepos := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		crAEnabledRepos = append(crAEnabledRepos, repo.Repo)
+	}
+	slices.Sort(crAEnabledRepos)
+	return crAEnabledRepos
+}
+
+func getSortedRepoNames(repos []*github.Repository) []string {
+	repoNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		repoNames = append(repoNames, repo.GetName())
+	}
+	slices.Sort(repoNames)
+	return repoNames
+}
+
+func getUpdateRepoIds(ctx context.Context, gh *ghclient.Client, org string, crRepos []string, aRepos []string) ([]int64, error) {
+	var updateRepos []string
+	for _, repo := range crRepos {
+		// Check if the repository from CRD is not in GitHub
+		if !util.Contains(aRepos, repo) {
+			updateRepos = append(updateRepos, repo)
+		}
+	}
+	reposIds := make([]int64, 0, len(updateRepos))
+	for _, repo := range updateRepos {
+		repo, _, err := gh.Repositories.Get(ctx, org, repo)
+		repoID := repo.GetID()
+		reposIds = append(reposIds, repoID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return reposIds, nil
 }
