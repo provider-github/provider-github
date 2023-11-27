@@ -204,45 +204,16 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
-	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
-
-	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
-	aResp, _, err := gh.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
-	if err != nil {
-		return managed.ExternalUpdate{}, err
-	}
-
-	// Extract repository names from the list
-	aRepos := getSortedRepoNames(aResp.Repositories)
-
-	missingReposIds, err := getUpdateRepoIds(ctx, gh, name, crARepos, aRepos)
+	missingReposIds, toDeleteReposIds, err := getMissingAndToDeleteRepos(ctx, gh, name, cr)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
-		for _, missingRepo := range missingReposIds {
-			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
-			if err != nil {
-				return managed.ExternalUpdate{}, err
-			}
+		err = updateRepos(ctx, gh, name, missingReposIds, toDeleteReposIds)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
 		}
 	}
-
-	toDeleteReposIds, err := getUpdateRepoIds(ctx, gh, name, aRepos, crARepos)
-	if err != nil {
-		return managed.ExternalUpdate{}, err
-	}
-
-	// Disable actions for missing repositories
-	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
-		for _, toDeleteRepo := range toDeleteReposIds {
-			_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
-			if err != nil {
-				return managed.ExternalUpdate{}, err
-			}
-		}
-	}
-
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -292,4 +263,51 @@ func getUpdateRepoIds(ctx context.Context, gh *ghclient.Client, org string, crRe
 		}
 	}
 	return reposIds, nil
+}
+
+func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.Client, name string, cr *v1alpha1.Organization) ([]int64, []int64, error) {
+	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	aResp, _, err := gh.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Extract repository names from the list
+	aRepos := getSortedRepoNames(aResp.Repositories)
+
+	missingReposIds, err := getUpdateRepoIds(ctx, gh, name, crARepos, aRepos)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	toDeleteReposIds, err := getUpdateRepoIds(ctx, gh, name, aRepos, crARepos)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return missingReposIds, toDeleteReposIds, nil
+}
+
+func updateRepos(ctx context.Context, gh *ghclient.Client, name string, missingReposIds []int64, toDeleteReposIds []int64) error {
+	if len(missingReposIds) > 0 {
+		for _, missingRepo := range missingReposIds {
+			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(toDeleteReposIds) > 0 {
+		for _, toDeleteRepo := range toDeleteReposIds {
+			_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
