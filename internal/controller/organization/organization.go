@@ -219,11 +219,12 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
-
-	for _, missingRepo := range missingReposIds {
-		_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
-		if err != nil {
-			return managed.ExternalUpdate{}, err
+	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
+		for _, missingRepo := range missingReposIds {
+			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
+			if err != nil {
+				return managed.ExternalUpdate{}, err
+			}
 		}
 	}
 
@@ -233,10 +234,12 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	// Disable actions for missing repositories
-	for _, toDeleteRepo := range toDeleteReposIds {
-		_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
-		if err != nil {
-			return managed.ExternalUpdate{}, err
+	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
+		for _, toDeleteRepo := range toDeleteReposIds {
+			_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+			if err != nil {
+				return managed.ExternalUpdate{}, err
+			}
 		}
 	}
 
