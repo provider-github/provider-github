@@ -75,6 +75,10 @@ type RepositoriesClient interface {
 	AddCollaborator(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	RemoveCollaborator(ctx context.Context, owner, repo, user string) (*github.Response, error)
 	Delete(ctx context.Context, owner, repo string) (*github.Response, error)
+	CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
+	EditHook(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
+	DeleteHook(ctx context.Context, owner, repo string, id int64) (*github.Response, error)
+	ListHooks(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
 }
 
 // NewClient creates a new client.
