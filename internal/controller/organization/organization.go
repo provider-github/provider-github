@@ -143,27 +143,28 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
-	aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
-
-	if err != nil {
-		return managed.ExternalObservation{}, err
-	}
-
 	notUpToDate := managed.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: false,
 	}
 
-	aRepos := getSortedRepoNames(aResp.Repositories)
+	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
+	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
+		aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
 
-	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
 
-	if err != nil {
-		return managed.ExternalObservation{}, err
-	}
-	if !reflect.DeepEqual(aRepos, crARepos) {
-		return notUpToDate, nil
+		crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
+		aRepos := getSortedRepoNames(aResp.Repositories)
+
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		if !reflect.DeepEqual(aRepos, crARepos) {
+			return notUpToDate, nil
+		}
 	}
 
 	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {

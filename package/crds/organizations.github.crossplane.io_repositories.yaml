@@ -345,6 +345,46 @@ spec:
                     description: Private sets the repository to private, if false
                       it will be public
                     type: boolean
+                  webhooks:
+                    items:
+                      description: Repository webhook https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks
+                      properties:
+                        active:
+                          default: true
+                          description: 'Determines if notifications are sent when
+                            the webhook is triggered. Default: true'
+                          type: boolean
+                        contentType:
+                          description: The media type used to serialize the payloads.
+                            Supported values include json and form.
+                          enum:
+                          - json
+                          - form
+                          type: string
+                        events:
+                          description: Determines what events the hook is triggered
+                            for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
+                          items:
+                            type: string
+                          type: array
+                        insecureSsl:
+                          default: false
+                          description: Determines whether the SSL certificate of the
+                            host for url will be verified when delivering payloads.
+                            Supported values include "0" (verification is performed)
+                            and "1" (verification is not performed). We strongly recommend
+                            not setting this to "1" as you are subject to man-in-the-middle
+                            and other attacks.
+                          type: boolean
+                        url:
+                          description: The URL to which the payloads will be delivered.
+                          type: string
+                      required:
+                      - contentType
+                      - events
+                      - url
+                      type: object
+                    type: array
                 type: object
               managementPolicies:
                 default:

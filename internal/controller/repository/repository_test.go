@@ -58,6 +58,14 @@ var (
 	team1Role = "admin"
 	team2     = "test-team-2"
 	team2Role = "pull"
+
+	webhook1url            = "https://example.org/webhook"
+	webhook1active         = true
+	webhook1InsecureSsl    = false
+	webhook1InsecureSslStr = "0"
+	webhook1ContentType    = "json"
+	webhook1event1         = "push"
+	webhook1event2         = "workflow_job"
 )
 
 func withTeamPermission() repositoryModifier {
@@ -90,6 +98,16 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 			},
 		},
 	}
+
+	cr.Spec.ForProvider.Webhooks = []v1alpha1.RepositoryWebhook{
+		{
+			Url:         webhook1url,
+			ContentType: webhook1ContentType,
+			Events:      []string{webhook1event1, webhook1event2},
+			InsecureSsl: webhook1InsecureSsl,
+			Active:      webhook1active,
+		},
+	}
 	meta.SetExternalName(cr, repo)
 
 	for _, f := range m {
@@ -104,6 +122,20 @@ func githubRepository() *github.Repository {
 		Description: &description,
 		Archived:    &archived,
 		Private:     &private,
+	}
+}
+
+func githubWebhooks() []*github.Hook {
+	return []*github.Hook{
+		{
+			Config: map[string]interface{}{
+				"url":          webhook1url,
+				"content_type": webhook1ContentType,
+				"insecure_ssl": webhook1InsecureSslStr,
+			},
+			Events: []string{webhook1event1, webhook1event2},
+			Active: github.Bool(webhook1active),
+		},
 	}
 }
 
@@ -174,6 +206,9 @@ func TestObserve(t *testing.T) {
 						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
 							return githubTeams(), fake.GenerateEmptyResponse(), nil
 						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return []*github.Hook{}, fake.GenerateEmptyResponse(), nil
+						},
 					},
 				},
 			},
@@ -203,6 +238,9 @@ func TestObserve(t *testing.T) {
 						},
 						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
 							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},

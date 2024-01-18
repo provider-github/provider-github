@@ -75,6 +75,10 @@ type MockRepositoriesClient struct {
 	MockAddCollaborator    func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	MockRemoveCollaborator func(ctx context.Context, owner, repo, user string) (*github.Response, error)
 	MockDelete             func(ctx context.Context, owner, repo string) (*github.Response, error)
+	MockCreateHook         func(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockEditHook           func(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockDeleteHook         func(ctx context.Context, owner, repo string, id int64) (*github.Response, error)
+	MockListHooks          func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
 }
 
 func (m *MockRepositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
@@ -107,6 +111,22 @@ func (m *MockRepositoriesClient) ListTeams(ctx context.Context, owner string, re
 
 func (m *MockRepositoriesClient) RemoveCollaborator(ctx context.Context, owner, repo, user string) (*github.Response, error) {
 	return m.MockRemoveCollaborator(ctx, owner, repo, user)
+}
+
+func (m *MockRepositoriesClient) CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return m.MockCreateHook(ctx, owner, repo, hook)
+}
+
+func (m *MockRepositoriesClient) EditHook(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return m.MockEditHook(ctx, owner, repo, id, hook)
+}
+
+func (m *MockRepositoriesClient) DeleteHook(ctx context.Context, owner, repo string, id int64) (*github.Response, error) {
+	return m.MockDeleteHook(ctx, owner, repo, id)
+}
+
+func (m *MockRepositoriesClient) ListHooks(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+	return m.MockListHooks(ctx, owner, repo, opts)
 }
 
 type MockTeamsClient struct {
