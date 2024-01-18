@@ -18,7 +18,9 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"sort"
 
 	"k8s.io/utils/pointer"
 
@@ -122,6 +124,7 @@ type external struct {
 	github *ghclient.Client
 }
 
+//nolint:gocyclo
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
@@ -164,6 +167,19 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return notUpToDate, nil
 	}
 
+	if cr.Spec.ForProvider.Webhooks != nil {
+		ghRepoWebhooks, err := getRepoWebhooks(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		crWToConfig := getRepoWebhooksMapFromCr(cr.Spec.ForProvider.Webhooks)
+		ghWToConfig := getRepoWebhooksWithConfig(ghRepoWebhooks)
+
+		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
+			return notUpToDate, nil
+		}
+	}
+
 	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
 	if archivedCr != *repo.Archived {
 		return notUpToDate, nil
@@ -200,6 +216,75 @@ func getUserPermissionMapFromCr(users []v1alpha1.RepositoryUser) map[string]stri
 	}
 
 	return crMToPermission
+}
+
+func getRepoWebhooksMapFromCr(webhooks []v1alpha1.RepositoryWebhook) map[string]v1alpha1.RepositoryWebhook {
+	crWToConfig := make(map[string]v1alpha1.RepositoryWebhook, len(webhooks))
+
+	for _, webhook := range webhooks {
+		sort.Strings(webhook.Events)
+		crWToConfig[webhook.Url] = v1alpha1.RepositoryWebhook{
+			Url:         webhook.Url,
+			InsecureSsl: webhook.InsecureSsl,
+			ContentType: webhook.ContentType,
+			Events:      webhook.Events,
+			Active:      webhook.Active,
+		}
+	}
+	return crWToConfig
+}
+
+func getRepoWebhooks(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Hook, error) {
+	opt := &github.ListOptions{PerPage: 100}
+	var allHooks []*github.Hook
+
+	for {
+		hooks, resp, err := gh.Repositories.ListHooks(ctx, org, repoName, opt)
+		if err != nil {
+			return nil, err
+		}
+		allHooks = append(allHooks, hooks...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	return allHooks, nil
+}
+
+func getRepoWebhooksWithConfig(hooks []*github.Hook) map[string]v1alpha1.RepositoryWebhook {
+	wToConfig := make(map[string]v1alpha1.RepositoryWebhook)
+
+	for _, h := range hooks {
+		url, _ := h.Config["url"].(string)
+		insecureSslBool := false
+		if h.Config["insecure_ssl"] == "1" {
+			insecureSslBool = true
+		}
+		wToConfig[url] = v1alpha1.RepositoryWebhook{
+			Url:         url,
+			InsecureSsl: insecureSslBool,
+			ContentType: h.Config["content_type"].(string),
+			Events:      h.Events,
+			Active:      *h.Active,
+		}
+	}
+
+	return wToConfig
+}
+
+func getRepoWebhookId(hooks []*github.Hook, webhookUrl string) (*int64, error) {
+
+	for _, h := range hooks {
+		url, _ := h.Config["url"].(string)
+		if url == webhookUrl {
+			return h.ID, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cannot find repository webhook id for %s", webhookUrl)
 }
 
 func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
@@ -262,6 +347,7 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 	return uToPermission, nil
 }
 
+//nolint:gocyclo
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
@@ -301,6 +387,29 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 			}
 		}
 	}
+
+	if cr.Spec.ForProvider.Webhooks != nil {
+		for _, hookConfig := range cr.Spec.ForProvider.Webhooks {
+			insecureSslInt := 0
+			if hookConfig.InsecureSsl {
+				insecureSslInt = 1
+			}
+			hook := &github.Hook{
+				Config: map[string]interface{}{
+					"url":          hookConfig.Url,
+					"insecure_ssl": insecureSslInt,
+					"content_type": hookConfig.ContentType,
+				},
+				Events: hookConfig.Events,
+				Active: github.Bool(hookConfig.Active),
+			}
+			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, *r.Name, hook)
+			if err != nil {
+				return managed.ExternalCreation{}, err
+			}
+		}
+	}
+
 	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalCreation{}, nil
@@ -361,6 +470,78 @@ func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 	return nil
 }
 
+//nolint:gocyclo
+func updateRepoWebhooks(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	ghRepoWebhooks, err := getRepoWebhooks(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if err != nil {
+		return err
+	}
+	crWToConfig := getRepoWebhooksMapFromCr(cr.Spec.ForProvider.Webhooks)
+	ghWToConfig := getRepoWebhooksWithConfig(ghRepoWebhooks)
+
+	toDelete, toAdd, toUpdate := util.DiffRepoWebhooks(ghWToConfig, crWToConfig)
+
+	for name := range toDelete {
+		url := name
+		id, err := getRepoWebhookId(ghRepoWebhooks, url)
+		if err != nil {
+			return err
+		}
+		_, err = gh.Repositories.DeleteHook(ctx, cr.Spec.ForProvider.Org, repoName, *id)
+		if err != nil {
+			return err
+		}
+	}
+
+	for name, config := range toAdd {
+		url := name
+		insecureSslInt := 0
+		if config.InsecureSsl {
+			insecureSslInt = 1
+		}
+		hook := &github.Hook{
+			Config: map[string]interface{}{
+				"url":          url,
+				"insecure_ssl": insecureSslInt,
+				"content_type": config.ContentType,
+			},
+			Events: config.Events,
+			Active: github.Bool(config.Active),
+		}
+		_, _, err := gh.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, repoName, hook)
+		if err != nil {
+			return err
+		}
+	}
+
+	for name, config := range toUpdate {
+		url := name
+		id, err := getRepoWebhookId(ghRepoWebhooks, url)
+		if err != nil {
+			return err
+		}
+		insecureSslInt := 0
+		if config.InsecureSsl {
+			insecureSslInt = 1
+		}
+		hook := &github.Hook{
+			Config: map[string]interface{}{
+				"url":          name,
+				"insecure_ssl": insecureSslInt,
+				"content_type": config.ContentType,
+			},
+			Events: config.Events,
+			Active: github.Bool(config.Active),
+		}
+		_, _, err = gh.Repositories.EditHook(ctx, cr.Spec.ForProvider.Org, repoName, *id, hook)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
@@ -390,6 +571,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	err = updateRepoTeams(ctx, cr, c.github, name)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
+	}
+
+	if cr.Spec.ForProvider.Webhooks != nil {
+		err = updateRepoWebhooks(ctx, cr, c.github, name)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
 	}
 
 	return managed.ExternalUpdate{}, nil

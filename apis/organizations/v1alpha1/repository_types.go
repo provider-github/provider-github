@@ -30,6 +30,8 @@ type RepositoryParameters struct {
 	Description string                `json:"description,omitempty"`
 	Permissions RepositoryPermissions `json:"permissions,omitempty"`
 
+	Webhooks []RepositoryWebhook `json:"webhooks,omitempty"`
+
 	// Org is the Organization for the Membership
 	// +immutable
 	// +crossplane:generate:reference:type=Organization
@@ -92,6 +94,32 @@ type RepositoryTeam struct {
 
 	// Role is the role of the team
 	Role string `json:"role"`
+}
+
+// Repository webhook
+// https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks
+type RepositoryWebhook struct {
+	// The URL to which the payloads will be delivered.
+	Url string `json:"url"`
+
+	// Determines whether the SSL certificate of the host for url will be verified when delivering payloads.
+	// Supported values include "0" (verification is performed) and "1" (verification is not performed).
+	// We strongly recommend not setting this to "1" as you are subject to man-in-the-middle and other attacks.
+	// +optional
+	// +kubebuilder:default=false
+	InsecureSsl bool `json:"insecureSsl,omitempty"`
+
+	// The media type used to serialize the payloads. Supported values include json and form.
+	// +kubebuilder:validation:Enum=json;form
+	ContentType string `json:"contentType"`
+
+	// Determines what events the hook is triggered for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
+	Events []string `json:"events"`
+
+	// Determines if notifications are sent when the webhook is triggered. Default: true
+	// +optional
+	// +kubebuilder:default=true
+	Active bool `json:"active,omitempty"`
 }
 
 // RepositoryObservation are the observable fields of a Repository.

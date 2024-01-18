@@ -17,7 +17,10 @@
 package util
 
 import (
+	"reflect"
 	"sort"
+
+	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 )
 
 func SortByKey(m map[string]string) map[string]string {
@@ -79,4 +82,28 @@ func Contains(slice []string, str string) bool {
 		}
 	}
 	return false
+}
+
+func DiffRepoWebhooks(a, b map[string]v1alpha1.RepositoryWebhook) (map[string]v1alpha1.RepositoryWebhook, map[string]v1alpha1.RepositoryWebhook, map[string]v1alpha1.RepositoryWebhook) {
+	inANotInB := make(map[string]v1alpha1.RepositoryWebhook)
+	inBNotInA := make(map[string]v1alpha1.RepositoryWebhook)
+	diffs := make(map[string]v1alpha1.RepositoryWebhook)
+
+	for entity, va := range a {
+		vb, ok := b[entity]
+		if !ok {
+			inANotInB[entity] = va
+		} else if !reflect.DeepEqual(va, vb) {
+			diffs[entity] = vb
+		}
+	}
+
+	for entity, vb := range b {
+		_, ok := a[entity]
+		if !ok {
+			inBNotInA[entity] = vb
+		}
+	}
+
+	return inANotInB, inBNotInA, diffs
 }
