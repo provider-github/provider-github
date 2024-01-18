@@ -7,6 +7,7 @@ The project is in a prototyping phase but it's already functional and
 implements follwing objects with partial functionality:
 
 * Organization
+  * actions enabled repositories 
   * description
   * creation and deleteion not supported
 * Team
@@ -17,6 +18,7 @@ implements follwing objects with partial functionality:
 * Repository
   * user permissions  
   * team permissions
+  * webhooks
 * Membership
   * role
 
