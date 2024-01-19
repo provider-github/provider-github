@@ -66,6 +66,18 @@ var (
 	webhook1ContentType    = "json"
 	webhook1event1         = "push"
 	webhook1event2         = "workflow_job"
+
+	bpr1branch                         = "main"
+	bpr1enforceAdmins                  = true
+	bpr1requireLinearHistory           = true
+	bpr1allowForcePushes               = false
+	bpr1allowDeletions                 = false
+	bpr1requiredConversationResolution = true
+	bpr1blockCreations                 = true
+	bpr1lockBranch                     = false
+	bpr1allowForkSyncing               = false
+	bpr1requireSignedCommits           = false
+	bpr1requiredStatusCheck            = "terraform_validate"
 )
 
 func withTeamPermission() repositoryModifier {
@@ -108,6 +120,30 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 			Active:      webhook1active,
 		},
 	}
+
+	cr.Spec.ForProvider.BranchProtectionRules = []v1alpha1.BranchProtectionRule{
+		{
+			Branch:                         bpr1branch,
+			EnforceAdmins:                  bpr1enforceAdmins,
+			RequireLinearHistory:           bpr1requireLinearHistory,
+			AllowForcePushes:               bpr1allowForcePushes,
+			AllowDeletions:                 bpr1allowDeletions,
+			RequiredConversationResolution: bpr1requiredConversationResolution,
+			BlockCreations:                 bpr1blockCreations,
+			LockBranch:                     bpr1lockBranch,
+			AllowForkSyncing:               bpr1allowForkSyncing,
+			RequireSignedCommits:           bpr1requireSignedCommits,
+			RequiredStatusChecks: &v1alpha1.RequiredStatusChecks{
+				Strict: true,
+				Checks: []*v1alpha1.RequiredStatusCheck{
+					{
+						Context: bpr1requiredStatusCheck,
+					},
+				},
+			},
+		},
+	}
+
 	meta.SetExternalName(cr, repo)
 
 	for _, f := range m {
@@ -139,6 +175,46 @@ func githubWebhooks() []*github.Hook {
 	}
 }
 
+func githubProtectedBranch() *github.Protection {
+	return &github.Protection{
+		RequiredStatusChecks: &github.RequiredStatusChecks{
+			Strict: true,
+			Checks: []*github.RequiredStatusCheck{
+				{
+					Context: bpr1requiredStatusCheck,
+				},
+			},
+		},
+		EnforceAdmins: &github.AdminEnforcement{
+			Enabled: bpr1enforceAdmins,
+		},
+		RequireLinearHistory: &github.RequireLinearHistory{
+			Enabled: bpr1requireLinearHistory,
+		},
+		AllowForcePushes: &github.AllowForcePushes{
+			Enabled: bpr1allowForcePushes,
+		},
+		AllowDeletions: &github.AllowDeletions{
+			Enabled: bpr1allowDeletions,
+		},
+		RequiredConversationResolution: &github.RequiredConversationResolution{
+			Enabled: bpr1requiredConversationResolution,
+		},
+		BlockCreations: &github.BlockCreations{
+			Enabled: &bpr1blockCreations,
+		},
+		LockBranch: &github.LockBranch{
+			Enabled: &bpr1lockBranch,
+		},
+		AllowForkSyncing: &github.AllowForkSyncing{
+			Enabled: &bpr1allowForkSyncing,
+		},
+		RequiredSignatures: &github.SignaturesProtectedBranch{
+			Enabled: &bpr1requireSignedCommits,
+		},
+	}
+}
+
 func githubCollaborators() []*github.User {
 	return []*github.User{
 		{
@@ -165,6 +241,15 @@ func githubTeams() []*github.Team {
 		{
 			Slug:       &team2,
 			Permission: &team2Role,
+		},
+	}
+}
+
+func githubBranches() []*github.Branch {
+	return []*github.Branch{
+		{
+			Name:      &bpr1branch,
+			Protected: github.Bool(true),
 		},
 	}
 }
@@ -209,6 +294,9 @@ func TestObserve(t *testing.T) {
 						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 							return []*github.Hook{}, fake.GenerateEmptyResponse(), nil
 						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return []*github.Branch{}, fake.GenerateEmptyResponse(), nil
+						},
 					},
 				},
 			},
@@ -241,6 +329,12 @@ func TestObserve(t *testing.T) {
 						},
 						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},

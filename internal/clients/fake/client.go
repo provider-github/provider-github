@@ -67,18 +67,24 @@ func (m *MockUsersClient) Get(ctx context.Context, user string) (*github.User, *
 }
 
 type MockRepositoriesClient struct {
-	MockGet                func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error)
-	MockEdit               func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
-	MockListTeams          func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
-	MockListCollaborators  func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
-	MockCreate             func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
-	MockAddCollaborator    func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
-	MockRemoveCollaborator func(ctx context.Context, owner, repo, user string) (*github.Response, error)
-	MockDelete             func(ctx context.Context, owner, repo string) (*github.Response, error)
-	MockCreateHook         func(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
-	MockEditHook           func(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
-	MockDeleteHook         func(ctx context.Context, owner, repo string, id int64) (*github.Response, error)
-	MockListHooks          func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
+	MockGet                                 func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error)
+	MockEdit                                func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
+	MockListTeams                           func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
+	MockListCollaborators                   func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
+	MockCreate                              func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
+	MockAddCollaborator                     func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
+	MockRemoveCollaborator                  func(ctx context.Context, owner, repo, user string) (*github.Response, error)
+	MockDelete                              func(ctx context.Context, owner, repo string) (*github.Response, error)
+	MockCreateHook                          func(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockEditHook                            func(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockDeleteHook                          func(ctx context.Context, owner, repo string, id int64) (*github.Response, error)
+	MockListHooks                           func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
+	MockListBranches                        func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error)
+	MockGetBranchProtection                 func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error)
+	MockUpdateBranchProtection              func(ctx context.Context, owner, repo, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error)
+	MockRemoveBranchProtection              func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
+	MockRequireSignaturesOnProtectedBranch  func(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
+	MockOptionalSignaturesOnProtectedBranch func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 }
 
 func (m *MockRepositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
@@ -127,6 +133,30 @@ func (m *MockRepositoriesClient) DeleteHook(ctx context.Context, owner, repo str
 
 func (m *MockRepositoriesClient) ListHooks(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
 	return m.MockListHooks(ctx, owner, repo, opts)
+}
+
+func (m *MockRepositoriesClient) ListBranches(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+	return m.MockListBranches(ctx, owner, repo, opts)
+}
+
+func (m *MockRepositoriesClient) GetBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+	return m.MockGetBranchProtection(ctx, owner, repo, branch)
+}
+
+func (m *MockRepositoriesClient) UpdateBranchProtection(ctx context.Context, owner, repo, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error) {
+	return m.MockUpdateBranchProtection(ctx, owner, repo, branch, preq)
+}
+
+func (m *MockRepositoriesClient) RemoveBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Response, error) {
+	return m.MockRemoveBranchProtection(ctx, owner, repo, branch)
+}
+
+func (m *MockRepositoriesClient) RequireSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error) {
+	return m.MockRequireSignaturesOnProtectedBranch(ctx, owner, repo, branch)
+}
+
+func (m *MockRepositoriesClient) OptionalSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.Response, error) {
+	return m.MockOptionalSignaturesOnProtectedBranch(ctx, owner, repo, branch)
 }
 
 type MockTeamsClient struct {

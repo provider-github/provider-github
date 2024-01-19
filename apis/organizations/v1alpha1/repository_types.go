@@ -32,6 +32,8 @@ type RepositoryParameters struct {
 
 	Webhooks []RepositoryWebhook `json:"webhooks,omitempty"`
 
+	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules,omitempty"`
+
 	// Org is the Organization for the Membership
 	// +immutable
 	// +crossplane:generate:reference:type=Organization
@@ -120,6 +122,175 @@ type RepositoryWebhook struct {
 	// +optional
 	// +kubebuilder:default=true
 	Active bool `json:"active,omitempty"`
+}
+
+// BranchProtectionRule represents a rule for protecting a branch in a repository.
+// It includes various parameters for enforcing code quality and access control.
+type BranchProtectionRule struct {
+	// The branch name to apply the protection rule to.
+	Branch string `json:"branch"`
+
+	// Require status checks to pass before merging.
+	// When enabled, commits must first be pushed to another branch,
+	// then merged or pushed directly to a branch that matches this rule after status checks have passed.
+	// +optional
+	RequiredStatusChecks *RequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
+
+	// Require a pull request before merging.
+	// When enabled, all commits must be made to a non-protected branch and submitted via a pull request
+	// before they can be merged into a branch that matches this rule.
+	// +optional
+	RequiredPullRequestReviews *RequiredPullRequestReviews `json:"requiredPullRequestReviews,omitempty"`
+
+	// Restrict who can push to matching branches.
+	// Specify people, teams, or apps allowed to push to matching branches.
+	// Required status checks will still prevent these people, teams, and apps from merging if the checks fail.
+	// +optional
+	BranchProtectionRestrictions *BranchProtectionRestrictions `json:"branchProtectionRestrictions,omitempty"`
+
+	// Enforce settings even for administrators and custom roles with the "bypass branch protections" permission.
+	// Default: false
+	// +optional
+	EnforceAdmins bool `json:"enforceAdmins,omitempty"`
+
+	// Prevent merge commits from being pushed to matching branches.
+	// Default: false
+	// +optional
+	RequireLinearHistory bool `json:"requireLinearHistory,omitempty"`
+
+	// Permit force pushes for all users with push access.
+	// Default: false
+	// +optional
+	AllowForcePushes bool `json:"allowForcePushes,omitempty"`
+
+	// Allow users with push access to delete matching branches.
+	// Default: false
+	// +optional
+	AllowDeletions bool `json:"allowDeletions,omitempty"`
+
+	// When enabled, all conversations on code must be resolved before a pull request can be merged into a branch that matches this rule.
+	// Default: false
+	// +optional
+	RequiredConversationResolution bool `json:"requiredConversationResolution,omitempty"`
+
+	// If set to true, will cause the restrictions setting to also block pushes which create new branches
+	// unless initiated by a user, team, app with the ability to push.
+	// Makes sense only when branchProtectionRestrictions is also set
+	// Default: false
+	// +optional
+	BlockCreations bool `json:"blockCreations,omitempty"`
+
+	// Branch is read-only. Users cannot push to the branch.
+	// Default: false
+	// +optional
+	LockBranch bool `json:"lockBranch,omitempty"`
+
+	// Will allow users to pull changes from upstream when the branch is locked.
+	// Default: false
+	// +optional
+	AllowForkSyncing bool `json:"allowForkSyncing,omitempty"`
+
+	// Commits pushed to matching branches must have verified signatures.
+	// +optional
+	RequireSignedCommits bool `json:"requireSignedCommits,omitempty"`
+}
+
+// RequiredStatusChecks represents the configuration for required status checks to apply to a branch protection rule.
+type RequiredStatusChecks struct {
+	// Require branches to be up to date before merging. Default: true
+	// +optional
+	// +kubebuilder:default=true
+	Strict bool `json:"strict"`
+
+	// The list of status checks to require in order to merge into this branch.
+	Checks []*RequiredStatusCheck `json:"checks"`
+}
+
+// RequiredStatusCheck represents the configuration for a single check
+type RequiredStatusCheck struct {
+	// The name of the required check.
+	Context string `json:"context"`
+
+	// The ID of the GitHub App that must provide this check.
+	// Omit this field to automatically select the GitHub App that has recently provided this check,
+	// or any app if it was not set by a GitHub App. Pass -1 to explicitly allow any app to set the status.
+	// +optional
+	AppID *int64 `json:"app_id,omitempty"`
+}
+
+// RequiredPullRequestReviews represents the required reviews for a pull request before merging.
+type RequiredPullRequestReviews struct {
+	// Set to true if you want to automatically dismiss approving reviews when someone pushes a new commit.
+	// Default: false
+	// +optional
+	DismissStaleReviews bool `json:"dismissStaleReviews,omitempty"`
+
+	// Blocks merging pull requests until code owners review them.
+	// Default: false
+	// +optional
+	RequireCodeOwnerReviews bool `json:"requireCodeOwnerReviews,omitempty"`
+
+	// Specify the number of reviewers required to approve pull requests. Use a number between 1 and 6 or 0 to not require reviewers.
+	// Default: 1
+	// +optional
+	// +kubebuilder:default=1
+	RequiredApprovingReviewCount int `json:"requiredApprovingReviewCount,omitempty"`
+
+	// Whether the most recent push must be approved by someone other than the person who pushed it.
+	// Default: false
+	// +optional
+	RequireLastPushApproval bool `json:"requireLastPushApproval,omitempty"`
+
+	// Allow specific users, teams, or apps to bypass pull request requirements.
+	// +optional
+	BypassPullRequestAllowances *BypassPullRequestAllowancesRequest `json:"bypassPullRequestAllowances,omitempty"`
+
+	// Specify which users, teams, and apps can dismiss pull request reviews.
+	// +optional
+	DismissalRestrictions *DismissalRestrictionsRequest `json:"dismissalRestrictions,omitempty"`
+}
+
+type BypassPullRequestAllowancesRequest struct {
+	// The list of user logins allowed to bypass pull request requirements.
+	// +optional
+	Users []string `json:"users,omitempty"`
+
+	// The list of team slugs allowed to bypass pull request requirements.
+	// +optional
+	Teams []string `json:"teams,omitempty"`
+
+	// The list of app slugs allowed to bypass pull request requirements.
+	// +optional
+	Apps []string `json:"apps,omitempty"`
+}
+
+type DismissalRestrictionsRequest struct {
+	// The list of user logins with dismissal access.
+	// +optional
+	Users *[]string `json:"users,omitempty"`
+
+	// The list of team slugs with dismissal access.
+	// +optional
+	Teams *[]string `json:"teams,omitempty"`
+
+	// The list of app slugs with dismissal access.
+	// +optional
+	Apps *[]string `json:"apps,omitempty"`
+}
+
+// BranchProtectionRestrictions defines the restrictions to apply to a branch protection rule.
+type BranchProtectionRestrictions struct {
+	// Only people allowed to push will be able to create new branches matching this rule.
+	// +optional
+	Users []string `json:"users,omitempty"`
+
+	// Only teams allowed to push will be able to create new branches matching this rule.
+	// +optional
+	Teams []string `json:"teams,omitempty"`
+
+	// Only apps allowed to push will be able to create new branches matching this rule.
+	// +optional
+	Apps []string `json:"apps,omitempty"`
 }
 
 // RepositoryObservation are the observable fields of a Repository.

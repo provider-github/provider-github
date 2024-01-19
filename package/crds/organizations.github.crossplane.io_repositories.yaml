@@ -72,6 +72,196 @@ spec:
                     description: Archived sets if a repository should be archived
                       on delete
                     type: boolean
+                  branchProtectionRules:
+                    items:
+                      description: BranchProtectionRule represents a rule for protecting
+                        a branch in a repository. It includes various parameters for
+                        enforcing code quality and access control.
+                      properties:
+                        allowDeletions:
+                          description: 'Allow users with push access to delete matching
+                            branches. Default: false'
+                          type: boolean
+                        allowForcePushes:
+                          description: 'Permit force pushes for all users with push
+                            access. Default: false'
+                          type: boolean
+                        allowForkSyncing:
+                          description: 'Will allow users to pull changes from upstream
+                            when the branch is locked. Default: false'
+                          type: boolean
+                        blockCreations:
+                          description: 'If set to true, will cause the restrictions
+                            setting to also block pushes which create new branches
+                            unless initiated by a user, team, app with the ability
+                            to push. Makes sense only when branchProtectionRestrictions
+                            is also set Default: false'
+                          type: boolean
+                        branch:
+                          description: The branch name to apply the protection rule
+                            to.
+                          type: string
+                        branchProtectionRestrictions:
+                          description: Restrict who can push to matching branches.
+                            Specify people, teams, or apps allowed to push to matching
+                            branches. Required status checks will still prevent these
+                            people, teams, and apps from merging if the checks fail.
+                          properties:
+                            apps:
+                              description: Only apps allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                            teams:
+                              description: Only teams allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                            users:
+                              description: Only people allowed to push will be able
+                                to create new branches matching this rule.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        enforceAdmins:
+                          description: 'Enforce settings even for administrators and
+                            custom roles with the "bypass branch protections" permission.
+                            Default: false'
+                          type: boolean
+                        lockBranch:
+                          description: 'Branch is read-only. Users cannot push to
+                            the branch. Default: false'
+                          type: boolean
+                        requireLinearHistory:
+                          description: 'Prevent merge commits from being pushed to
+                            matching branches. Default: false'
+                          type: boolean
+                        requireSignedCommits:
+                          description: Commits pushed to matching branches must have
+                            verified signatures.
+                          type: boolean
+                        requiredConversationResolution:
+                          description: 'When enabled, all conversations on code must
+                            be resolved before a pull request can be merged into a
+                            branch that matches this rule. Default: false'
+                          type: boolean
+                        requiredPullRequestReviews:
+                          description: Require a pull request before merging. When
+                            enabled, all commits must be made to a non-protected branch
+                            and submitted via a pull request before they can be merged
+                            into a branch that matches this rule.
+                          properties:
+                            bypassPullRequestAllowances:
+                              description: Allow specific users, teams, or apps to
+                                bypass pull request requirements.
+                              properties:
+                                apps:
+                                  description: The list of app slugs allowed to bypass
+                                    pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: The list of team slugs allowed to bypass
+                                    pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: The list of user logins allowed to
+                                    bypass pull request requirements.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            dismissStaleReviews:
+                              description: 'Set to true if you want to automatically
+                                dismiss approving reviews when someone pushes a new
+                                commit. Default: false'
+                              type: boolean
+                            dismissalRestrictions:
+                              description: Specify which users, teams, and apps can
+                                dismiss pull request reviews.
+                              properties:
+                                apps:
+                                  description: The list of app slugs with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                                teams:
+                                  description: The list of team slugs with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                                users:
+                                  description: The list of user logins with dismissal
+                                    access.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requireCodeOwnerReviews:
+                              description: 'Blocks merging pull requests until code
+                                owners review them. Default: false'
+                              type: boolean
+                            requireLastPushApproval:
+                              description: 'Whether the most recent push must be approved
+                                by someone other than the person who pushed it. Default:
+                                false'
+                              type: boolean
+                            requiredApprovingReviewCount:
+                              default: 1
+                              description: 'Specify the number of reviewers required
+                                to approve pull requests. Use a number between 1 and
+                                6 or 0 to not require reviewers. Default: 1'
+                              type: integer
+                          type: object
+                        requiredStatusChecks:
+                          description: Require status checks to pass before merging.
+                            When enabled, commits must first be pushed to another
+                            branch, then merged or pushed directly to a branch that
+                            matches this rule after status checks have passed.
+                          properties:
+                            checks:
+                              description: The list of status checks to require in
+                                order to merge into this branch.
+                              items:
+                                description: RequiredStatusCheck represents the configuration
+                                  for a single check
+                                properties:
+                                  app_id:
+                                    description: The ID of the GitHub App that must
+                                      provide this check. Omit this field to automatically
+                                      select the GitHub App that has recently provided
+                                      this check, or any app if it was not set by
+                                      a GitHub App. Pass -1 to explicitly allow any
+                                      app to set the status.
+                                    format: int64
+                                    type: integer
+                                  context:
+                                    description: The name of the required check.
+                                    type: string
+                                required:
+                                - context
+                                type: object
+                              type: array
+                            strict:
+                              default: true
+                              description: 'Require branches to be up to date before
+                                merging. Default: true'
+                              type: boolean
+                          required:
+                          - checks
+                          type: object
+                      required:
+                      - branch
+                      type: object
+                    type: array
                   description:
                     type: string
                   forceDelete:
