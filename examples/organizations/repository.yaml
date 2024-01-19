@@ -16,4 +16,10 @@ spec:
       - teamRef:
           name: sample-team
         role: pull
-
+    webhooks:
+    - active: true
+      contentType: json
+      events:
+      - workflow_job
+      insecureSsl: false
+      url: https://example.com
