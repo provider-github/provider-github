@@ -41,7 +41,7 @@ import (
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
 
-	"github.com/google/go-github/v54/github"
+	"github.com/google/go-github/v58/github"
 )
 
 const (
@@ -303,7 +303,7 @@ func updateRepos(ctx context.Context, gh *ghclient.Client, name string, missingR
 
 	if len(toDeleteReposIds) > 0 {
 		for _, toDeleteRepo := range toDeleteReposIds {
-			_, err := gh.Actions.RemoveEnabledRepoInOrg(ctx, name, toDeleteRepo)
+			_, err := gh.Actions.RemoveEnabledReposInOrg(ctx, name, toDeleteRepo)
 			if err != nil {
 				return err
 			}

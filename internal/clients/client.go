@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	"github.com/google/go-github/v54/github"
+	"github.com/google/go-github/v58/github"
 )
 
 type Client struct {
@@ -38,7 +38,7 @@ type Client struct {
 type ActionsClient interface {
 	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
 	AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
-	RemoveEnabledRepoInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
 }
 
 type OrganizationsClient interface {
