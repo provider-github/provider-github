@@ -830,31 +830,33 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	}
 
 	if rule.RequiredPullRequestReviews != nil {
-		var bypassPullRequestAllowances *github.BypassPullRequestAllowancesRequest
+		emptySlice := make([]string, 0)
+		protectionRequest.RequiredPullRequestReviews = &github.PullRequestReviewsEnforcementRequest{
+			// Make sure the setting is disabled by default
+			// GitHub API requires empty payload to disable this setting
+			BypassPullRequestAllowancesRequest: &github.BypassPullRequestAllowancesRequest{
+				Users: emptySlice, Teams: emptySlice, Apps: emptySlice,
+			},
+			// Make sure the setting is disabled by default
+			DismissalRestrictionsRequest: &github.DismissalRestrictionsRequest{Users: nil, Teams: nil, Apps: nil},
+			DismissStaleReviews:          rule.RequiredPullRequestReviews.DismissStaleReviews,
+			RequireCodeOwnerReviews:      rule.RequiredPullRequestReviews.RequireCodeOwnerReviews,
+			RequiredApprovingReviewCount: rule.RequiredPullRequestReviews.RequiredApprovingReviewCount,
+			RequireLastPushApproval:      github.Bool(rule.RequiredPullRequestReviews.RequireLastPushApproval),
+		}
 		if rule.RequiredPullRequestReviews.BypassPullRequestAllowances != nil {
-			bypassPullRequestAllowances = &github.BypassPullRequestAllowancesRequest{
+			protectionRequest.RequiredPullRequestReviews.BypassPullRequestAllowancesRequest = &github.BypassPullRequestAllowancesRequest{
 				Users: util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Users),
 				Teams: util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams),
 				Apps:  util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps),
 			}
 		}
-
-		var dismissalRestrictions *github.DismissalRestrictionsRequest
 		if rule.RequiredPullRequestReviews.DismissalRestrictions != nil {
-			dismissalRestrictions = &github.DismissalRestrictionsRequest{
+			protectionRequest.RequiredPullRequestReviews.DismissalRestrictionsRequest = &github.DismissalRestrictionsRequest{
 				Users: rule.RequiredPullRequestReviews.DismissalRestrictions.Users,
 				Teams: rule.RequiredPullRequestReviews.DismissalRestrictions.Teams,
 				Apps:  rule.RequiredPullRequestReviews.DismissalRestrictions.Apps,
 			}
-		}
-
-		protectionRequest.RequiredPullRequestReviews = &github.PullRequestReviewsEnforcementRequest{
-			BypassPullRequestAllowancesRequest: bypassPullRequestAllowances,
-			DismissalRestrictionsRequest:       dismissalRestrictions,
-			DismissStaleReviews:                rule.RequiredPullRequestReviews.DismissStaleReviews,
-			RequireCodeOwnerReviews:            rule.RequiredPullRequestReviews.RequireCodeOwnerReviews,
-			RequiredApprovingReviewCount:       rule.RequiredPullRequestReviews.RequiredApprovingReviewCount,
-			RequireLastPushApproval:            github.Bool(rule.RequiredPullRequestReviews.RequireLastPushApproval),
 		}
 	}
 
