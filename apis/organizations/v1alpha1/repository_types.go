@@ -175,7 +175,7 @@ type BranchProtectionRule struct {
 
 	// If set to true, will cause the restrictions setting to also block pushes which create new branches
 	// unless initiated by a user, team, app with the ability to push.
-	// Makes sense only when branchProtectionRestrictions is also set
+	// Makes sense only when branchProtectionRestrictions is also set.
 	// Default: false
 	// +optional
 	BlockCreations bool `json:"blockCreations,omitempty"`

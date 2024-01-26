@@ -95,7 +95,7 @@ spec:
                             setting to also block pushes which create new branches
                             unless initiated by a user, team, app with the ability
                             to push. Makes sense only when branchProtectionRestrictions
-                            is also set Default: false'
+                            is also set. Default: false'
                           type: boolean
                         branch:
                           description: The branch name to apply the protection rule
