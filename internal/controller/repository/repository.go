@@ -436,14 +436,16 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 				}
 			}
 			dismissalRestrictions := requiredPullRequestReviews.DismissalRestrictions
-			if dismissalRestrictions.Users != nil {
-				dismissalRestrictions.Users = util.SortAndReturnPointer(*dismissalRestrictions.Users)
-			}
-			if dismissalRestrictions.Teams != nil {
-				dismissalRestrictions.Teams = util.SortAndReturnPointer(*dismissalRestrictions.Teams)
-			}
-			if dismissalRestrictions.Apps != nil {
-				dismissalRestrictions.Apps = util.SortAndReturnPointer(*dismissalRestrictions.Apps)
+			if dismissalRestrictions != nil {
+				if dismissalRestrictions.Users != nil {
+					dismissalRestrictions.Users = util.SortAndReturnPointer(*dismissalRestrictions.Users)
+				}
+				if dismissalRestrictions.Teams != nil {
+					dismissalRestrictions.Teams = util.SortAndReturnPointer(*dismissalRestrictions.Teams)
+				}
+				if dismissalRestrictions.Apps != nil {
+					dismissalRestrictions.Apps = util.SortAndReturnPointer(*dismissalRestrictions.Apps)
+				}
 			}
 		}
 		crBPRToConfig[rule.Branch] = *rule
