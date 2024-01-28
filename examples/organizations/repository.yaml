@@ -1,9 +1,14 @@
+---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Repository
 metadata:
   name: sample-repository
 spec:
   forProvider:
+    createFromTemplate:
+      owner: octo-org
+      repo: octo-template
+      includeAllBranches: true
     description: This is a sample repository
     orgRef: 
       name: pgh-sample-organization
@@ -38,4 +43,16 @@ spec:
         requiredStatusChecks:
           checks:
             - context: terraform_validate
-
+---
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: sample-fork
+spec:
+  forProvider:
+    description: This is a sample fork
+    orgRef: 
+      name: pgh-sample-organization
+    createFork:
+      owner: some-org
+      repo: some-repo
