@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/google/go-cmp/cmp"
+
 	"k8s.io/utils/pointer"
 
 	"github.com/pkg/errors"
@@ -176,6 +178,22 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghWToConfig := getRepoWebhooksWithConfig(ghRepoWebhooks)
 
 		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
+			return notUpToDate, nil
+		}
+	}
+
+	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		protectedBranches, err := listProtectedBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+
+		if !cmp.Equal(crBPRToConfig, ghBPRToConfig) {
 			return notUpToDate, nil
 		}
 	}
@@ -347,6 +365,233 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 	return uToPermission, nil
 }
 
+// listProtectedBranches retrieves all protected branches for a given GitHub repository.
+// It uses pagination to handle large numbers of branches, fetching 100 branches per API call.
+func listProtectedBranches(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Branch, error) {
+	opts := &github.BranchListOptions{
+		Protected:   github.Bool(true),
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	var allBranches []*github.Branch
+
+	for {
+		branches, resp, err := gh.Repositories.ListBranches(ctx, org, repoName, opts)
+		if err != nil {
+			return nil, err
+		}
+		allBranches = append(allBranches, branches...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allBranches, nil
+}
+
+// getBPRMapFromCr generates a map from a slice of BranchProtectionRules. Each rule is first processed:
+// sorts the RequiredStatusChecks and any checks in various rule sub-structures, then the updated rule
+// is added to the map with its branch name as the key. The function returns the resulting map.
+//
+//nolint:gocyclo
+func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.BranchProtectionRule {
+	crBPRToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(rules))
+
+	for i := range rules {
+		rule := &rules[i]
+
+		if rule.RequiredStatusChecks != nil && rule.RequiredStatusChecks.Checks != nil {
+			copyOfStatusChecks := make([]*v1alpha1.RequiredStatusCheck, len(rule.RequiredStatusChecks.Checks))
+			copy(copyOfStatusChecks, rule.RequiredStatusChecks.Checks)
+			util.SortRequiredStatusChecks(copyOfStatusChecks)
+			rule.RequiredStatusChecks.Checks = copyOfStatusChecks
+		}
+
+		branchProtectionRestrictions := rule.BranchProtectionRestrictions
+		if branchProtectionRestrictions != nil {
+			if branchProtectionRestrictions.Users != nil {
+				branchProtectionRestrictions.Users = util.SortAndReturn(branchProtectionRestrictions.Users)
+			}
+			if branchProtectionRestrictions.Teams != nil {
+				branchProtectionRestrictions.Teams = util.SortAndReturn(branchProtectionRestrictions.Teams)
+			}
+			if branchProtectionRestrictions.Apps != nil {
+				branchProtectionRestrictions.Apps = util.SortAndReturn(branchProtectionRestrictions.Apps)
+			}
+		}
+
+		requiredPullRequestReviews := rule.RequiredPullRequestReviews
+		if requiredPullRequestReviews != nil {
+			bypassPullRequestAllowances := requiredPullRequestReviews.BypassPullRequestAllowances
+			if bypassPullRequestAllowances != nil {
+				if bypassPullRequestAllowances.Users != nil {
+					bypassPullRequestAllowances.Users = util.SortAndReturn(bypassPullRequestAllowances.Users)
+				}
+				if bypassPullRequestAllowances.Teams != nil {
+					bypassPullRequestAllowances.Teams = util.SortAndReturn(bypassPullRequestAllowances.Teams)
+				}
+				if bypassPullRequestAllowances.Apps != nil {
+					bypassPullRequestAllowances.Apps = util.SortAndReturn(bypassPullRequestAllowances.Apps)
+				}
+			}
+			dismissalRestrictions := requiredPullRequestReviews.DismissalRestrictions
+			if dismissalRestrictions != nil {
+				if dismissalRestrictions.Users != nil {
+					dismissalRestrictions.Users = util.SortAndReturnPointer(*dismissalRestrictions.Users)
+				}
+				if dismissalRestrictions.Teams != nil {
+					dismissalRestrictions.Teams = util.SortAndReturnPointer(*dismissalRestrictions.Teams)
+				}
+				if dismissalRestrictions.Apps != nil {
+					dismissalRestrictions.Apps = util.SortAndReturnPointer(*dismissalRestrictions.Apps)
+				}
+			}
+		}
+		crBPRToConfig[rule.Branch] = *rule
+	}
+
+	return crBPRToConfig
+}
+
+// getBPRWithConfig creates a map of BranchProtectionRules for a GitHub repository based on its branches' current protection settings.
+// It fetches each branch's protection settings from GitHub and maps them to BranchProtectionRule objects.
+// Any lists of users, teams, or apps in the rules are sorted.
+// It returns the BranchProtectionRules map, and any error encountered during the process.
+//
+//nolint:gocyclo
+func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
+	bprToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(branches))
+
+	for _, branch := range branches {
+		protection, _, err := gh.Repositories.GetBranchProtection(ctx, owner, repo, branch.GetName())
+		if err != nil {
+			return nil, err
+		}
+		bpr := v1alpha1.BranchProtectionRule{
+			Branch:                         branch.GetName(),
+			EnforceAdmins:                  protection.GetEnforceAdmins().Enabled,
+			RequireLinearHistory:           protection.GetRequireLinearHistory().Enabled,
+			AllowForcePushes:               protection.GetAllowForcePushes().Enabled,
+			AllowDeletions:                 protection.GetAllowDeletions().Enabled,
+			RequiredConversationResolution: protection.GetRequiredConversationResolution().Enabled,
+			BlockCreations:                 protection.GetBlockCreations().GetEnabled(),
+			LockBranch:                     protection.GetLockBranch().GetEnabled(),
+			AllowForkSyncing:               protection.GetAllowForkSyncing().GetEnabled(),
+			RequireSignedCommits:           protection.GetRequiredSignatures().GetEnabled(),
+		}
+
+		requiredStatusChecks := protection.GetRequiredStatusChecks()
+		if requiredStatusChecks != nil {
+			bpr.RequiredStatusChecks = &v1alpha1.RequiredStatusChecks{
+				Strict: requiredStatusChecks.Strict,
+			}
+			if len(requiredStatusChecks.Checks) > 0 {
+				checks := make([]*v1alpha1.RequiredStatusCheck, len(requiredStatusChecks.Checks))
+				for i, check := range requiredStatusChecks.Checks {
+					checks[i] = &v1alpha1.RequiredStatusCheck{
+						Context: check.Context,
+						AppID:   check.AppID,
+					}
+				}
+				util.SortRequiredStatusChecks(checks)
+				bpr.RequiredStatusChecks.Checks = checks
+			}
+		}
+
+		requiredPullRequestReviews := protection.GetRequiredPullRequestReviews()
+		if requiredPullRequestReviews != nil {
+			bpr.RequiredPullRequestReviews = &v1alpha1.RequiredPullRequestReviews{
+				DismissStaleReviews:          requiredPullRequestReviews.DismissStaleReviews,
+				RequireCodeOwnerReviews:      requiredPullRequestReviews.RequireCodeOwnerReviews,
+				RequiredApprovingReviewCount: requiredPullRequestReviews.RequiredApprovingReviewCount,
+				RequireLastPushApproval:      requiredPullRequestReviews.RequireLastPushApproval,
+			}
+
+			dismissalRestrictions := requiredPullRequestReviews.GetDismissalRestrictions()
+			if dismissalRestrictions != nil {
+				bpr.RequiredPullRequestReviews.DismissalRestrictions = &v1alpha1.DismissalRestrictionsRequest{}
+				if len(dismissalRestrictions.Users) > 0 {
+					users := make([]string, len(dismissalRestrictions.Users))
+					for i, user := range dismissalRestrictions.Users {
+						users[i] = user.GetLogin()
+					}
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(users)
+				}
+				if len(dismissalRestrictions.Teams) > 0 {
+					teams := make([]string, len(dismissalRestrictions.Teams))
+					for i, team := range dismissalRestrictions.Teams {
+						teams[i] = team.GetSlug()
+					}
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(teams)
+				}
+				if len(dismissalRestrictions.Apps) > 0 {
+					apps := make([]string, len(dismissalRestrictions.Apps))
+					for i, app := range dismissalRestrictions.Apps {
+						apps[i] = app.GetSlug()
+					}
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(apps)
+				}
+			}
+
+			bypassPullRequestAllowances := requiredPullRequestReviews.GetBypassPullRequestAllowances()
+			if bypassPullRequestAllowances != nil {
+				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances = &v1alpha1.BypassPullRequestAllowancesRequest{}
+				if len(bypassPullRequestAllowances.Users) > 0 {
+					users := make([]string, len(bypassPullRequestAllowances.Users))
+					for i, user := range bypassPullRequestAllowances.Users {
+						users[i] = user.GetLogin()
+					}
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(users)
+				}
+				if len(bypassPullRequestAllowances.Teams) > 0 {
+					teams := make([]string, len(bypassPullRequestAllowances.Teams))
+					for i, team := range bypassPullRequestAllowances.Teams {
+						teams[i] = team.GetSlug()
+					}
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(teams)
+				}
+				if len(bypassPullRequestAllowances.Apps) > 0 {
+					apps := make([]string, len(bypassPullRequestAllowances.Apps))
+					for i, app := range bypassPullRequestAllowances.Apps {
+						apps[i] = app.GetSlug()
+					}
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(apps)
+				}
+			}
+		}
+
+		restrictions := protection.GetRestrictions()
+		if restrictions != nil {
+			bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
+			if len(restrictions.Users) > 0 {
+				users := make([]string, len(restrictions.Users))
+				for i, user := range restrictions.Users {
+					users[i] = user.GetLogin()
+				}
+				bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(users)
+			}
+			if len(restrictions.Teams) > 0 {
+				teams := make([]string, len(restrictions.Teams))
+				for i, team := range restrictions.Teams {
+					teams[i] = team.GetSlug()
+				}
+				bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(teams)
+			}
+			if len(restrictions.Apps) > 0 {
+				apps := make([]string, len(restrictions.Apps))
+				for i, app := range restrictions.Apps {
+					apps[i] = app.GetSlug()
+				}
+				bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(apps)
+			}
+		}
+
+		bprToConfig[slug.Make(branch.GetName())] = bpr
+	}
+	return bprToConfig, nil
+}
+
 //nolint:gocyclo
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
@@ -404,6 +649,18 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 				Active: github.Bool(hookConfig.Active),
 			}
 			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, *r.Name, hook)
+			if err != nil {
+				return managed.ExternalCreation{}, err
+			}
+		}
+	}
+
+	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		rulesMap := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+		for key := range rulesMap {
+			// avoid "G601: Implicit memory aliasing in for loop"
+			rule := rulesMap[key]
+			err = editProtectedBranch(ctx, &rule, c.github, cr.Spec.ForProvider.Org, name)
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -542,6 +799,152 @@ func updateRepoWebhooks(ctx context.Context, cr *v1alpha1.Repository, gh *ghclie
 	return nil
 }
 
+// editProtectedBranch updates the branch protection settings for a given GitHub repository
+// based on a provided BranchProtectionRule. It returns an error if the update operation fails.
+//
+//nolint:gocyclo
+func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.Client, owner, repoName string) error {
+	protectionRequest := &github.ProtectionRequest{
+		EnforceAdmins:                  rule.EnforceAdmins,
+		RequireLinearHistory:           github.Bool(rule.RequireLinearHistory),
+		AllowForcePushes:               github.Bool(rule.AllowForcePushes),
+		AllowDeletions:                 github.Bool(rule.AllowDeletions),
+		RequiredConversationResolution: github.Bool(rule.RequiredConversationResolution),
+		BlockCreations:                 github.Bool(rule.BlockCreations),
+		LockBranch:                     github.Bool(rule.LockBranch),
+		AllowForkSyncing:               github.Bool(rule.AllowForkSyncing),
+	}
+
+	if rule.RequiredStatusChecks != nil {
+		var checks []*github.RequiredStatusCheck
+		for _, check := range rule.RequiredStatusChecks.Checks {
+			checks = append(checks, &github.RequiredStatusCheck{
+				Context: check.Context,
+				AppID:   check.AppID,
+			})
+		}
+		protectionRequest.RequiredStatusChecks = &github.RequiredStatusChecks{
+			Strict: rule.RequiredStatusChecks.Strict,
+			Checks: checks,
+		}
+	}
+
+	if rule.RequiredPullRequestReviews != nil {
+		emptySlice := make([]string, 0)
+		protectionRequest.RequiredPullRequestReviews = &github.PullRequestReviewsEnforcementRequest{
+			// Make sure the setting is disabled by default
+			// GitHub API requires empty payload to disable this setting
+			BypassPullRequestAllowancesRequest: &github.BypassPullRequestAllowancesRequest{
+				Users: emptySlice, Teams: emptySlice, Apps: emptySlice,
+			},
+			// Make sure the setting is disabled by default
+			DismissalRestrictionsRequest: &github.DismissalRestrictionsRequest{Users: nil, Teams: nil, Apps: nil},
+			DismissStaleReviews:          rule.RequiredPullRequestReviews.DismissStaleReviews,
+			RequireCodeOwnerReviews:      rule.RequiredPullRequestReviews.RequireCodeOwnerReviews,
+			RequiredApprovingReviewCount: rule.RequiredPullRequestReviews.RequiredApprovingReviewCount,
+			RequireLastPushApproval:      github.Bool(rule.RequiredPullRequestReviews.RequireLastPushApproval),
+		}
+		if rule.RequiredPullRequestReviews.BypassPullRequestAllowances != nil {
+			protectionRequest.RequiredPullRequestReviews.BypassPullRequestAllowancesRequest = &github.BypassPullRequestAllowancesRequest{
+				Users: util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Users),
+				Teams: util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams),
+				Apps:  util.DefaultToStringSlice(rule.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps),
+			}
+		}
+		if rule.RequiredPullRequestReviews.DismissalRestrictions != nil {
+			protectionRequest.RequiredPullRequestReviews.DismissalRestrictionsRequest = &github.DismissalRestrictionsRequest{
+				Users: rule.RequiredPullRequestReviews.DismissalRestrictions.Users,
+				Teams: rule.RequiredPullRequestReviews.DismissalRestrictions.Teams,
+				Apps:  rule.RequiredPullRequestReviews.DismissalRestrictions.Apps,
+			}
+		}
+	}
+
+	if rule.BranchProtectionRestrictions != nil {
+		protectionRequest.Restrictions = &github.BranchRestrictionsRequest{
+			Users: util.DefaultToStringSlice(rule.BranchProtectionRestrictions.Users),
+			Teams: util.DefaultToStringSlice(rule.BranchProtectionRestrictions.Teams),
+			Apps:  util.DefaultToStringSlice(rule.BranchProtectionRestrictions.Apps),
+		}
+	}
+
+	_, _, err := gh.Repositories.UpdateBranchProtection(ctx, owner, repoName, rule.Branch, protectionRequest)
+	if err != nil {
+		return err
+	}
+
+	err = handleBranchProtectionSignature(ctx, gh, owner, repoName, rule)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// updateProtectedBranches synchronizes the branch protection rules of a GitHub repository
+// to match with those detailed in the repository resource object.
+// It performs necessary additions, updates, or deletions based on the difference between
+// the actual state on GitHub and the desired state in the resource object.
+func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	protectedBranches, err := listProtectedBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if err != nil {
+		return err
+	}
+	crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+	ghBPRToConfig, err := getBPRWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, protectedBranches)
+	if err != nil {
+		return err
+	}
+
+	toDelete, toAdd, toUpdate := util.DiffProtectedBranches(ghBPRToConfig, crBPRToConfig)
+
+	for branchName := range toDelete {
+		_, err = gh.Repositories.RemoveBranchProtection(ctx, cr.Spec.ForProvider.Org, repoName, branchName)
+		if err != nil {
+			return err
+		}
+	}
+
+	for key := range toAdd {
+		// avoid "G601: Implicit memory aliasing in for loop"
+		config := toAdd[key]
+		err = editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
+		if err != nil {
+			return err
+		}
+	}
+
+	for key := range toUpdate {
+		// avoid "G601: Implicit memory aliasing in for loop"
+		config := toUpdate[key]
+		err = editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// handleBranchProtectionSignature manages the requirement of signed commits for protected branches
+// depending on the configuration. If RequireSignedCommits is set to true, it enforces signed commits,
+// making them mandatory for all contributors. If it's false, signing commits is optional.
+// It returns an error if any of the GitHub API calls fail.
+func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, owner, repoName string, protectionRule *v1alpha1.BranchProtectionRule) error {
+	if protectionRule.RequireSignedCommits {
+		_, _, err := gh.Repositories.RequireSignaturesOnProtectedBranch(ctx, owner, repoName, protectionRule.Branch)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := gh.Repositories.OptionalSignaturesOnProtectedBranch(ctx, owner, repoName, protectionRule.Branch)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
@@ -575,6 +978,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	if cr.Spec.ForProvider.Webhooks != nil {
 		err = updateRepoWebhooks(ctx, cr, c.github, name)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
+	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		err = updateProtectedBranches(ctx, cr, c.github, name)
 		if err != nil {
 			return managed.ExternalUpdate{}, err
 		}

@@ -23,3 +23,19 @@ spec:
       - workflow_job
       insecureSsl: false
       url: https://example.com
+    branchProtectionRules:
+      - branch: main
+        enforceAdmins: true
+        requireLinearHistory: true
+        requiredConversationResolution: true
+        requiredPullRequestReviews:
+          dismissStaleReviews: true
+          requireCodeOwnerReviews: true
+          requireLastPushApproval: true
+          bypassPullRequestAllowances:
+            users:
+              - ci-user
+        requiredStatusChecks:
+          checks:
+            - context: terraform_validate
+

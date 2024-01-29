@@ -19,6 +19,7 @@ implements follwing objects with partial functionality:
   * user permissions  
   * team permissions
   * webhooks
+  * branch protection rules
 * Membership
   * role
 
