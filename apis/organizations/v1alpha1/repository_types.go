@@ -215,7 +215,7 @@ type RequiredStatusCheck struct {
 	// Omit this field to automatically select the GitHub App that has recently provided this check,
 	// or any app if it was not set by a GitHub App. Pass -1 to explicitly allow any app to set the status.
 	// +optional
-	AppID *int64 `json:"app_id,omitempty"`
+	AppID *int64 `json:"appId,omitempty"`
 }
 
 // RequiredPullRequestReviews represents the required reviews for a pull request before merging.

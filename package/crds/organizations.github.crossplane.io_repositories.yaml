@@ -234,7 +234,7 @@ spec:
                                 description: RequiredStatusCheck represents the configuration
                                   for a single check
                                 properties:
-                                  app_id:
+                                  appId:
                                     description: The ID of the GitHub App that must
                                       provide this check. Omit this field to automatically
                                       select the GitHub App that has recently provided
