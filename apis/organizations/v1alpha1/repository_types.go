@@ -34,6 +34,12 @@ type RepositoryParameters struct {
 
 	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules,omitempty"`
 
+	// Creates a new repository using a repository template
+	CreateFromTemplate *TemplateRepo `json:"createFromTemplate,omitempty"`
+
+	// Creates a repository fork, it takes precedence over "CreateFromTemplate" setting.
+	CreateFork *RepoFork `json:"createFork,omitempty"`
+
 	// Org is the Organization for the Membership
 	// +immutable
 	// +crossplane:generate:reference:type=Organization
@@ -56,6 +62,11 @@ type RepositoryParameters struct {
 
 	// Private sets the repository to private, if false it will be public
 	Private *bool `json:"private,omitempty"`
+
+	// Set to true to make this repo available as a template repository.
+	// Default: false
+	// +optional
+	IsTemplate *bool `json:"isTemplate,omitempty"`
 }
 
 // RepositoryParameters are the configurable fields of a Repository.
@@ -291,6 +302,33 @@ type BranchProtectionRestrictions struct {
 	// Only apps allowed to push will be able to create new branches matching this rule.
 	// +optional
 	Apps []string `json:"apps,omitempty"`
+}
+
+// TemplateRepo represents the configuration for creating a new repository from a template.
+type TemplateRepo struct {
+	// The account owner of the template repository. The name is not case-sensitive.
+	Owner string `json:"owner"`
+
+	// The name of the template repository without the .git extension. The name is not case-sensitive.
+	Repo string `json:"repo"`
+
+	// Set to true to include the directory structure and files from all branches in the template repository, and not just the default branch.
+	// Default: false.
+	// +optional
+	IncludeAllBranches bool `json:"includeAllBranches,omitempty"`
+}
+
+type RepoFork struct {
+	// The account owner of the repository. The name is not case sensitive.
+	Owner string `json:"owner"`
+
+	// The name of the repository without the .git extension. The name is not case sensitive.
+	Repo string `json:"repo"`
+
+	// When forking from an existing repository, fork with only the default branch. Default: true
+	// +optional
+	// +kubebuilder:default=true
+	DefaultBranchOnly bool `json:"defaultBranchOnly,omitempty"`
 }
 
 // RepositoryObservation are the observable fields of a Repository.

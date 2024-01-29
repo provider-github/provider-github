@@ -48,6 +48,7 @@ var (
 	description = "desc"
 	archived    = false
 	private     = true
+	isTemplate  = false
 
 	user1     = "test-user-1"
 	user1Role = "admin"
@@ -158,6 +159,8 @@ func githubRepository() *github.Repository {
 		Description: &description,
 		Archived:    &archived,
 		Private:     &private,
+		IsTemplate:  &isTemplate,
+		Fork:        github.Bool(false),
 	}
 }
 
