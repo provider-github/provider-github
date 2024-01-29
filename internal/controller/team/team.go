@@ -18,7 +18,6 @@ package team
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 
 	"github.com/pkg/errors"
@@ -155,9 +154,6 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		pointer.StringDeref(cr.Spec.ForProvider.Privacy, "secret") != *t.Privacy ||
 		cr.Spec.ForProvider.Description != *t.Description ||
 		!reflect.DeepEqual(util.SortByKey(ghMToPermission), util.SortByKey(crMToPermission)) {
-
-		fmt.Println(ghMToPermission, crMToPermission)
-		fmt.Println("XXXXXXXXXXXXXXX")
 
 		return managed.ExternalObservation{
 			ResourceExists:   true,
