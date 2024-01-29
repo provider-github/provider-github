@@ -72,6 +72,8 @@ type MockRepositoriesClient struct {
 	MockListTeams                           func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	MockListCollaborators                   func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
 	MockCreate                              func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
+	MockCreateFromTemplate                  func(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
+	MockCreateFork                          func(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
 	MockAddCollaborator                     func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	MockRemoveCollaborator                  func(ctx context.Context, owner, repo, user string) (*github.Response, error)
 	MockDelete                              func(ctx context.Context, owner, repo string) (*github.Response, error)
@@ -101,6 +103,14 @@ func (m *MockRepositoriesClient) AddCollaborator(ctx context.Context, owner, rep
 
 func (m *MockRepositoriesClient) Create(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error) {
 	return m.MockCreate(ctx, org, repo)
+}
+
+func (m *MockRepositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
+	return m.MockCreateFromTemplate(ctx, templateOwner, templateRepo, templateRepoReq)
+}
+
+func (m *MockRepositoriesClient) CreateFork(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error) {
+	return m.MockCreateFork(ctx, owner, repo, opts)
 }
 
 func (m *MockRepositoriesClient) Delete(ctx context.Context, owner, repo string) (*github.Response, error) {

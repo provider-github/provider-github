@@ -203,8 +203,16 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return notUpToDate, nil
 	}
 
-	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
-	if privateCr != *repo.Private {
+	// repo visibility makes sense only when a repo is not a fork
+	if !*repo.Fork {
+		privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+		if privateCr != *repo.Private {
+			return notUpToDate, nil
+		}
+	}
+
+	isTemplate := pointer.BoolDeref(cr.Spec.ForProvider.IsTemplate, false)
+	if isTemplate != *repo.IsTemplate {
 		return notUpToDate, nil
 	}
 
@@ -601,13 +609,34 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 
-	r := &github.Repository{
-		Name:        &name,
-		Description: &cr.Spec.ForProvider.Description,
-		Private:     cr.Spec.ForProvider.Private,
+	var err error
+	switch {
+	case cr.Spec.ForProvider.CreateFork != nil:
+		owner := cr.Spec.ForProvider.CreateFork.Owner
+		repo := cr.Spec.ForProvider.CreateFork.Repo
+		_, _, err = c.github.Repositories.CreateFork(ctx, owner, repo, &github.RepositoryCreateForkOptions{
+			Organization:      cr.Spec.ForProvider.Org,
+			Name:              name,
+			DefaultBranchOnly: cr.Spec.ForProvider.CreateFork.DefaultBranchOnly,
+		})
+	case cr.Spec.ForProvider.CreateFromTemplate != nil:
+		templateOwner := cr.Spec.ForProvider.CreateFromTemplate.Owner
+		templateRepo := cr.Spec.ForProvider.CreateFromTemplate.Repo
+		_, _, err = c.github.Repositories.CreateFromTemplate(ctx, templateOwner, templateRepo, &github.TemplateRepoRequest{
+			Name:               &name,
+			Owner:              &cr.Spec.ForProvider.Org,
+			Description:        &cr.Spec.ForProvider.Description,
+			IncludeAllBranches: github.Bool(cr.Spec.ForProvider.CreateFromTemplate.IncludeAllBranches),
+			Private:            cr.Spec.ForProvider.Private,
+		})
+	default:
+		_, _, err = c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, &github.Repository{
+			Name:        &name,
+			Description: &cr.Spec.ForProvider.Description,
+			Private:     cr.Spec.ForProvider.Private,
+		})
 	}
 
-	_, _, err := c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, r)
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
@@ -648,7 +677,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 				Events: hookConfig.Events,
 				Active: github.Bool(hookConfig.Active),
 			}
-			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, *r.Name, hook)
+			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, name, hook)
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -945,6 +974,7 @@ func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, o
 	return nil
 }
 
+//nolint:gocyclo
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
@@ -954,13 +984,27 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	name := meta.GetExternalName(cr)
 
 	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
-	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
 
-	_, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
+	// repo visibility makes sense only when a repo is not a fork
+	var privateCr *bool
+
+	repo, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+	if !*repo.Fork {
+		val := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+		privateCr = &val
+	}
+
+	isTemplate := pointer.BoolDeref(cr.Spec.ForProvider.IsTemplate, false)
+
+	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
 		Name:        &name,
 		Description: &cr.Spec.ForProvider.Description,
 		Archived:    &archivedCr,
-		Private:     &privateCr,
+		Private:     privateCr,
+		IsTemplate:  &isTemplate,
 	})
 	if err != nil {
 		return managed.ExternalUpdate{}, err
