@@ -116,11 +116,10 @@ type RepositoryWebhook struct {
 	Url string `json:"url"`
 
 	// Determines whether the SSL certificate of the host for url will be verified when delivering payloads.
-	// Supported values include "0" (verification is performed) and "1" (verification is not performed).
-	// We strongly recommend not setting this to "1" as you are subject to man-in-the-middle and other attacks.
+	// We strongly recommend not setting this to true as you are subject to man-in-the-middle and other attacks.
+	// Default: false
 	// +optional
-	// +kubebuilder:default=false
-	InsecureSsl bool `json:"insecureSsl,omitempty"`
+	InsecureSsl *bool `json:"insecureSsl,omitempty"`
 
 	// The media type used to serialize the payloads. Supported values include json and form.
 	// +kubebuilder:validation:Enum=json;form
@@ -129,10 +128,10 @@ type RepositoryWebhook struct {
 	// Determines what events the hook is triggered for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
 	Events []string `json:"events"`
 
-	// Determines if notifications are sent when the webhook is triggered. Default: true
+	// Determines if notifications are sent when the webhook is triggered.
+	// Default: true
 	// +optional
-	// +kubebuilder:default=true
-	Active bool `json:"active,omitempty"`
+	Active *bool `json:"active,omitempty"`
 }
 
 // BranchProtectionRule represents a rule for protecting a branch in a repository.
@@ -160,57 +159,47 @@ type BranchProtectionRule struct {
 	BranchProtectionRestrictions *BranchProtectionRestrictions `json:"branchProtectionRestrictions,omitempty"`
 
 	// Enforce settings even for administrators and custom roles with the "bypass branch protections" permission.
-	// Default: false
-	// +optional
-	EnforceAdmins bool `json:"enforceAdmins,omitempty"`
+	EnforceAdmins bool `json:"enforceAdmins"`
 
 	// Prevent merge commits from being pushed to matching branches.
 	// Default: false
 	// +optional
-	RequireLinearHistory bool `json:"requireLinearHistory,omitempty"`
+	RequireLinearHistory *bool `json:"requireLinearHistory,omitempty"`
 
 	// Permit force pushes for all users with push access.
 	// Default: false
 	// +optional
-	AllowForcePushes bool `json:"allowForcePushes,omitempty"`
+	AllowForcePushes *bool `json:"allowForcePushes,omitempty"`
 
 	// Allow users with push access to delete matching branches.
 	// Default: false
 	// +optional
-	AllowDeletions bool `json:"allowDeletions,omitempty"`
+	AllowDeletions *bool `json:"allowDeletions,omitempty"`
 
 	// When enabled, all conversations on code must be resolved before a pull request can be merged into a branch that matches this rule.
 	// Default: false
 	// +optional
-	RequiredConversationResolution bool `json:"requiredConversationResolution,omitempty"`
-
-	// If set to true, will cause the restrictions setting to also block pushes which create new branches
-	// unless initiated by a user, team, app with the ability to push.
-	// Makes sense only when branchProtectionRestrictions is also set.
-	// Default: false
-	// +optional
-	BlockCreations bool `json:"blockCreations,omitempty"`
+	RequiredConversationResolution *bool `json:"requiredConversationResolution,omitempty"`
 
 	// Branch is read-only. Users cannot push to the branch.
 	// Default: false
 	// +optional
-	LockBranch bool `json:"lockBranch,omitempty"`
+	LockBranch *bool `json:"lockBranch,omitempty"`
 
 	// Will allow users to pull changes from upstream when the branch is locked.
 	// Default: false
 	// +optional
-	AllowForkSyncing bool `json:"allowForkSyncing,omitempty"`
+	AllowForkSyncing *bool `json:"allowForkSyncing,omitempty"`
 
 	// Commits pushed to matching branches must have verified signatures.
+	// Default: false
 	// +optional
-	RequireSignedCommits bool `json:"requireSignedCommits,omitempty"`
+	RequireSignedCommits *bool `json:"requireSignedCommits,omitempty"`
 }
 
 // RequiredStatusChecks represents the configuration for required status checks to apply to a branch protection rule.
 type RequiredStatusChecks struct {
-	// Require branches to be up to date before merging. Default: true
-	// +optional
-	// +kubebuilder:default=true
+	// Require branches to be up-to-date before merging.
 	Strict bool `json:"strict"`
 
 	// The list of status checks to require in order to merge into this branch.
@@ -232,25 +221,18 @@ type RequiredStatusCheck struct {
 // RequiredPullRequestReviews represents the required reviews for a pull request before merging.
 type RequiredPullRequestReviews struct {
 	// Set to true if you want to automatically dismiss approving reviews when someone pushes a new commit.
-	// Default: false
-	// +optional
-	DismissStaleReviews bool `json:"dismissStaleReviews,omitempty"`
+	DismissStaleReviews bool `json:"dismissStaleReviews"`
 
 	// Blocks merging pull requests until code owners review them.
-	// Default: false
-	// +optional
-	RequireCodeOwnerReviews bool `json:"requireCodeOwnerReviews,omitempty"`
+	RequireCodeOwnerReviews bool `json:"requireCodeOwnerReviews"`
 
 	// Specify the number of reviewers required to approve pull requests. Use a number between 1 and 6 or 0 to not require reviewers.
-	// Default: 1
-	// +optional
-	// +kubebuilder:default=1
-	RequiredApprovingReviewCount int `json:"requiredApprovingReviewCount,omitempty"`
+	RequiredApprovingReviewCount int `json:"requiredApprovingReviewCount"`
 
 	// Whether the most recent push must be approved by someone other than the person who pushed it.
 	// Default: false
 	// +optional
-	RequireLastPushApproval bool `json:"requireLastPushApproval,omitempty"`
+	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
 
 	// Allow specific users, teams, or apps to bypass pull request requirements.
 	// +optional
@@ -291,6 +273,12 @@ type DismissalRestrictionsRequest struct {
 
 // BranchProtectionRestrictions defines the restrictions to apply to a branch protection rule.
 type BranchProtectionRestrictions struct {
+	// If set to true, will cause the restrictions setting to also block pushes which create new branches
+	// unless initiated by a user, team, app with the ability to push.
+	// Default: false
+	// +optional
+	BlockCreations *bool `json:"blockCreations,omitempty"`
+
 	// Only people allowed to push will be able to create new branches matching this rule.
 	// +optional
 	Users []string `json:"users,omitempty"`
@@ -312,23 +300,20 @@ type TemplateRepo struct {
 	// The name of the template repository without the .git extension. The name is not case-sensitive.
 	Repo string `json:"repo"`
 
-	// Set to true to include the directory structure and files from all branches in the template repository, and not just the default branch.
-	// Default: false.
-	// +optional
-	IncludeAllBranches bool `json:"includeAllBranches,omitempty"`
+	// Set to true to include the directory structure and files from all branches in the template repository,
+	// and not just the default branch.
+	IncludeAllBranches bool `json:"includeAllBranches"`
 }
 
 type RepoFork struct {
-	// The account owner of the repository. The name is not case sensitive.
+	// The account owner of the repository. The name is not case-sensitive.
 	Owner string `json:"owner"`
 
-	// The name of the repository without the .git extension. The name is not case sensitive.
+	// The name of the repository without the .git extension. The name is not case-sensitive.
 	Repo string `json:"repo"`
 
-	// When forking from an existing repository, fork with only the default branch. Default: true
-	// +optional
-	// +kubebuilder:default=true
-	DefaultBranchOnly bool `json:"defaultBranchOnly,omitempty"`
+	// When forking from an existing repository, fork with only the default branch.
+	DefaultBranchOnly bool `json:"defaultBranchOnly"`
 }
 
 // RepositoryObservation are the observable fields of a Repository.

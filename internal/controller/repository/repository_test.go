@@ -74,7 +74,6 @@ var (
 	bpr1allowForcePushes               = false
 	bpr1allowDeletions                 = false
 	bpr1requiredConversationResolution = true
-	bpr1blockCreations                 = true
 	bpr1lockBranch                     = false
 	bpr1allowForkSyncing               = false
 	bpr1requireSignedCommits           = false
@@ -117,8 +116,8 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 			Url:         webhook1url,
 			ContentType: webhook1ContentType,
 			Events:      []string{webhook1event1, webhook1event2},
-			InsecureSsl: webhook1InsecureSsl,
-			Active:      webhook1active,
+			InsecureSsl: &webhook1InsecureSsl,
+			Active:      &webhook1active,
 		},
 	}
 
@@ -126,14 +125,13 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 		{
 			Branch:                         bpr1branch,
 			EnforceAdmins:                  bpr1enforceAdmins,
-			RequireLinearHistory:           bpr1requireLinearHistory,
-			AllowForcePushes:               bpr1allowForcePushes,
-			AllowDeletions:                 bpr1allowDeletions,
-			RequiredConversationResolution: bpr1requiredConversationResolution,
-			BlockCreations:                 bpr1blockCreations,
-			LockBranch:                     bpr1lockBranch,
-			AllowForkSyncing:               bpr1allowForkSyncing,
-			RequireSignedCommits:           bpr1requireSignedCommits,
+			RequireLinearHistory:           &bpr1requireLinearHistory,
+			AllowForcePushes:               &bpr1allowForcePushes,
+			AllowDeletions:                 &bpr1allowDeletions,
+			RequiredConversationResolution: &bpr1requiredConversationResolution,
+			LockBranch:                     &bpr1lockBranch,
+			AllowForkSyncing:               &bpr1allowForkSyncing,
+			RequireSignedCommits:           &bpr1requireSignedCommits,
 			RequiredStatusChecks: &v1alpha1.RequiredStatusChecks{
 				Strict: true,
 				Checks: []*v1alpha1.RequiredStatusCheck{
@@ -202,9 +200,6 @@ func githubProtectedBranch() *github.Protection {
 		},
 		RequiredConversationResolution: &github.RequiredConversationResolution{
 			Enabled: bpr1requiredConversationResolution,
-		},
-		BlockCreations: &github.BlockCreations{
-			Enabled: &bpr1blockCreations,
 		},
 		LockBranch: &github.LockBranch{
 			Enabled: &bpr1lockBranch,
