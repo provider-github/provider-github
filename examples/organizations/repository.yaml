@@ -35,14 +35,18 @@ spec:
         requiredConversationResolution: true
         requiredPullRequestReviews:
           dismissStaleReviews: true
+          requiredApprovingReviewCount: 1
           requireCodeOwnerReviews: true
           requireLastPushApproval: true
           bypassPullRequestAllowances:
             users:
               - ci-user
         requiredStatusChecks:
+          strict: true
           checks:
             - context: terraform_validate
+            - context: deploy
+              appId: 123456
 ---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Repository
@@ -56,3 +60,4 @@ spec:
     createFork:
       owner: some-org
       repo: some-repo
+      defaultBranchOnly: true

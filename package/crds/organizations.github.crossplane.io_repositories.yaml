@@ -90,13 +90,6 @@ spec:
                           description: 'Will allow users to pull changes from upstream
                             when the branch is locked. Default: false'
                           type: boolean
-                        blockCreations:
-                          description: 'If set to true, will cause the restrictions
-                            setting to also block pushes which create new branches
-                            unless initiated by a user, team, app with the ability
-                            to push. Makes sense only when branchProtectionRestrictions
-                            is also set. Default: false'
-                          type: boolean
                         branch:
                           description: The branch name to apply the protection rule
                             to.
@@ -113,6 +106,12 @@ spec:
                               items:
                                 type: string
                               type: array
+                            blockCreations:
+                              description: 'If set to true, will cause the restrictions
+                                setting to also block pushes which create new branches
+                                unless initiated by a user, team, app with the ability
+                                to push. Default: false'
+                              type: boolean
                             teams:
                               description: Only teams allowed to push will be able
                                 to create new branches matching this rule.
@@ -127,9 +126,8 @@ spec:
                               type: array
                           type: object
                         enforceAdmins:
-                          description: 'Enforce settings even for administrators and
+                          description: Enforce settings even for administrators and
                             custom roles with the "bypass branch protections" permission.
-                            Default: false'
                           type: boolean
                         lockBranch:
                           description: 'Branch is read-only. Users cannot push to
@@ -140,8 +138,8 @@ spec:
                             matching branches. Default: false'
                           type: boolean
                         requireSignedCommits:
-                          description: Commits pushed to matching branches must have
-                            verified signatures.
+                          description: 'Commits pushed to matching branches must have
+                            verified signatures. Default: false'
                           type: boolean
                         requiredConversationResolution:
                           description: 'When enabled, all conversations on code must
@@ -178,9 +176,9 @@ spec:
                                   type: array
                               type: object
                             dismissStaleReviews:
-                              description: 'Set to true if you want to automatically
+                              description: Set to true if you want to automatically
                                 dismiss approving reviews when someone pushes a new
-                                commit. Default: false'
+                                commit.
                               type: boolean
                             dismissalRestrictions:
                               description: Specify which users, teams, and apps can
@@ -206,8 +204,8 @@ spec:
                                   type: array
                               type: object
                             requireCodeOwnerReviews:
-                              description: 'Blocks merging pull requests until code
-                                owners review them. Default: false'
+                              description: Blocks merging pull requests until code
+                                owners review them.
                               type: boolean
                             requireLastPushApproval:
                               description: 'Whether the most recent push must be approved
@@ -215,11 +213,14 @@ spec:
                                 false'
                               type: boolean
                             requiredApprovingReviewCount:
-                              default: 1
-                              description: 'Specify the number of reviewers required
+                              description: Specify the number of reviewers required
                                 to approve pull requests. Use a number between 1 and
-                                6 or 0 to not require reviewers. Default: 1'
+                                6 or 0 to not require reviewers.
                               type: integer
+                          required:
+                          - dismissStaleReviews
+                          - requireCodeOwnerReviews
+                          - requiredApprovingReviewCount
                           type: object
                         requiredStatusChecks:
                           description: Require status checks to pass before merging.
@@ -251,15 +252,16 @@ spec:
                                 type: object
                               type: array
                             strict:
-                              default: true
-                              description: 'Require branches to be up to date before
-                                merging. Default: true'
+                              description: Require branches to be up-to-date before
+                                merging.
                               type: boolean
                           required:
                           - checks
+                          - strict
                           type: object
                       required:
                       - branch
+                      - enforceAdmins
                       type: object
                     type: array
                   createFork:
@@ -267,19 +269,19 @@ spec:
                       "CreateFromTemplate" setting.
                     properties:
                       defaultBranchOnly:
-                        default: true
-                        description: 'When forking from an existing repository, fork
-                          with only the default branch. Default: true'
+                        description: When forking from an existing repository, fork
+                          with only the default branch.
                         type: boolean
                       owner:
                         description: The account owner of the repository. The name
-                          is not case sensitive.
+                          is not case-sensitive.
                         type: string
                       repo:
                         description: The name of the repository without the .git extension.
-                          The name is not case sensitive.
+                          The name is not case-sensitive.
                         type: string
                     required:
+                    - defaultBranchOnly
                     - owner
                     - repo
                     type: object
@@ -287,9 +289,9 @@ spec:
                     description: Creates a new repository using a repository template
                     properties:
                       includeAllBranches:
-                        description: 'Set to true to include the directory structure
+                        description: Set to true to include the directory structure
                           and files from all branches in the template repository,
-                          and not just the default branch. Default: false.'
+                          and not just the default branch.
                         type: boolean
                       owner:
                         description: The account owner of the template repository.
@@ -300,6 +302,7 @@ spec:
                           .git extension. The name is not case-sensitive.
                         type: string
                     required:
+                    - includeAllBranches
                     - owner
                     - repo
                     type: object
@@ -585,7 +588,6 @@ spec:
                       description: Repository webhook https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks
                       properties:
                         active:
-                          default: true
                           description: 'Determines if notifications are sent when
                             the webhook is triggered. Default: true'
                           type: boolean
@@ -603,13 +605,11 @@ spec:
                             type: string
                           type: array
                         insecureSsl:
-                          default: false
-                          description: Determines whether the SSL certificate of the
-                            host for url will be verified when delivering payloads.
-                            Supported values include "0" (verification is performed)
-                            and "1" (verification is not performed). We strongly recommend
-                            not setting this to "1" as you are subject to man-in-the-middle
-                            and other attacks.
+                          description: 'Determines whether the SSL certificate of
+                            the host for url will be verified when delivering payloads.
+                            We strongly recommend not setting this to true as you
+                            are subject to man-in-the-middle and other attacks. Default:
+                            false'
                           type: boolean
                         url:
                           description: The URL to which the payloads will be delivered.
