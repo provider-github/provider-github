@@ -248,13 +248,19 @@ func getRepoWebhooksMapFromCr(webhooks []v1alpha1.RepositoryWebhook) map[string]
 	crWToConfig := make(map[string]v1alpha1.RepositoryWebhook, len(webhooks))
 
 	for _, webhook := range webhooks {
+		// handle optional *bool fields
+		insecureSsl := util.BoolDerefToPointer(webhook.InsecureSsl, false)
+		active := util.BoolDerefToPointer(webhook.Active, true)
+
+		// sort events to aid comparison between desired and actual state
 		sort.Strings(webhook.Events)
+
 		crWToConfig[webhook.Url] = v1alpha1.RepositoryWebhook{
 			Url:         webhook.Url,
-			InsecureSsl: webhook.InsecureSsl,
+			InsecureSsl: insecureSsl,
 			ContentType: webhook.ContentType,
 			Events:      webhook.Events,
-			Active:      webhook.Active,
+			Active:      active,
 		}
 	}
 	return crWToConfig
@@ -284,17 +290,15 @@ func getRepoWebhooksWithConfig(hooks []*github.Hook) map[string]v1alpha1.Reposit
 	wToConfig := make(map[string]v1alpha1.RepositoryWebhook)
 
 	for _, h := range hooks {
-		url, _ := h.Config["url"].(string)
-		insecureSslBool := false
-		if h.Config["insecure_ssl"] == "1" {
-			insecureSslBool = true
-		}
+		url := h.Config["url"].(string)
+		contentType := h.Config["content_type"].(string)
+		insecureSslBool := h.Config["insecure_ssl"] == "1"
 		wToConfig[url] = v1alpha1.RepositoryWebhook{
 			Url:         url,
-			InsecureSsl: insecureSslBool,
-			ContentType: h.Config["content_type"].(string),
+			InsecureSsl: &insecureSslBool,
+			ContentType: contentType,
 			Events:      h.Events,
-			Active:      *h.Active,
+			Active:      h.Active,
 		}
 	}
 
@@ -407,56 +411,74 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 	crBPRToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(rules))
 
 	for i := range rules {
-		rule := &rules[i]
+		// Use a copy to avoid changing passed []v1alpha1.BranchProtectionRule
+		// This prevents the controller from changing the spec of the live CR
+		// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
+		orig := &rules[i]
+		rCopy := orig.DeepCopy()
 
-		if rule.RequiredStatusChecks != nil && rule.RequiredStatusChecks.Checks != nil {
-			copyOfStatusChecks := make([]*v1alpha1.RequiredStatusCheck, len(rule.RequiredStatusChecks.Checks))
-			copy(copyOfStatusChecks, rule.RequiredStatusChecks.Checks)
+		// handle optional *bool fields
+		rCopy.RequireLinearHistory = util.BoolDerefToPointer(rCopy.RequireLinearHistory, false)
+		rCopy.AllowForcePushes = util.BoolDerefToPointer(rCopy.AllowForcePushes, false)
+		rCopy.AllowDeletions = util.BoolDerefToPointer(rCopy.AllowDeletions, false)
+		rCopy.RequiredConversationResolution = util.BoolDerefToPointer(rCopy.RequiredConversationResolution, false)
+		rCopy.LockBranch = util.BoolDerefToPointer(rCopy.LockBranch, false)
+		rCopy.AllowForkSyncing = util.BoolDerefToPointer(rCopy.AllowForkSyncing, false)
+		rCopy.RequireSignedCommits = util.BoolDerefToPointer(rCopy.RequireSignedCommits, false)
+
+		if rCopy.RequiredStatusChecks != nil && rCopy.RequiredStatusChecks.Checks != nil {
+			copyOfStatusChecks := make([]*v1alpha1.RequiredStatusCheck, len(rCopy.RequiredStatusChecks.Checks))
+			copy(copyOfStatusChecks, rCopy.RequiredStatusChecks.Checks)
 			util.SortRequiredStatusChecks(copyOfStatusChecks)
-			rule.RequiredStatusChecks.Checks = copyOfStatusChecks
+			rCopy.RequiredStatusChecks.Checks = copyOfStatusChecks
 		}
 
-		branchProtectionRestrictions := rule.BranchProtectionRestrictions
-		if branchProtectionRestrictions != nil {
-			if branchProtectionRestrictions.Users != nil {
-				branchProtectionRestrictions.Users = util.SortAndReturn(branchProtectionRestrictions.Users)
+		restr := rCopy.BranchProtectionRestrictions
+		if restr != nil {
+			restr.BlockCreations = util.BoolDerefToPointer(restr.BlockCreations, false)
+			if restr.Users != nil {
+				restr.Users = util.SortAndReturn(restr.Users)
 			}
-			if branchProtectionRestrictions.Teams != nil {
-				branchProtectionRestrictions.Teams = util.SortAndReturn(branchProtectionRestrictions.Teams)
+			if restr.Teams != nil {
+				restr.Teams = util.SortAndReturn(restr.Teams)
 			}
-			if branchProtectionRestrictions.Apps != nil {
-				branchProtectionRestrictions.Apps = util.SortAndReturn(branchProtectionRestrictions.Apps)
+			if restr.Apps != nil {
+				restr.Apps = util.SortAndReturn(restr.Apps)
 			}
 		}
 
-		requiredPullRequestReviews := rule.RequiredPullRequestReviews
-		if requiredPullRequestReviews != nil {
-			bypassPullRequestAllowances := requiredPullRequestReviews.BypassPullRequestAllowances
-			if bypassPullRequestAllowances != nil {
-				if bypassPullRequestAllowances.Users != nil {
-					bypassPullRequestAllowances.Users = util.SortAndReturn(bypassPullRequestAllowances.Users)
+		rPRs := rCopy.RequiredPullRequestReviews
+		if rPRs != nil {
+			// handle optional *bool fields
+			rPRs.RequireLastPushApproval = util.BoolDerefToPointer(rPRs.RequireLastPushApproval, false)
+
+			allowances := rPRs.BypassPullRequestAllowances
+			if allowances != nil {
+				if allowances.Users != nil {
+					allowances.Users = util.SortAndReturn(allowances.Users)
 				}
-				if bypassPullRequestAllowances.Teams != nil {
-					bypassPullRequestAllowances.Teams = util.SortAndReturn(bypassPullRequestAllowances.Teams)
+				if allowances.Teams != nil {
+					allowances.Teams = util.SortAndReturn(allowances.Teams)
 				}
-				if bypassPullRequestAllowances.Apps != nil {
-					bypassPullRequestAllowances.Apps = util.SortAndReturn(bypassPullRequestAllowances.Apps)
+				if allowances.Apps != nil {
+					allowances.Apps = util.SortAndReturn(allowances.Apps)
 				}
 			}
-			dismissalRestrictions := requiredPullRequestReviews.DismissalRestrictions
-			if dismissalRestrictions != nil {
-				if dismissalRestrictions.Users != nil {
-					dismissalRestrictions.Users = util.SortAndReturnPointer(*dismissalRestrictions.Users)
+			dismissal := rPRs.DismissalRestrictions
+			if dismissal != nil {
+				if dismissal.Users != nil {
+					dismissal.Users = util.SortAndReturnPointer(*dismissal.Users)
 				}
-				if dismissalRestrictions.Teams != nil {
-					dismissalRestrictions.Teams = util.SortAndReturnPointer(*dismissalRestrictions.Teams)
+				if dismissal.Teams != nil {
+					dismissal.Teams = util.SortAndReturnPointer(*dismissal.Teams)
 				}
-				if dismissalRestrictions.Apps != nil {
-					dismissalRestrictions.Apps = util.SortAndReturnPointer(*dismissalRestrictions.Apps)
+				if dismissal.Apps != nil {
+					dismissal.Apps = util.SortAndReturnPointer(*dismissal.Apps)
 				}
 			}
 		}
-		crBPRToConfig[rule.Branch] = *rule
+
+		crBPRToConfig[rCopy.Branch] = *rCopy
 	}
 
 	return crBPRToConfig
@@ -479,24 +501,23 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 		bpr := v1alpha1.BranchProtectionRule{
 			Branch:                         branch.GetName(),
 			EnforceAdmins:                  protection.GetEnforceAdmins().Enabled,
-			RequireLinearHistory:           protection.GetRequireLinearHistory().Enabled,
-			AllowForcePushes:               protection.GetAllowForcePushes().Enabled,
-			AllowDeletions:                 protection.GetAllowDeletions().Enabled,
-			RequiredConversationResolution: protection.GetRequiredConversationResolution().Enabled,
-			BlockCreations:                 protection.GetBlockCreations().GetEnabled(),
-			LockBranch:                     protection.GetLockBranch().GetEnabled(),
-			AllowForkSyncing:               protection.GetAllowForkSyncing().GetEnabled(),
-			RequireSignedCommits:           protection.GetRequiredSignatures().GetEnabled(),
+			RequireLinearHistory:           &protection.GetRequireLinearHistory().Enabled,
+			AllowForcePushes:               &protection.GetAllowForcePushes().Enabled,
+			AllowDeletions:                 &protection.GetAllowDeletions().Enabled,
+			RequiredConversationResolution: &protection.GetRequiredConversationResolution().Enabled,
+			LockBranch:                     util.ToBoolPtr(protection.GetLockBranch().GetEnabled()),
+			AllowForkSyncing:               util.ToBoolPtr(protection.GetAllowForkSyncing().GetEnabled()),
+			RequireSignedCommits:           util.ToBoolPtr(protection.GetRequiredSignatures().GetEnabled()),
 		}
 
-		requiredStatusChecks := protection.GetRequiredStatusChecks()
-		if requiredStatusChecks != nil {
+		rChecks := protection.GetRequiredStatusChecks()
+		if rChecks != nil {
 			bpr.RequiredStatusChecks = &v1alpha1.RequiredStatusChecks{
-				Strict: requiredStatusChecks.Strict,
+				Strict: rChecks.Strict,
 			}
-			if len(requiredStatusChecks.Checks) > 0 {
-				checks := make([]*v1alpha1.RequiredStatusCheck, len(requiredStatusChecks.Checks))
-				for i, check := range requiredStatusChecks.Checks {
+			if len(rChecks.Checks) > 0 {
+				checks := make([]*v1alpha1.RequiredStatusCheck, len(rChecks.Checks))
+				for i, check := range rChecks.Checks {
 					checks[i] = &v1alpha1.RequiredStatusCheck{
 						Context: check.Context,
 						AppID:   check.AppID,
@@ -507,61 +528,61 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 			}
 		}
 
-		requiredPullRequestReviews := protection.GetRequiredPullRequestReviews()
-		if requiredPullRequestReviews != nil {
+		rPRs := protection.GetRequiredPullRequestReviews()
+		if rPRs != nil {
 			bpr.RequiredPullRequestReviews = &v1alpha1.RequiredPullRequestReviews{
-				DismissStaleReviews:          requiredPullRequestReviews.DismissStaleReviews,
-				RequireCodeOwnerReviews:      requiredPullRequestReviews.RequireCodeOwnerReviews,
-				RequiredApprovingReviewCount: requiredPullRequestReviews.RequiredApprovingReviewCount,
-				RequireLastPushApproval:      requiredPullRequestReviews.RequireLastPushApproval,
+				DismissStaleReviews:          rPRs.DismissStaleReviews,
+				RequireCodeOwnerReviews:      rPRs.RequireCodeOwnerReviews,
+				RequiredApprovingReviewCount: rPRs.RequiredApprovingReviewCount,
+				RequireLastPushApproval:      &rPRs.RequireLastPushApproval,
 			}
 
-			dismissalRestrictions := requiredPullRequestReviews.GetDismissalRestrictions()
-			if dismissalRestrictions != nil {
+			dismissal := rPRs.GetDismissalRestrictions()
+			if dismissal != nil {
 				bpr.RequiredPullRequestReviews.DismissalRestrictions = &v1alpha1.DismissalRestrictionsRequest{}
-				if len(dismissalRestrictions.Users) > 0 {
-					users := make([]string, len(dismissalRestrictions.Users))
-					for i, user := range dismissalRestrictions.Users {
+				if len(dismissal.Users) > 0 {
+					users := make([]string, len(dismissal.Users))
+					for i, user := range dismissal.Users {
 						users[i] = user.GetLogin()
 					}
 					bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(users)
 				}
-				if len(dismissalRestrictions.Teams) > 0 {
-					teams := make([]string, len(dismissalRestrictions.Teams))
-					for i, team := range dismissalRestrictions.Teams {
+				if len(dismissal.Teams) > 0 {
+					teams := make([]string, len(dismissal.Teams))
+					for i, team := range dismissal.Teams {
 						teams[i] = team.GetSlug()
 					}
 					bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(teams)
 				}
-				if len(dismissalRestrictions.Apps) > 0 {
-					apps := make([]string, len(dismissalRestrictions.Apps))
-					for i, app := range dismissalRestrictions.Apps {
+				if len(dismissal.Apps) > 0 {
+					apps := make([]string, len(dismissal.Apps))
+					for i, app := range dismissal.Apps {
 						apps[i] = app.GetSlug()
 					}
 					bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(apps)
 				}
 			}
 
-			bypassPullRequestAllowances := requiredPullRequestReviews.GetBypassPullRequestAllowances()
-			if bypassPullRequestAllowances != nil {
+			allowances := rPRs.GetBypassPullRequestAllowances()
+			if allowances != nil {
 				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances = &v1alpha1.BypassPullRequestAllowancesRequest{}
-				if len(bypassPullRequestAllowances.Users) > 0 {
-					users := make([]string, len(bypassPullRequestAllowances.Users))
-					for i, user := range bypassPullRequestAllowances.Users {
+				if len(allowances.Users) > 0 {
+					users := make([]string, len(allowances.Users))
+					for i, user := range allowances.Users {
 						users[i] = user.GetLogin()
 					}
 					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(users)
 				}
-				if len(bypassPullRequestAllowances.Teams) > 0 {
-					teams := make([]string, len(bypassPullRequestAllowances.Teams))
-					for i, team := range bypassPullRequestAllowances.Teams {
+				if len(allowances.Teams) > 0 {
+					teams := make([]string, len(allowances.Teams))
+					for i, team := range allowances.Teams {
 						teams[i] = team.GetSlug()
 					}
 					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(teams)
 				}
-				if len(bypassPullRequestAllowances.Apps) > 0 {
-					apps := make([]string, len(bypassPullRequestAllowances.Apps))
-					for i, app := range bypassPullRequestAllowances.Apps {
+				if len(allowances.Apps) > 0 {
+					apps := make([]string, len(allowances.Apps))
+					for i, app := range allowances.Apps {
 						apps[i] = app.GetSlug()
 					}
 					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(apps)
@@ -569,26 +590,27 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 			}
 		}
 
-		restrictions := protection.GetRestrictions()
-		if restrictions != nil {
+		restr := protection.GetRestrictions()
+		if restr != nil {
 			bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
-			if len(restrictions.Users) > 0 {
-				users := make([]string, len(restrictions.Users))
-				for i, user := range restrictions.Users {
+			bpr.BranchProtectionRestrictions.BlockCreations = util.ToBoolPtr(protection.GetBlockCreations().GetEnabled())
+			if len(restr.Users) > 0 {
+				users := make([]string, len(restr.Users))
+				for i, user := range restr.Users {
 					users[i] = user.GetLogin()
 				}
 				bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(users)
 			}
-			if len(restrictions.Teams) > 0 {
-				teams := make([]string, len(restrictions.Teams))
-				for i, team := range restrictions.Teams {
+			if len(restr.Teams) > 0 {
+				teams := make([]string, len(restr.Teams))
+				for i, team := range restr.Teams {
 					teams[i] = team.GetSlug()
 				}
 				bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(teams)
 			}
-			if len(restrictions.Apps) > 0 {
-				apps := make([]string, len(restrictions.Apps))
-				for i, app := range restrictions.Apps {
+			if len(restr.Apps) > 0 {
+				apps := make([]string, len(restr.Apps))
+				for i, app := range restr.Apps {
 					apps[i] = app.GetSlug()
 				}
 				bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(apps)
@@ -609,6 +631,9 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 
+	// handle optional *bool fields
+	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+
 	var err error
 	switch {
 	case cr.Spec.ForProvider.CreateFork != nil:
@@ -626,14 +651,14 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 			Name:               &name,
 			Owner:              &cr.Spec.ForProvider.Org,
 			Description:        &cr.Spec.ForProvider.Description,
-			IncludeAllBranches: github.Bool(cr.Spec.ForProvider.CreateFromTemplate.IncludeAllBranches),
-			Private:            cr.Spec.ForProvider.Private,
+			IncludeAllBranches: &cr.Spec.ForProvider.CreateFromTemplate.IncludeAllBranches,
+			Private:            &privateCr,
 		})
 	default:
 		_, _, err = c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, &github.Repository{
 			Name:        &name,
 			Description: &cr.Spec.ForProvider.Description,
-			Private:     cr.Spec.ForProvider.Private,
+			Private:     &privateCr,
 		})
 	}
 
@@ -663,21 +688,12 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	if cr.Spec.ForProvider.Webhooks != nil {
-		for _, hookConfig := range cr.Spec.ForProvider.Webhooks {
-			insecureSslInt := 0
-			if hookConfig.InsecureSsl {
-				insecureSslInt = 1
-			}
-			hook := &github.Hook{
-				Config: map[string]interface{}{
-					"url":          hookConfig.Url,
-					"insecure_ssl": insecureSslInt,
-					"content_type": hookConfig.ContentType,
-				},
-				Events: hookConfig.Events,
-				Active: github.Bool(hookConfig.Active),
-			}
-			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, name, hook)
+		// getRepoWebhooksMapFromCr() provides defaults for optional *bool fields
+		hooksMap := getRepoWebhooksMapFromCr(cr.Spec.ForProvider.Webhooks)
+		for key := range hooksMap {
+			// avoid "G601: Implicit memory aliasing in for loop"
+			hook := hooksMap[key]
+			_, _, err := c.github.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, name, crRepoHookToHookConfig(hook))
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -685,6 +701,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		// getBPRMapFromCr() provides defaults for optional *bool fields
 		rulesMap := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
@@ -756,6 +773,19 @@ func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 	return nil
 }
 
+// crRepoHookToHookConfig converts a RepositoryWebhook object to a *github.Hook object and returns it.
+func crRepoHookToHookConfig(hook v1alpha1.RepositoryWebhook) *github.Hook {
+	return &github.Hook{
+		Config: map[string]interface{}{
+			"url":          hook.Url,
+			"insecure_ssl": util.BoolToInt(*hook.InsecureSsl),
+			"content_type": hook.ContentType,
+		},
+		Events: hook.Events,
+		Active: hook.Active,
+	}
+}
+
 //nolint:gocyclo
 func updateRepoWebhooks(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
 	ghRepoWebhooks, err := getRepoWebhooks(ctx, gh, cr.Spec.ForProvider.Org, repoName)
@@ -779,47 +809,19 @@ func updateRepoWebhooks(ctx context.Context, cr *v1alpha1.Repository, gh *ghclie
 		}
 	}
 
-	for name, config := range toAdd {
-		url := name
-		insecureSslInt := 0
-		if config.InsecureSsl {
-			insecureSslInt = 1
-		}
-		hook := &github.Hook{
-			Config: map[string]interface{}{
-				"url":          url,
-				"insecure_ssl": insecureSslInt,
-				"content_type": config.ContentType,
-			},
-			Events: config.Events,
-			Active: github.Bool(config.Active),
-		}
-		_, _, err := gh.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, repoName, hook)
+	for _, hook := range toAdd {
+		_, _, err := gh.Repositories.CreateHook(ctx, cr.Spec.ForProvider.Org, repoName, crRepoHookToHookConfig(hook))
 		if err != nil {
 			return err
 		}
 	}
 
-	for name, config := range toUpdate {
-		url := name
-		id, err := getRepoWebhookId(ghRepoWebhooks, url)
+	for _, hook := range toUpdate {
+		id, err := getRepoWebhookId(ghRepoWebhooks, hook.Url)
 		if err != nil {
 			return err
 		}
-		insecureSslInt := 0
-		if config.InsecureSsl {
-			insecureSslInt = 1
-		}
-		hook := &github.Hook{
-			Config: map[string]interface{}{
-				"url":          name,
-				"insecure_ssl": insecureSslInt,
-				"content_type": config.ContentType,
-			},
-			Events: config.Events,
-			Active: github.Bool(config.Active),
-		}
-		_, _, err = gh.Repositories.EditHook(ctx, cr.Spec.ForProvider.Org, repoName, *id, hook)
+		_, _, err = gh.Repositories.EditHook(ctx, cr.Spec.ForProvider.Org, repoName, *id, crRepoHookToHookConfig(hook))
 		if err != nil {
 			return err
 		}
@@ -835,13 +837,12 @@ func updateRepoWebhooks(ctx context.Context, cr *v1alpha1.Repository, gh *ghclie
 func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.Client, owner, repoName string) error {
 	protectionRequest := &github.ProtectionRequest{
 		EnforceAdmins:                  rule.EnforceAdmins,
-		RequireLinearHistory:           github.Bool(rule.RequireLinearHistory),
-		AllowForcePushes:               github.Bool(rule.AllowForcePushes),
-		AllowDeletions:                 github.Bool(rule.AllowDeletions),
-		RequiredConversationResolution: github.Bool(rule.RequiredConversationResolution),
-		BlockCreations:                 github.Bool(rule.BlockCreations),
-		LockBranch:                     github.Bool(rule.LockBranch),
-		AllowForkSyncing:               github.Bool(rule.AllowForkSyncing),
+		RequireLinearHistory:           rule.RequireLinearHistory,
+		AllowForcePushes:               rule.AllowForcePushes,
+		AllowDeletions:                 rule.AllowDeletions,
+		RequiredConversationResolution: rule.RequiredConversationResolution,
+		LockBranch:                     rule.LockBranch,
+		AllowForkSyncing:               rule.AllowForkSyncing,
 	}
 
 	if rule.RequiredStatusChecks != nil {
@@ -861,17 +862,16 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	if rule.RequiredPullRequestReviews != nil {
 		emptySlice := make([]string, 0)
 		protectionRequest.RequiredPullRequestReviews = &github.PullRequestReviewsEnforcementRequest{
-			// Make sure the setting is disabled by default
-			// GitHub API requires empty payload to disable this setting
+			// Avoid unmanaged bypass allowances when they're not set in the CR
 			BypassPullRequestAllowancesRequest: &github.BypassPullRequestAllowancesRequest{
 				Users: emptySlice, Teams: emptySlice, Apps: emptySlice,
 			},
-			// Make sure the setting is disabled by default
+			// Avoid unmanaged dismissal restrictions when they're not set in the CR
 			DismissalRestrictionsRequest: &github.DismissalRestrictionsRequest{Users: nil, Teams: nil, Apps: nil},
 			DismissStaleReviews:          rule.RequiredPullRequestReviews.DismissStaleReviews,
 			RequireCodeOwnerReviews:      rule.RequiredPullRequestReviews.RequireCodeOwnerReviews,
 			RequiredApprovingReviewCount: rule.RequiredPullRequestReviews.RequiredApprovingReviewCount,
-			RequireLastPushApproval:      github.Bool(rule.RequiredPullRequestReviews.RequireLastPushApproval),
+			RequireLastPushApproval:      rule.RequiredPullRequestReviews.RequireLastPushApproval,
 		}
 		if rule.RequiredPullRequestReviews.BypassPullRequestAllowances != nil {
 			protectionRequest.RequiredPullRequestReviews.BypassPullRequestAllowancesRequest = &github.BypassPullRequestAllowancesRequest{
@@ -890,6 +890,7 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	}
 
 	if rule.BranchProtectionRestrictions != nil {
+		protectionRequest.BlockCreations = rule.BranchProtectionRestrictions.BlockCreations
 		protectionRequest.Restrictions = &github.BranchRestrictionsRequest{
 			Users: util.DefaultToStringSlice(rule.BranchProtectionRestrictions.Users),
 			Teams: util.DefaultToStringSlice(rule.BranchProtectionRestrictions.Teams),
@@ -960,7 +961,7 @@ func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *g
 // making them mandatory for all contributors. If it's false, signing commits is optional.
 // It returns an error if any of the GitHub API calls fail.
 func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, owner, repoName string, protectionRule *v1alpha1.BranchProtectionRule) error {
-	if protectionRule.RequireSignedCommits {
+	if protectionRule.RequireSignedCommits != nil && *protectionRule.RequireSignedCommits {
 		_, _, err := gh.Repositories.RequireSignaturesOnProtectedBranch(ctx, owner, repoName, protectionRule.Branch)
 		if err != nil {
 			return err
@@ -992,7 +993,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
-	if !*repo.Fork {
+	if repo.Fork != nil && !*repo.Fork {
 		val := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
 		privateCr = &val
 	}

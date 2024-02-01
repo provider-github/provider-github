@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"sort"
 
+	"k8s.io/utils/pointer"
+
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
@@ -175,4 +177,24 @@ func SortRequiredStatusChecks(checks []*v1alpha1.RequiredStatusCheck) {
 	sort.Slice(checks, func(i, j int) bool {
 		return checks[i].Context < checks[j].Context
 	})
+}
+
+// ToBoolPtr converts a boolean value to a pointer to a boolean value.
+func ToBoolPtr(b bool) *bool {
+	return &b
+}
+
+// BoolDerefToPointer dereferences the pointer to bool 'ptr',
+// uses 'def' as a default if 'ptr' is nil, and returns a new pointer to the resulting bool.
+func BoolDerefToPointer(ptr *bool, def bool) *bool {
+	b := pointer.BoolDeref(ptr, def)
+	return &b
+}
+
+// BoolToInt converts a boolean value to an integer
+func BoolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
