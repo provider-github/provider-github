@@ -212,8 +212,8 @@ type RequiredStatusCheck struct {
 	Context string `json:"context"`
 
 	// The ID of the GitHub App that must provide this check.
-	// Omit this field to automatically select the GitHub App that has recently provided this check,
-	// or any app if it was not set by a GitHub App. Pass -1 to explicitly allow any app to set the status.
+	// Omit this field to explicitly allow any app to set the status.
+	// +kubebuilder:validation:Minimum=2
 	// +optional
 	AppID *int64 `json:"appId,omitempty"`
 }
