@@ -617,7 +617,7 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 			}
 		}
 
-		bprToConfig[slug.Make(branch.GetName())] = bpr
+		bprToConfig[branch.GetName()] = bpr
 	}
 	return bprToConfig, nil
 }
@@ -848,9 +848,11 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	if rule.RequiredStatusChecks != nil {
 		var checks []*github.RequiredStatusCheck
 		for _, check := range rule.RequiredStatusChecks.Checks {
+			// if nil, allow any app to set the status of a check
+			appId := pointer.Int64Deref(check.AppID, -1)
 			checks = append(checks, &github.RequiredStatusCheck{
 				Context: check.Context,
-				AppID:   check.AppID,
+				AppID:   &appId,
 			})
 		}
 		protectionRequest.RequiredStatusChecks = &github.RequiredStatusChecks{
