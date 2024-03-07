@@ -217,6 +217,12 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	}
 
 	name := meta.GetExternalName(cr)
+	role := cr.Spec.ForProvider.Role
+
+	if role == "admin" {
+		return errors.New("You can only delete member users. Admin users cannot be deleted")
+	}
+
 	_, err := c.github.Organizations.RemoveOrgMembership(ctx, name, cr.Spec.ForProvider.Org)
 	if err != nil {
 		return err
