@@ -2,11 +2,12 @@ apiVersion: github.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: default
+  namespace: default
 spec:
   credentials:
     secretRef:
       key: creds
       name: github-secret
-      namespace: crossplane-system
+      namespace: default
     source: Secret
 status: {}

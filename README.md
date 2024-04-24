@@ -20,6 +20,8 @@ implements follwing objects with partial functionality:
   * team permissions
   * webhooks
   * branch protection rules
+  * Repository rules
+    * rulesets
 * Membership
   * role
 

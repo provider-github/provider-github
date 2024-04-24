@@ -78,6 +78,22 @@ var (
 	bpr1allowForkSyncing               = false
 	bpr1requireSignedCommits           = false
 	bpr1requiredStatusCheck            = "terraform_validate"
+
+	rr1Id                         int64 = 123
+	rr1name                             = "test-ruleset-1"
+	rr1target                           = "branch"
+	rr1enforcement                      = "active"
+	rr1actorType                        = "Team"
+	rr1bypassMode                       = "always"
+	rr1rulesCreation                    = true
+	rr1rulesDeletion                    = true
+	rr1rulesUpdate                      = true
+	rr1rulesRequiredLinearHistory       = true
+	rr1rulesRequiredSignatures          = true
+	rr1rulesNonFastForward              = true
+	rr1actorId                    int64 = 123
+	rr1Include                          = []string{"include"}
+	rr1Exclude                          = []string{"exclude"}
 )
 
 func withTeamPermission() repositoryModifier {
@@ -139,6 +155,34 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 						Context: bpr1requiredStatusCheck,
 					},
 				},
+			},
+		},
+	}
+	cr.Spec.ForProvider.RepositoryRules = []v1alpha1.RepositoryRuleset{
+		{
+			Name:        rr1name,
+			Target:      &rr1target,
+			Enforcement: &rr1enforcement,
+			Conditions: &v1alpha1.RulesetConditions{
+				RefName: &v1alpha1.RulesetRefName{
+					Include: rr1Include,
+					Exclude: rr1Exclude,
+				},
+			},
+			BypassActors: []*v1alpha1.RulesetByPassActors{
+				{
+					ActorId:    &rr1actorId,
+					ActorType:  &rr1actorType,
+					BypassMode: &rr1bypassMode,
+				},
+			},
+			Rules: &v1alpha1.Rules{
+				Creation:              &rr1rulesCreation,
+				Deletion:              &rr1rulesDeletion,
+				Update:                &rr1rulesUpdate,
+				RequiredLinearHistory: &rr1rulesRequiredLinearHistory,
+				RequiredSignatures:    &rr1rulesRequiredSignatures,
+				NonFastForward:        &rr1rulesNonFastForward,
 			},
 		},
 	}
@@ -211,6 +255,51 @@ func githubProtectedBranch() *github.Protection {
 			Enabled: &bpr1requireSignedCommits,
 		},
 	}
+}
+
+func githubRuleset() []*github.Ruleset {
+	return []*github.Ruleset{
+		{
+			ID:          &rr1Id,
+			Name:        rr1name,
+			Target:      &rr1target,
+			Enforcement: rr1enforcement,
+			Conditions: &github.RulesetConditions{
+				RefName: &github.RulesetRefConditionParameters{
+					Include: rr1Include,
+					Exclude: rr1Exclude,
+				},
+			},
+			BypassActors: []*github.BypassActor{
+				{
+					ActorID:    &rr1actorId,
+					ActorType:  &rr1actorType,
+					BypassMode: &rr1bypassMode,
+				},
+			},
+			Rules: []*github.RepositoryRule{
+				{
+					Type: "creation",
+				},
+				{
+					Type: "deletion",
+				},
+				{
+					Type: "update",
+				},
+				{
+					Type: "required_linear_history",
+				},
+				{
+					Type: "required_signatures",
+				},
+				{
+					Type: "non_fast_forward",
+				},
+			},
+		},
+	}
+
 }
 
 func githubCollaborators() []*github.User {
@@ -295,6 +384,12 @@ func TestObserve(t *testing.T) {
 						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
 							return []*github.Branch{}, fake.GenerateEmptyResponse(), nil
 						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+						},
 					},
 				},
 			},
@@ -333,6 +428,12 @@ func TestObserve(t *testing.T) {
 						},
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},

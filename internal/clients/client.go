@@ -87,6 +87,11 @@ type RepositoriesClient interface {
 	RemoveBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 	RequireSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
 	OptionalSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.Response, error)
+	GetAllRulesets(ctx context.Context, owner, repo string, includesParents bool) ([]*github.Ruleset, *github.Response, error)
+	GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error)
+	CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 }
 
 // NewClient creates a new client.

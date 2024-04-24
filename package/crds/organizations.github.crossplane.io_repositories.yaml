@@ -581,6 +581,100 @@ spec:
                     description: Private sets the repository to private, if false
                       it will be public
                     type: boolean
+                  repositoryRules:
+                    items:
+                      properties:
+                        bypassActors:
+                          items:
+                            properties:
+                              actorId:
+                                format: int64
+                                type: integer
+                              actorType:
+                                type: string
+                              bypassMode:
+                                type: string
+                            type: object
+                          type: array
+                        conditions:
+                          properties:
+                            refName:
+                              properties:
+                                exclude:
+                                  items:
+                                    type: string
+                                  type: array
+                                include:
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - exclude
+                              - include
+                              type: object
+                          type: object
+                        enforcement:
+                          type: string
+                        name:
+                          type: string
+                        rules:
+                          properties:
+                            creation:
+                              type: boolean
+                            deletion:
+                              type: boolean
+                            nonFastForward:
+                              type: boolean
+                            pullRequest:
+                              properties:
+                                dismissStaleReviewsOnPush:
+                                  type: boolean
+                                requireCodeOwnerReview:
+                                  type: boolean
+                                requireLastPushApproval:
+                                  type: boolean
+                                requiredApprovingReviewCount:
+                                  type: integer
+                                requiredReviewThreadResolution:
+                                  type: boolean
+                              type: object
+                            requiredDeployments:
+                              properties:
+                                environments:
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            requiredLinearHistory:
+                              type: boolean
+                            requiredSignatures:
+                              type: boolean
+                            requiredStatusChecks:
+                              properties:
+                                requiredStatusChecks:
+                                  items:
+                                    properties:
+                                      context:
+                                        type: string
+                                      integrationId:
+                                        format: int64
+                                        type: integer
+                                    required:
+                                    - context
+                                    type: object
+                                  type: array
+                                strictRequiredStatusChecksPolicy:
+                                  type: boolean
+                              type: object
+                            update:
+                              type: boolean
+                          type: object
+                        target:
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
                   webhooks:
                     items:
                       description: Repository webhook https://docs.github.com/en/webhooks/types-of-webhooks#repository-webhooks

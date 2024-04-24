@@ -34,6 +34,8 @@ type RepositoryParameters struct {
 
 	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules,omitempty"`
 
+	RepositoryRules []RepositoryRuleset `json:"repositoryRules,omitempty"`
+
 	// Creates a new repository using a repository template
 	CreateFromTemplate *TemplateRepo `json:"createFromTemplate,omitempty"`
 
@@ -290,6 +292,69 @@ type BranchProtectionRestrictions struct {
 	// Only apps allowed to push will be able to create new branches matching this rule.
 	// +optional
 	Apps []string `json:"apps,omitempty"`
+}
+
+type RepositoryRuleset struct {
+	Name string `json:"name"`
+
+	Enforcement *string `json:"enforcement,omitempty"`
+	// +optional
+	Target *string `json:"target,omitempty"`
+	// +optional
+	BypassActors []*RulesetByPassActors `json:"bypassActors"`
+	// +optional
+	Conditions *RulesetConditions `json:"conditions,omitempty"`
+	// +optional
+	Rules *Rules `json:"rules,omitempty"`
+}
+
+type RulesetByPassActors struct {
+	ActorId    *int64  `json:"actorId,omitempty"`
+	ActorType  *string `json:"actorType,omitempty"`
+	BypassMode *string `json:"bypassMode,omitempty"`
+}
+
+type RulesetConditions struct {
+	RefName *RulesetRefName `json:"refName,omitempty"`
+}
+
+type RulesetRefName struct {
+	Include []string `json:"include"`
+	Exclude []string `json:"exclude"`
+}
+
+type Rules struct {
+	Creation *bool `json:"creation,omitempty"`
+	Deletion *bool `json:"deletion,omitempty"`
+	Update   *bool `json:"update,omitempty"`
+	// +optional
+	RequiredLinearHistory *bool                      `json:"requiredLinearHistory,omitempty"`
+	RequiredDeployments   *RulesRequiredDeployments  `json:"requiredDeployments,omitempty"`
+	RequiredSignatures    *bool                      `json:"requiredSignatures,omitempty"`
+	PullRequest           *RulesPullRequest          `json:"pullRequest,omitempty"`
+	RequiredStatusChecks  *RulesRequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
+	NonFastForward        *bool                      `json:"nonFastForward,omitempty"`
+}
+
+type RulesRequiredDeployments struct {
+	Environments []string `json:"environments,omitempty"`
+}
+
+type RulesPullRequest struct {
+	DismissStaleReviewsOnPush      *bool `json:"dismissStaleReviewsOnPush,omitempty"`
+	RequireCodeOwnerReview         *bool `json:"requireCodeOwnerReview,omitempty"`
+	RequireLastPushApproval        *bool `json:"requireLastPushApproval,omitempty"`
+	RequiredApprovingReviewCount   *int  `json:"requiredApprovingReviewCount,omitempty"`
+	RequiredReviewThreadResolution *bool `json:"requiredReviewThreadResolution,omitempty"`
+}
+
+type RulesRequiredStatusChecks struct {
+	RequiredStatusChecks             []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks,omitempty"`
+	StrictRequiredStatusChecksPolicy *bool                                  `json:"strictRequiredStatusChecksPolicy,omitempty"`
+}
+type RulesRequiredStatusChecksParameters struct {
+	Context       string `json:"context"`
+	IntegrationId *int64 `json:"integrationId,omitempty"`
 }
 
 // TemplateRepo represents the configuration for creating a new repository from a template.

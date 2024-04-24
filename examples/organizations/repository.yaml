@@ -47,6 +47,49 @@ spec:
             - context: terraform_validate
             - context: deploy
               appId: 123456
+    repositoryRules:
+      - name: test-ruleset-2
+        target: branch
+        bypassActors:
+          - actorId: 8743474
+            actorType: Team
+            bypassMode: always
+          - actorId: 1
+            actorType: OrganizationAdmin
+            bypassMode: always
+          - actorId: 397599
+            actorType: Integration
+            bypassMode: always
+          - actorId: 2
+            actorType: RepositoryRole
+            bypassMode: always
+        conditions:
+          refName:
+            include:
+              [ ]
+            exclude:
+              - refs/heads/exclude
+              - refs/heads/feature/exclude
+        rules:
+          creation: false
+          nonFastForward: true
+          requiredLinearHistory: true
+          deletion: true
+          update: true
+          requiredSignatures: true
+          requiredDeployments:
+              environments:
+                - production-github
+          pullRequest:
+            dismissStaleReviewsOnPush: false
+            requiredApprovingReviewCount: 4
+            requireCodeOwnerReview: true
+            requireLastPushApproval: true
+            requiredReviewThreadResolution: true
+          requiredStatusChecks:
+            strictRequiredStatusChecksPolicy: true
+            requiredStatusChecks:
+              - context: validate
 ---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Repository

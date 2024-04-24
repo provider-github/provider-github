@@ -17,10 +17,9 @@
 package util
 
 import (
+	"k8s.io/utils/pointer"
 	"reflect"
 	"sort"
-
-	"k8s.io/utils/pointer"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -146,6 +145,38 @@ func DiffProtectedBranches(a, b map[string]v1alpha1.BranchProtectionRule) (
 
 }
 
+// DiffRepositoryRulesets compares two maps of RepositoryRuleset, 'a' and 'b'.
+// It returns three maps:
+// inANotInB: entities (keys) that are present in 'a' but not in 'b' mapped to their values in 'a'
+// inBNotInA: entities (keys) that are present in 'b' but not in 'a' mapped to their values in 'b'
+// diffs: entities (keys) that are present in both 'a' and 'b' but have different values, mapped to their values in 'b'
+func DiffRepositoryRulesets(a, b map[string]v1alpha1.RepositoryRuleset) (
+	map[string]v1alpha1.RepositoryRuleset,
+	map[string]v1alpha1.RepositoryRuleset,
+	map[string]v1alpha1.RepositoryRuleset) {
+	inANotInB := make(map[string]v1alpha1.RepositoryRuleset)
+	inBNotInA := make(map[string]v1alpha1.RepositoryRuleset)
+	diffs := make(map[string]v1alpha1.RepositoryRuleset)
+
+	for entity, va := range a {
+		vb, ok := b[entity]
+		if !ok {
+			inANotInB[entity] = va
+		} else if !reflect.DeepEqual(va, vb) {
+			diffs[entity] = vb
+		}
+	}
+
+	for entity, vb := range b {
+		_, ok := a[entity]
+		if !ok {
+			inBNotInA[entity] = vb
+		}
+	}
+
+	return inANotInB, inBNotInA, diffs
+}
+
 // DefaultToStringSlice is a helper function that checks if the provided slice is
 // nil and returns an empty string slice in that case. If the slice is not nil,
 // the same slice is returned. The purpose of this function is to avoid nil
@@ -179,9 +210,44 @@ func SortRequiredStatusChecks(checks []*v1alpha1.RequiredStatusCheck) {
 	})
 }
 
+// SortRulesRequiredStatusChecks sorts a slice of RequiredStatusCheck pointers in-place
+// by the Context field in ascending order.
+func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksParameters) {
+	sort.Slice(checks, func(i, j int) bool {
+		return checks[i].Context < checks[j].Context
+	})
+}
+
+// SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place
+// by the ActorId field in ascending order.
+func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
+	sort.Slice(actors, func(i, j int) bool {
+		return *actors[i].ActorId < *actors[j].ActorId
+	})
+
+}
+
 // ToBoolPtr converts a boolean value to a pointer to a boolean value.
 func ToBoolPtr(b bool) *bool {
 	return &b
+}
+
+// ToIntPtr is a helper function that takes an integer 'i' as input and returns a pointer to 'i'.
+// This can be useful when you want to create a pointer to an integer value.
+func ToIntPtr(i int) *int {
+	return &i
+}
+
+// ToInt64Ptr is a helper function that takes an int64 'i' as input and returns a pointer to 'i'.
+// This can be useful when you want to create a pointer to an int64 value.
+func ToInt64Ptr(i int64) *int64 {
+	return &i
+}
+
+// ToStringPtr is a helper function that takes a string 's' as input and returns a pointer to 's'.
+// This can be useful when you want to create a pointer to a string value.
+func ToStringPtr(s string) *string {
+	return &s
 }
 
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',
@@ -189,6 +255,27 @@ func ToBoolPtr(b bool) *bool {
 func BoolDerefToPointer(ptr *bool, def bool) *bool {
 	b := pointer.BoolDeref(ptr, def)
 	return &b
+}
+
+// StringDerefToPointer is a helper function that dereferences a pointer to a string 'ptr',
+// and returns a new pointer to the resulting string. If 'ptr' is nil, it uses 'def' as a default value.
+func StringDerefToPointer(ptr *string, def string) *string {
+	s := pointer.StringDeref(ptr, def)
+	return &s
+}
+
+// IntDerefToPointer is a helper function that dereferences a pointer to an int 'ptr',
+// and returns a new pointer to the resulting int. If 'ptr' is nil, it uses 'def' as a default value.
+func IntDerefToPointer(ptr *int, def int) *int {
+	i := pointer.IntDeref(ptr, def)
+	return &i
+}
+
+// Int64DerefToPointer is a helper function that dereferences a pointer to an int64 'ptr',
+// and returns a new pointer to the resulting int64. If 'ptr' is nil, it uses 'def' as a default value.
+func Int64DerefToPointer(ptr *int64, def int64) *int64 {
+	i := pointer.Int64Deref(ptr, def)
+	return &i
 }
 
 // BoolToInt converts a boolean value to an integer

@@ -87,6 +87,11 @@ type MockRepositoriesClient struct {
 	MockRemoveBranchProtection              func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 	MockRequireSignaturesOnProtectedBranch  func(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
 	MockOptionalSignaturesOnProtectedBranch func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
+	MockGetAllRulesets                      func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error)
+	MockGetRuleset                          func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error)
+	MockCreateRuleset                       func(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	MockUpdateRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	MockDeleteRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 }
 
 func (m *MockRepositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
@@ -167,6 +172,26 @@ func (m *MockRepositoriesClient) RequireSignaturesOnProtectedBranch(ctx context.
 
 func (m *MockRepositoriesClient) OptionalSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.Response, error) {
 	return m.MockOptionalSignaturesOnProtectedBranch(ctx, owner, repo, branch)
+}
+
+func (m *MockRepositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, includesParents bool) ([]*github.Ruleset, *github.Response, error) {
+	return m.MockGetAllRulesets(ctx, owner, repo)
+}
+
+func (m *MockRepositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+	return m.MockGetRuleset(ctx, owner, repo, rulesetID, includesParents)
+}
+
+func (m *MockRepositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+	return m.MockCreateRuleset(ctx, owner, repo, ruleset)
+}
+
+func (m *MockRepositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+	return m.MockUpdateRuleset(ctx, owner, repo, rulesetID, ruleset)
+}
+
+func (m *MockRepositoriesClient) DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+	return m.MockDeleteRuleset(ctx, owner, repo, rulesetID)
 }
 
 type MockTeamsClient struct {
