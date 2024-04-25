@@ -209,8 +209,6 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 
 		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-			fmt.Println(cmp.Diff(crRepositoryRulesToConfig, ghRepositoryRulesToConfig))
-			fmt.Println("NOT UP TO DATE")
 			return notUpToDate, nil
 		}
 	}
@@ -1105,12 +1103,6 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]
 				rRules.PullRequest.RequiredReviewThreadResolution = util.BoolDerefToPointer(rRules.PullRequest.RequiredReviewThreadResolution, false)
 				rRules.PullRequest.RequiredApprovingReviewCount = util.IntDerefToPointer(rRules.PullRequest.RequiredApprovingReviewCount, 0)
 			}
-			//if rRules.RequiredStatusChecks == nil {
-			//	rRules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
-			//		RequiredStatusChecks:             []v1alpha1.RulesRequiredStatusChecksParameters{},
-			//		StrictRequiredStatusChecksPolicy: false,
-			//	}
-			//}
 			if rRules.RequiredStatusChecks != nil {
 				if rRules.RequiredStatusChecks.RequiredStatusChecks != nil {
 					copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
@@ -1227,7 +1219,6 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 						}
 					}
 				case "required_status_checks":
-					fmt.Println("required_status_checksAAAAAAAAAAAAA")
 					if rule.Parameters != nil {
 						params := github.RequiredStatusChecksRuleParameters{}
 						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {

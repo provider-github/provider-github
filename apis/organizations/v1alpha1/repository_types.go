@@ -34,6 +34,7 @@ type RepositoryParameters struct {
 
 	BranchProtectionRules []BranchProtectionRule `json:"branchProtectionRules,omitempty"`
 
+	// RepositoryRules are the rules for the repository
 	RepositoryRules []RepositoryRuleset `json:"repositoryRules,omitempty"`
 
 	// Creates a new repository using a repository template
@@ -294,23 +295,36 @@ type BranchProtectionRestrictions struct {
 	Apps []string `json:"apps,omitempty"`
 }
 
+// RepositoryRuleset represents the rules for a repository
 type RepositoryRuleset struct {
+	// Name is the name of the ruleset
 	Name string `json:"name"`
-
+	// Enforcement is the enforcement level of the ruleset, can be one of: "disabled", "active"
+	// +optional
 	Enforcement *string `json:"enforcement,omitempty"`
+	// Target is the target of the ruleset, can be one of: "branch", "tag"
 	// +optional
 	Target *string `json:"target,omitempty"`
+	// BypassActors is the list of actors that can bypass the ruleset
 	// +optional
 	BypassActors []*RulesetByPassActors `json:"bypassActors"`
+	// Conditions is the conditions for the ruleset, which branches or tags are included or excluded from the ruleset
 	// +optional
 	Conditions *RulesetConditions `json:"conditions,omitempty"`
+	// Rules is the rules for the ruleset
 	// +optional
 	Rules *Rules `json:"rules,omitempty"`
 }
 
 type RulesetByPassActors struct {
-	ActorId    *int64  `json:"actorId,omitempty"`
-	ActorType  *string `json:"actorType,omitempty"`
+	// ActorId is the ID of the actor
+	// +optional
+	ActorId *int64 `json:"actorId,omitempty"`
+	// ActorType is the type of the actor, can be one of: Integration, OrganizationAdmin, RepositoryRole, Team
+	// +optional
+	ActorType *string `json:"actorType,omitempty"`
+	// BypassMode is the bypass mode of the actor, can be one of: "always", "pull_request"
+	// +optional
 	BypassMode *string `json:"bypassMode,omitempty"`
 }
 
@@ -319,41 +333,79 @@ type RulesetConditions struct {
 }
 
 type RulesetRefName struct {
+	// Include is the list of branches or tags to include
 	Include []string `json:"include"`
+	// Exclude is the list of branches or tags to exclude
 	Exclude []string `json:"exclude"`
 }
 
 type Rules struct {
-	Creation *bool `json:"creation,omitempty"`
-	Deletion *bool `json:"deletion,omitempty"`
-	Update   *bool `json:"update,omitempty"`
+	// Creation restricts the creation of matching branches or tags that are set in Conditions
 	// +optional
-	RequiredLinearHistory *bool                      `json:"requiredLinearHistory,omitempty"`
-	RequiredDeployments   *RulesRequiredDeployments  `json:"requiredDeployments,omitempty"`
-	RequiredSignatures    *bool                      `json:"requiredSignatures,omitempty"`
-	PullRequest           *RulesPullRequest          `json:"pullRequest,omitempty"`
-	RequiredStatusChecks  *RulesRequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
-	NonFastForward        *bool                      `json:"nonFastForward,omitempty"`
+	Creation *bool `json:"creation,omitempty"`
+	// Deletion restricts the deletion of matching branches or tags that are set in Conditions
+	// +optional
+	Deletion *bool `json:"deletion,omitempty"`
+	// Update restricts the update of matching branches or tags that are set in Conditions
+	// +optional
+	Update *bool `json:"update,omitempty"`
+	// RequiredLinearHistory requires a linear commit history, which prevents merge commits.
+	// +optional
+	RequiredLinearHistory *bool `json:"requiredLinearHistory,omitempty"`
+	// RequiredDeployments requires that deployment to specific environments are successful before merging.
+	// +optional
+	RequiredDeployments *RulesRequiredDeployments `json:"requiredDeployments,omitempty"`
+	// RequiredSignatures requires signed commits.
+	// +optional
+	RequiredSignatures *bool `json:"requiredSignatures,omitempty"`
+	// PullRequest is the rules for pull requests
+	// +optional
+	PullRequest *RulesPullRequest `json:"pullRequest,omitempty"`
+	// RequiredStatusChecks requires status checks to pass before merging.
+	// +optional
+	RequiredStatusChecks *RulesRequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
+	// NonFastForward restricts force pushes to matching branches or tags that are set in Conditions
+	// +optional
+	NonFastForward *bool `json:"nonFastForward,omitempty"`
 }
 
 type RulesRequiredDeployments struct {
+	// Environments is the list of environments that are required to be deployed to before merging
+	// +optional
 	Environments []string `json:"environments,omitempty"`
 }
 
 type RulesPullRequest struct {
-	DismissStaleReviewsOnPush      *bool `json:"dismissStaleReviewsOnPush,omitempty"`
-	RequireCodeOwnerReview         *bool `json:"requireCodeOwnerReview,omitempty"`
-	RequireLastPushApproval        *bool `json:"requireLastPushApproval,omitempty"`
-	RequiredApprovingReviewCount   *int  `json:"requiredApprovingReviewCount,omitempty"`
+	// DismissStaleReviewsOnPush automatically dismiss approving reviews when someone pushes a new commit.
+	// +optional
+	DismissStaleReviewsOnPush *bool `json:"dismissStaleReviewsOnPush,omitempty"`
+	// RequireCodeOwnerReview requires the pull request to be approved by a code owner.
+	// +optional
+	RequireCodeOwnerReview *bool `json:"requireCodeOwnerReview,omitempty"`
+	// RequireLastPushApproval requires the most recent push to be approved by someone other than the person who pushed it.
+	// +optional
+	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
+	// RequiredApprovingReviewCount specifies the number of reviewers required to approve pull requests.
+	// +optional
+	RequiredApprovingReviewCount *int `json:"requiredApprovingReviewCount,omitempty"`
+	// RequiredReviewThreadResolution requires all conversations on code to be resolved before a pull request can be merged.
+	// +optional
 	RequiredReviewThreadResolution *bool `json:"requiredReviewThreadResolution,omitempty"`
 }
 
 type RulesRequiredStatusChecks struct {
-	RequiredStatusChecks             []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks,omitempty"`
-	StrictRequiredStatusChecksPolicy *bool                                  `json:"strictRequiredStatusChecksPolicy,omitempty"`
+	// RequiredStatusChecks is the list of status checks to require in order to merge into this branch.
+	// +optional
+	RequiredStatusChecks []*RulesRequiredStatusChecksParameters `json:"requiredStatusChecks,omitempty"`
+	// StrictRequiredStatusChecksPolicy requires branches to be up-to-date before merging.
+	// +optional
+	StrictRequiredStatusChecksPolicy *bool `json:"strictRequiredStatusChecksPolicy,omitempty"`
 }
 type RulesRequiredStatusChecksParameters struct {
-	Context       string `json:"context"`
+	// Context is the name of the required check.
+	Context string `json:"context"`
+	// IntegrationId is the ID of integration that must provide this check.
+	// +optional
 	IntegrationId *int64 `json:"integrationId,omitempty"`
 }
 
