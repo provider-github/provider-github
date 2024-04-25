@@ -17,13 +17,12 @@
 package util
 
 import (
-	"k8s.io/utils/pointer"
 	"reflect"
 	"sort"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/google/go-cmp/cmp"
+	"k8s.io/utils/pointer"
 )
 
 func SortByKey(m map[string]string) map[string]string {
