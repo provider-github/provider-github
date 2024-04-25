@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -194,6 +195,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 
 		if !cmp.Equal(crBPRToConfig, ghBPRToConfig) {
+			return notUpToDate, nil
+		}
+	}
+
+	if cr.Spec.ForProvider.RepositoryRules != nil {
+		ghRepositoryRules, _ := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
+
+		crRepositoryRulesToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
+		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+
+		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 			return notUpToDate, nil
 		}
 	}
@@ -712,6 +727,18 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 			}
 		}
 	}
+	if cr.Spec.ForProvider.RepositoryRules != nil {
+		rulesMap := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
+		for key := range rulesMap {
+			// avoid "G601: Implicit memory aliasing in for loop"
+			rule := rulesMap[key]
+			_, _, err := c.github.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, name, crRepoRulesToRulesConfig(rule))
+			if err != nil {
+				return managed.ExternalCreation{}, err
+			}
+		}
+
+	}
 
 	cr.SetConditions(xpv1.Available())
 
@@ -977,6 +1004,441 @@ func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, o
 	return nil
 }
 
+// getRepositoryRules retrieves all the rules for a given GitHub repository.
+// It uses pagination to handle large numbers of rules, fetching 100 rules per API call.
+func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*github.Ruleset, error) {
+	opt := &github.ListOptions{PerPage: 100}
+	var allRules []*github.Ruleset
+
+	for {
+		rules, resp, err := gh.Repositories.GetAllRulesets(ctx, org, repo, true)
+		if err != nil {
+			return nil, err
+		}
+
+		allRules = append(allRules, rules...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	return allRules, nil
+}
+
+// getRepositoryRulesMapFromCr generates a map from the RepositoryRules slice
+// in the Crossplane resource.
+//
+//nolint:gocyclo
+func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]v1alpha1.RepositoryRuleset {
+	crRulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(rules))
+
+	for i := range rules {
+		// Use a copy to avoid changing passed []v1alpha1.RepositoryRules
+		// This prevents the controller from changing the spec of the live CR
+		// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
+		orig := &rules[i]
+		rCopy := orig.DeepCopy()
+
+		// handle optional fields
+		rCopy.Target = util.StringDerefToPointer(rCopy.Target, "branch")
+		rCopy.Enforcement = util.StringDerefToPointer(rCopy.Enforcement, "active")
+
+		rConditions := rCopy.Conditions
+
+		if rConditions != nil && rConditions.RefName != nil {
+			if rConditions.RefName.Include != nil {
+				rConditions.RefName.Include = util.SortAndReturn(rConditions.RefName.Include)
+			}
+			if rConditions.RefName.Exclude != nil {
+				rConditions.RefName.Exclude = util.SortAndReturn(rConditions.RefName.Exclude)
+			}
+		}
+
+		if rConditions == nil {
+			rConditions = &v1alpha1.RulesetConditions{
+				RefName: &v1alpha1.RulesetRefName{
+					Include: []string{},
+					Exclude: []string{},
+				},
+			}
+			// Update the rConditions reference in rCopy
+			rCopy.Conditions = rConditions
+		}
+
+		rBActors := rCopy.BypassActors
+		if rBActors != nil {
+			for a := range rBActors {
+				actor := rBActors[a] // Make a copy of the actor
+
+				// Set ActorId, ActorType, and BypassMode fields
+				actor.ActorId = rBActors[a].ActorId
+				actor.ActorType = rBActors[a].ActorType
+				actor.BypassMode = rBActors[a].BypassMode
+
+				// Update the actor in the slice
+				rBActors[a] = actor
+			}
+			util.SortRulesBypassActors(rBActors)
+		}
+		rRules := rCopy.Rules
+		if rRules != nil {
+			rRules.RequiredSignatures = util.BoolDerefToPointer(rRules.RequiredSignatures, false)
+			rRules.NonFastForward = util.BoolDerefToPointer(rRules.NonFastForward, false)
+			rRules.Creation = util.BoolDerefToPointer(rRules.Creation, false)
+			rRules.Deletion = util.BoolDerefToPointer(rRules.Deletion, false)
+			rRules.RequiredLinearHistory = util.BoolDerefToPointer(rRules.RequiredLinearHistory, false)
+			rRules.Update = util.BoolDerefToPointer(rRules.Update, false)
+
+			if rRules.RequiredDeployments != nil {
+				if rRules.RequiredDeployments.Environments != nil {
+					rRules.RequiredDeployments.Environments = util.SortAndReturn(rRules.RequiredDeployments.Environments)
+				}
+			}
+			if rRules.PullRequest != nil {
+				rRules.PullRequest.DismissStaleReviewsOnPush = util.BoolDerefToPointer(rRules.PullRequest.DismissStaleReviewsOnPush, false)
+				rRules.PullRequest.RequireCodeOwnerReview = util.BoolDerefToPointer(rRules.PullRequest.RequireCodeOwnerReview, false)
+				rRules.PullRequest.RequireLastPushApproval = util.BoolDerefToPointer(rRules.PullRequest.RequireLastPushApproval, false)
+				rRules.PullRequest.RequiredReviewThreadResolution = util.BoolDerefToPointer(rRules.PullRequest.RequiredReviewThreadResolution, false)
+				rRules.PullRequest.RequiredApprovingReviewCount = util.IntDerefToPointer(rRules.PullRequest.RequiredApprovingReviewCount, 0)
+			}
+			if rRules.RequiredStatusChecks != nil {
+				if rRules.RequiredStatusChecks.RequiredStatusChecks != nil {
+					copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
+					copy(copyOfStatusChecks, rRules.RequiredStatusChecks.RequiredStatusChecks)
+					util.SortRulesRequiredStatusChecks(copyOfStatusChecks)
+					rRules.RequiredStatusChecks.RequiredStatusChecks = copyOfStatusChecks
+				}
+				rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = util.BoolDerefToPointer(rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy, false)
+			}
+		}
+		crRulesToConfig[rCopy.Name] = *rCopy
+	}
+
+	return crRulesToConfig
+}
+
+// getRepositoryRulesWithConfig creates a map of RepositoryRules based on the
+// branch rules fetched from the GitHub API.
+//
+//nolint:gocyclo
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.Ruleset) (map[string]v1alpha1.RepositoryRuleset, error) {
+	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
+
+	for _, rule := range ghRulesets {
+		rRuleset, _, err := gh.Repositories.GetRuleset(ctx, owner, repo, *rule.ID, true)
+		if err != nil {
+			return nil, err
+		}
+		ruleset := v1alpha1.RepositoryRuleset{
+			Target:      util.ToStringPtr(rule.GetTarget()),
+			Enforcement: &rule.Enforcement,
+			Name:        rule.Name,
+
+			Conditions: &v1alpha1.RulesetConditions{
+				RefName: &v1alpha1.RulesetRefName{
+					Include: []string{},
+					Exclude: []string{},
+				},
+			},
+			BypassActors: nil,
+			Rules: &v1alpha1.Rules{
+				Creation:              util.ToBoolPtr(false),
+				Update:                util.ToBoolPtr(false),
+				Deletion:              util.ToBoolPtr(false),
+				RequiredLinearHistory: util.ToBoolPtr(false),
+				RequiredDeployments:   nil,
+				RequiredSignatures:    util.ToBoolPtr(false),
+				NonFastForward:        util.ToBoolPtr(false),
+				PullRequest:           nil,
+				RequiredStatusChecks:  nil,
+			},
+		}
+
+		if rRuleset.Conditions != nil {
+			if rRuleset.Conditions.RefName != nil {
+				ruleset.Conditions.RefName = &v1alpha1.RulesetRefName{
+					Include: util.SortAndReturn(rRuleset.Conditions.RefName.Include),
+					Exclude: util.SortAndReturn(rRuleset.Conditions.RefName.Exclude),
+				}
+			}
+		}
+
+		if rRuleset.BypassActors != nil {
+			if len(rRuleset.BypassActors) > 0 {
+				ruleset.BypassActors = make([]*v1alpha1.RulesetByPassActors, len(rRuleset.BypassActors))
+				for i, actor := range rRuleset.BypassActors {
+					ruleset.BypassActors[i] = &v1alpha1.RulesetByPassActors{
+						ActorType:  actor.ActorType,
+						ActorId:    actor.ActorID,
+						BypassMode: actor.BypassMode,
+					}
+				}
+				util.SortRulesBypassActors(ruleset.BypassActors)
+			}
+
+		}
+		if rRuleset != nil {
+			for _, rule := range rRuleset.Rules {
+				switch rule.Type {
+				case "creation":
+					ruleset.Rules.Creation = util.ToBoolPtr(true)
+				case "deletion":
+					ruleset.Rules.Deletion = util.ToBoolPtr(true)
+				case "required_linear_history":
+					ruleset.Rules.RequiredLinearHistory = util.ToBoolPtr(true)
+				case "required_signatures":
+					ruleset.Rules.RequiredSignatures = util.ToBoolPtr(true)
+				case "non_fast_forward":
+					ruleset.Rules.NonFastForward = util.ToBoolPtr(true)
+				case "update":
+					ruleset.Rules.Update = util.ToBoolPtr(true)
+				case "pull_request":
+					if rule.Parameters != nil {
+						params := github.PullRequestRuleParameters{}
+						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
+							return nil, err
+						}
+						ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
+							RequireCodeOwnerReview:         util.ToBoolPtr(params.RequireCodeOwnerReview),
+							RequireLastPushApproval:        util.ToBoolPtr(params.RequireLastPushApproval),
+							RequiredReviewThreadResolution: util.ToBoolPtr(params.RequiredReviewThreadResolution),
+							RequiredApprovingReviewCount:   util.ToIntPtr(params.RequiredApprovingReviewCount),
+							DismissStaleReviewsOnPush:      util.ToBoolPtr(params.DismissStaleReviewsOnPush),
+						}
+					}
+				case "required_deployments":
+					if rule.Parameters != nil {
+						params := github.RequiredDeploymentEnvironmentsRuleParameters{}
+						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
+							return nil, err
+						}
+						ruleset.Rules.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{
+							Environments: util.SortAndReturn(params.RequiredDeploymentEnvironments),
+						}
+					}
+				case "required_status_checks":
+					if rule.Parameters != nil {
+						params := github.RequiredStatusChecksRuleParameters{}
+						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
+							return nil, err
+						}
+						requiredStatusChecksParameters := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(params.RequiredStatusChecks))
+						for i, statusCheck := range params.RequiredStatusChecks {
+							requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
+								Context:       statusCheck.Context,
+								IntegrationId: statusCheck.IntegrationID,
+							}
+						}
+						util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
+
+						ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
+							StrictRequiredStatusChecksPolicy: util.ToBoolPtr(params.StrictRequiredStatusChecksPolicy),
+							RequiredStatusChecks:             requiredStatusChecksParameters,
+						}
+					}
+				}
+
+			}
+
+		}
+
+		rulesToConfig[rule.Name] = ruleset
+	}
+
+	return rulesToConfig, nil
+
+}
+
+// crRepoRulesToRulesConfig transforms a RepositoryRuleset object from the Crossplane resource
+// into a Ruleset object that can be used with the GitHub API.
+//
+//nolint:gocyclo
+func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Ruleset {
+	githubRuleset := &github.Ruleset{
+		Name:        rule.Name,
+		Enforcement: *rule.Enforcement,
+		Target:      rule.Target,
+	}
+
+	// If BypassActors is not nil, transform it into the github rule BypassActors
+	if rule.BypassActors != nil {
+		githubBypassActors := make([]*github.BypassActor, len(rule.BypassActors))
+		for i, actor := range rule.BypassActors {
+			githubBypassActors[i] = &github.BypassActor{
+				ActorID:    actor.ActorId,
+				ActorType:  actor.ActorType,
+				BypassMode: actor.BypassMode,
+			}
+		}
+		githubRuleset.BypassActors = githubBypassActors
+	}
+
+	// If Conditions is not nil, transform it into the github rule Conditions
+	if rule.Conditions != nil {
+		githubConditions := &github.RulesetConditions{
+			RefName: &github.RulesetRefConditionParameters{
+				Include: rule.Conditions.RefName.Include,
+				Exclude: rule.Conditions.RefName.Exclude,
+			},
+		}
+		githubRuleset.Conditions = githubConditions
+	}
+	// If Rules is not nil, transform it into the github rule Rules
+	if rule.Rules != nil {
+		githubRules := make([]*github.RepositoryRule, 0)
+		if rule.Rules.RequiredStatusChecks != nil {
+			params := github.RequiredStatusChecksRuleParameters{
+				StrictRequiredStatusChecksPolicy: *rule.Rules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy,
+			}
+			requiredStatusChecks := make([]github.RuleRequiredStatusChecks, len(rule.Rules.RequiredStatusChecks.RequiredStatusChecks))
+			for i, statusCheck := range rule.Rules.RequiredStatusChecks.RequiredStatusChecks {
+				requiredStatusChecks[i] = github.RuleRequiredStatusChecks{
+					Context:       statusCheck.Context,
+					IntegrationID: statusCheck.IntegrationId,
+				}
+			}
+			params.RequiredStatusChecks = requiredStatusChecks
+			paramsBytes, err := json.Marshal(params)
+			if err != nil {
+				return nil
+			}
+			rawParams := json.RawMessage(paramsBytes)
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type:       "required_status_checks",
+				Parameters: &rawParams,
+			})
+		}
+
+		if *rule.Rules.Creation {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "creation",
+			})
+		}
+
+		if *rule.Rules.Deletion {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "deletion",
+			})
+		}
+
+		if *rule.Rules.RequiredLinearHistory {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "required_linear_history",
+			})
+		}
+
+		if *rule.Rules.RequiredSignatures {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "required_signatures",
+			})
+		}
+		if *rule.Rules.NonFastForward {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "non_fast_forward",
+			})
+		}
+		if *rule.Rules.Update {
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type: "update",
+			})
+		}
+		if rule.Rules.PullRequest != nil {
+			params := github.PullRequestRuleParameters{
+				DismissStaleReviewsOnPush:      *rule.Rules.PullRequest.DismissStaleReviewsOnPush,
+				RequireCodeOwnerReview:         *rule.Rules.PullRequest.RequireCodeOwnerReview,
+				RequireLastPushApproval:        *rule.Rules.PullRequest.RequireLastPushApproval,
+				RequiredReviewThreadResolution: *rule.Rules.PullRequest.RequiredReviewThreadResolution,
+				RequiredApprovingReviewCount:   *rule.Rules.PullRequest.RequiredApprovingReviewCount,
+			}
+			paramsBytes, err := json.Marshal(params)
+			if err != nil {
+				return nil
+			}
+			rawParams := json.RawMessage(paramsBytes)
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type:       "pull_request",
+				Parameters: &rawParams,
+			})
+		}
+		if rule.Rules.RequiredDeployments != nil {
+			params := github.RequiredDeploymentEnvironmentsRuleParameters{
+				RequiredDeploymentEnvironments: rule.Rules.RequiredDeployments.Environments,
+			}
+			paramsBytes, err := json.Marshal(params)
+			if err != nil {
+				return nil
+			}
+			rawParams := json.RawMessage(paramsBytes)
+			githubRules = append(githubRules, &github.RepositoryRule{
+				Type:       "required_deployments",
+				Parameters: &rawParams,
+			})
+		}
+		githubRuleset.Rules = githubRules
+
+	}
+	return githubRuleset
+}
+
+// updateRepositoryRules synchronizes the repository rules of a GitHub repository
+// to match with those detailed in the repository resource object.
+// It performs necessary additions, updates, or deletions based on the difference between
+// the actual state on GitHub and the desired state in the resource object.
+func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	// Fetch the current repository rules from GitHub
+	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if err != nil {
+		return err
+	}
+	// Generate a map of the repository rules from the Crossplane resource
+	crRToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
+	// Generate a map of the repository rules from GitHub
+	ghRToConfig, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules)
+	if err != nil {
+		return err
+	}
+	// Determine which rules need to be deleted, added, or updated
+	toDelete, toAdd, toUpdate := util.DiffRepositoryRulesets(ghRToConfig, crRToConfig)
+
+	// Delete the rules that are no longer needed
+	for name := range toDelete {
+		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
+		_, err = gh.Repositories.DeleteRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID)
+		if err != nil {
+			return err
+		}
+	}
+	// Add the new rules
+	for _, rule := range toAdd {
+		_, _, err := gh.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, crRepoRulesToRulesConfig(rule))
+		if err != nil {
+			return err
+		}
+	}
+	// Update the existing rules
+	for name, rule := range toUpdate {
+		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
+		_, _, err := gh.Repositories.UpdateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID, crRepoRulesToRulesConfig(rule))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// findRulesetIDByName iterates over a slice of GitHub Ruleset pointers and returns the ID of the ruleset
+// that matches the provided name. If no match is found, it returns an error.
+func findRulesetIDByName(rulesets []*github.Ruleset, name string) (int64, error) {
+	for _, ruleset := range rulesets {
+		if ruleset.Name == name {
+			return *ruleset.ID, nil
+		}
+	}
+	return 0, fmt.Errorf("ruleset with name %s not found", name)
+}
+
 //nolint:gocyclo
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
@@ -1035,6 +1497,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		if err != nil {
 			return managed.ExternalUpdate{}, err
 		}
+	}
+	if cr.Spec.ForProvider.RepositoryRules != nil {
+		err = updateRepositoryRules(ctx, cr, c.github, name)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+
 	}
 
 	return managed.ExternalUpdate{}, nil

@@ -92,7 +92,8 @@ dev: $(KIND) $(KUBECTL)
 	@$(KIND) create cluster --name=$(PROJECT_NAME)-dev
 	@$(KUBECTL) cluster-info --context kind-$(PROJECT_NAME)-dev
 	@$(INFO) Installing Crossplane CRDs
-	@$(KUBECTL) apply -k https://github.com/crossplane/crossplane//cluster?ref=master
+	# https://github.com/crossplane/crossplane/issues/5336
+	@$(KUBECTL) apply --server-side -k https://github.com/crossplane/crossplane//cluster?ref=master
 	@$(INFO) Installing Provider GitHub CRDs
 	@$(KUBECTL) apply -R -f package/crds
 	@$(INFO) Starting Provider GitHub controllers
