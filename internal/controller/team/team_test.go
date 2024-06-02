@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"

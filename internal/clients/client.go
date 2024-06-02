@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 )
 
 type Client struct {

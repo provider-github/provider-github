@@ -41,7 +41,7 @@ import (
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
 
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 )
 
 const (

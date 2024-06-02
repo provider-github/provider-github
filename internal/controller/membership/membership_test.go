@@ -30,7 +30,7 @@ import (
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 )
 
 var (
