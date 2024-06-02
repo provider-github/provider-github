@@ -44,10 +44,46 @@ type ActionEnabledRepo struct {
 	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
 }
 
+type SecretSelectedRepo struct {
+	// Name of the repository
+	// +crossplane:generate:reference:type=Repository
+	Repo string `json:"repo,omitempty"`
+
+	// RepoRef is a reference to the Repositories
+	// +optional
+	RepoRef *xpv1.Reference `json:"repoRef,omitempty"`
+
+	// RepoSelector selects a reference to a Repository
+	// +optional
+	RepoSelector *xpv1.Selector `json:"repoSelector,omitempty"`
+}
+
+type OrgSecret struct {
+	// Name of the GitHub secret
+	Name string `json:"name"`
+
+	// List of repositories that have access to the secret.
+	RepositoryAccessList []SecretSelectedRepo `json:"repositoryAccessList,omitempty"`
+}
+
+type SecretConfiguration struct {
+	// List of GitHub Actions secrets
+	// +optional
+	ActionsSecrets []OrgSecret `json:"actionsSecrets,omitempty"`
+
+	// List of Dependabot secrets
+	// +optional
+	DependabotSecrets []OrgSecret `json:"dependabotSecrets,omitempty"`
+}
+
 // OrganizationParameters are the configurable fields of a Organization.
 type OrganizationParameters struct {
 	Description string               `json:"description"`
 	Actions     ActionsConfiguration `json:"actions,omitempty"`
+
+	// Configuration for Organization Secrets.
+	// +optional
+	Secrets *SecretConfiguration `json:"secrets,omitempty"`
 }
 
 // OrganizationObservation are the observable fields of a Organization.

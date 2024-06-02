@@ -75,6 +75,50 @@ func (mg *Organization) ResolveReferences(ctx context.Context, c client.Reader) 
 		mg.Spec.ForProvider.Actions.EnabledRepos[i4].RepoRef = rsp.ResolvedReference
 
 	}
+	if mg.Spec.ForProvider.Secrets != nil {
+		for i4 := 0; i4 < len(mg.Spec.ForProvider.Secrets.ActionsSecrets); i4++ {
+			for i5 := 0; i5 < len(mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList); i5++ {
+				rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+					CurrentValue: mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].Repo,
+					Extract:      reference.ExternalName(),
+					Reference:    mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].RepoRef,
+					Selector:     mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].RepoSelector,
+					To: reference.To{
+						List:    &RepositoryList{},
+						Managed: &Repository{},
+					},
+				})
+				if err != nil {
+					return errors.Wrap(err, "mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].Repo")
+				}
+				mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].Repo = rsp.ResolvedValue
+				mg.Spec.ForProvider.Secrets.ActionsSecrets[i4].RepositoryAccessList[i5].RepoRef = rsp.ResolvedReference
+
+			}
+		}
+	}
+	if mg.Spec.ForProvider.Secrets != nil {
+		for i4 := 0; i4 < len(mg.Spec.ForProvider.Secrets.DependabotSecrets); i4++ {
+			for i5 := 0; i5 < len(mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList); i5++ {
+				rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+					CurrentValue: mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].Repo,
+					Extract:      reference.ExternalName(),
+					Reference:    mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].RepoRef,
+					Selector:     mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].RepoSelector,
+					To: reference.To{
+						List:    &RepositoryList{},
+						Managed: &Repository{},
+					},
+				})
+				if err != nil {
+					return errors.Wrap(err, "mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].Repo")
+				}
+				mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].Repo = rsp.ResolvedValue
+				mg.Spec.ForProvider.Secrets.DependabotSecrets[i4].RepositoryAccessList[i5].RepoRef = rsp.ResolvedReference
+
+			}
+		}
+	}
 
 	return nil
 }

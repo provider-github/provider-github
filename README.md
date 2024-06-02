@@ -7,9 +7,10 @@ The project is in a prototyping phase but it's already functional and
 implements follwing objects with partial functionality:
 
 * Organization
-  * actions enabled repositories 
+  * actions enabled repositories
+  * actions and dependabot secrets repository access
   * description
-  * creation and deleteion not supported
+  * creation and deletion not supported
 * Team
   * visibility
   * description
