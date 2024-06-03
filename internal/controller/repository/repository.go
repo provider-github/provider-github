@@ -32,7 +32,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 	"github.com/gosimple/slug"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -305,9 +305,12 @@ func getRepoWebhooksWithConfig(hooks []*github.Hook) map[string]v1alpha1.Reposit
 	wToConfig := make(map[string]v1alpha1.RepositoryWebhook)
 
 	for _, h := range hooks {
-		url := h.Config["url"].(string)
-		contentType := h.Config["content_type"].(string)
-		insecureSslBool := h.Config["insecure_ssl"] == "1"
+		url := h.Config.GetURL()
+		contentType := h.Config.GetContentType()
+		insecureSslBool := false
+		if h.Config.InsecureSSL != nil && *h.Config.InsecureSSL == "1" {
+			insecureSslBool = true
+		}
 		wToConfig[url] = v1alpha1.RepositoryWebhook{
 			Url:         url,
 			InsecureSsl: &insecureSslBool,
@@ -323,8 +326,7 @@ func getRepoWebhooksWithConfig(hooks []*github.Hook) map[string]v1alpha1.Reposit
 func getRepoWebhookId(hooks []*github.Hook, webhookUrl string) (*int64, error) {
 
 	for _, h := range hooks {
-		url, _ := h.Config["url"].(string)
-		if url == webhookUrl {
+		if h.Config.GetURL() == webhookUrl {
 			return h.ID, nil
 		}
 	}
@@ -530,9 +532,9 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 			bpr.RequiredStatusChecks = &v1alpha1.RequiredStatusChecks{
 				Strict: rChecks.Strict,
 			}
-			if len(rChecks.Checks) > 0 {
-				checks := make([]*v1alpha1.RequiredStatusCheck, len(rChecks.Checks))
-				for i, check := range rChecks.Checks {
+			if rChecks.Checks != nil && len(*rChecks.Checks) > 0 {
+				checks := make([]*v1alpha1.RequiredStatusCheck, len(*rChecks.Checks))
+				for i, check := range *rChecks.Checks {
 					checks[i] = &v1alpha1.RequiredStatusCheck{
 						Context: check.Context,
 						AppID:   check.AppID,
@@ -802,11 +804,15 @@ func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 
 // crRepoHookToHookConfig converts a RepositoryWebhook object to a *github.Hook object and returns it.
 func crRepoHookToHookConfig(hook v1alpha1.RepositoryWebhook) *github.Hook {
+	insecureSsl := "0"
+	if hook.InsecureSsl != nil && *hook.InsecureSsl {
+		insecureSsl = "1"
+	}
 	return &github.Hook{
-		Config: map[string]interface{}{
-			"url":          hook.Url,
-			"insecure_ssl": util.BoolToInt(*hook.InsecureSsl),
-			"content_type": hook.ContentType,
+		Config: &github.HookConfig{
+			ContentType: &hook.ContentType,
+			InsecureSSL: &insecureSsl,
+			URL:         &hook.Url,
 		},
 		Events: hook.Events,
 		Active: hook.Active,
@@ -884,7 +890,7 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 		}
 		protectionRequest.RequiredStatusChecks = &github.RequiredStatusChecks{
 			Strict: rule.RequiredStatusChecks.Strict,
-			Checks: checks,
+			Checks: &checks,
 		}
 	}
 

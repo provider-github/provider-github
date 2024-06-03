@@ -30,7 +30,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"github.com/google/go-github/v58/github"
+	"github.com/google/go-github/v62/github"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -209,10 +209,10 @@ func githubRepository() *github.Repository {
 func githubWebhooks() []*github.Hook {
 	return []*github.Hook{
 		{
-			Config: map[string]interface{}{
-				"url":          webhook1url,
-				"content_type": webhook1ContentType,
-				"insecure_ssl": webhook1InsecureSslStr,
+			Config: &github.HookConfig{
+				URL:         &webhook1url,
+				ContentType: &webhook1ContentType,
+				InsecureSSL: &webhook1InsecureSslStr,
 			},
 			Events: []string{webhook1event1, webhook1event2},
 			Active: github.Bool(webhook1active),
@@ -224,7 +224,7 @@ func githubProtectedBranch() *github.Protection {
 	return &github.Protection{
 		RequiredStatusChecks: &github.RequiredStatusChecks{
 			Strict: true,
-			Checks: []*github.RequiredStatusCheck{
+			Checks: &[]*github.RequiredStatusCheck{
 				{
 					Context: bpr1requiredStatusCheck,
 				},

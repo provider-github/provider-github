@@ -276,11 +276,3 @@ func Int64DerefToPointer(ptr *int64, def int64) *int64 {
 	i := pointer.Int64Deref(ptr, def)
 	return &i
 }
-
-// BoolToInt converts a boolean value to an integer
-func BoolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
