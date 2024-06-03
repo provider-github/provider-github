@@ -29,6 +29,7 @@ import (
 
 type Client struct {
 	Actions       ActionsClient
+	Dependabot    DependabotClient
 	Organizations OrganizationsClient
 	Users         UsersClient
 	Teams         TeamsClient
@@ -39,6 +40,15 @@ type ActionsClient interface {
 	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
 	AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
 	RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
+}
+
+type DependabotClient interface {
+	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error)
 }
 
 type OrganizationsClient interface {
@@ -123,6 +133,7 @@ func NewClient(creds string) (*Client, error) {
 
 	return &Client{
 		Actions:       ghclient.Actions,
+		Dependabot:    ghclient.Dependabot,
 		Organizations: ghclient.Organizations,
 		Users:         ghclient.Users,
 		Teams:         ghclient.Teams,

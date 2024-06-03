@@ -46,6 +46,9 @@ var (
 	otherDescription = "other description"
 	repo             = "test-repo"
 	repo2            = "test-repo2"
+	orgSecret1       = "org-secret1"
+	orgSecretRepo1   = "org-secret-repo1"
+	orgSecretRepo1ID = 123456
 )
 
 type organizationModifier func(*v1alpha1.Organization)
@@ -69,6 +72,29 @@ func organization(repos []string, m ...organizationModifier) *v1alpha1.Organizat
 		}
 	}
 
+	cr.Spec.ForProvider.Secrets = &v1alpha1.SecretConfiguration{
+		ActionsSecrets: []v1alpha1.OrgSecret{
+			{
+				Name: orgSecret1,
+				RepositoryAccessList: []v1alpha1.SecretSelectedRepo{
+					{
+						Repo: orgSecretRepo1,
+					},
+				},
+			},
+		},
+		DependabotSecrets: []v1alpha1.OrgSecret{
+			{
+				Name: orgSecret1,
+				RepositoryAccessList: []v1alpha1.SecretSelectedRepo{
+					{
+						Repo: orgSecretRepo1,
+					},
+				},
+			},
+		},
+	}
+
 	meta.SetExternalName(cr, org)
 
 	for _, f := range m {
@@ -90,6 +116,33 @@ func githubOrgRepoActions() *github.ActionsEnabledOnOrgRepos {
 		{Name: &repo2},
 	}
 	return &github.ActionsEnabledOnOrgRepos{Repositories: repos}
+}
+
+func githubOrgSecret() *github.Secret {
+	return &github.Secret{
+		Name:       orgSecret1,
+		Visibility: "selected",
+	}
+}
+
+func githubSelectedReposForOrgSecret() *github.SelectedReposList {
+	id := int64(orgSecretRepo1ID)
+	return &github.SelectedReposList{
+		Repositories: []*github.Repository{
+			{
+				Name: &orgSecretRepo1,
+				ID:   &id,
+			},
+		},
+	}
+}
+
+func githubOrgSecretRepo() *github.Repository {
+	id := int64(orgSecretRepo1ID)
+	return &github.Repository{
+		Name: &orgSecretRepo1,
+		ID:   &id,
+	}
 }
 
 func TestObserve(t *testing.T) {
@@ -125,6 +178,25 @@ func TestObserve(t *testing.T) {
 						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 							return githubOrgRepoActions(), nil, nil
 						},
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return nil, fake.GenerateEmptyResponse(), nil
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return nil, fake.GenerateEmptyResponse(), nil
+						},
+					},
+					Dependabot: &fake.MockDependabotClient{
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return nil, fake.GenerateEmptyResponse(), nil
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return nil, fake.GenerateEmptyResponse(), nil
+						},
+					},
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return nil, fake.GenerateEmptyResponse(), nil
+						},
 					},
 				},
 			},
@@ -151,6 +223,25 @@ func TestObserve(t *testing.T) {
 						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 							return githubOrgRepoActions(), nil, nil
 						},
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
+						},
+					},
+					Dependabot: &fake.MockDependabotClient{
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
+						},
+					},
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
+						},
 					},
 				},
 			},
@@ -175,6 +266,25 @@ func TestObserve(t *testing.T) {
 					},
 					Actions: &fake.MockActionsClient{
 						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+					},
+					Dependabot: &fake.MockDependabotClient{
+						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+							return nil, nil, fake.Generate404Response()
+						},
+					},
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return nil, nil, fake.Generate404Response()
 						},
 					},

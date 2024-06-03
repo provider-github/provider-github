@@ -8,9 +8,12 @@ import (
 )
 
 type MockActionsClient struct {
-	MockListEnabledReposInOrg   func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
-	MockAddEnabledReposInOrg    func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
-	MockRemoveEnabledReposInOrg func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	MockListEnabledReposInOrg         func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
+	MockAddEnabledReposInOrg          func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	MockRemoveEnabledReposInOrg       func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	MockGetOrgSecret                  func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	MockListSelectedReposForOrgSecret func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+	MockSetSelectedReposForOrgSecret  func(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
 }
 
 func (m *MockActionsClient) ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
@@ -23,6 +26,36 @@ func (m *MockActionsClient) AddEnabledReposInOrg(ctx context.Context, owner stri
 
 func (m *MockActionsClient) RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
 	return m.MockRemoveEnabledReposInOrg(ctx, owner, repositoryID)
+}
+
+func (m *MockActionsClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+	return m.MockGetOrgSecret(ctx, org, name)
+}
+
+func (m *MockActionsClient) ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+	return m.MockListSelectedReposForOrgSecret(ctx, org, name, opts)
+}
+
+func (m *MockActionsClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
+	return m.MockSetSelectedReposForOrgSecret(ctx, org, name, ids)
+}
+
+type MockDependabotClient struct {
+	MockGetOrgSecret                  func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
+	MockListSelectedReposForOrgSecret func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+	MockSetSelectedReposForOrgSecret  func(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error)
+}
+
+func (m *MockDependabotClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+	return m.MockGetOrgSecret(ctx, org, name)
+}
+
+func (m *MockDependabotClient) ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+	return m.MockListSelectedReposForOrgSecret(ctx, org, name, opts)
+}
+
+func (m *MockDependabotClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
+	return m.MockSetSelectedReposForOrgSecret(ctx, org, name, ids)
 }
 
 type MockOrganizationsClient struct {

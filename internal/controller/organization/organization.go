@@ -20,6 +20,9 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"sort"
+
+	"github.com/google/go-cmp/cmp"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
@@ -123,6 +126,7 @@ type external struct {
 	github *ghclient.Client
 }
 
+//nolint:gocyclo
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Organization)
 	if !ok {
@@ -167,6 +171,35 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
+	if cr.Spec.ForProvider.Secrets != nil {
+		if cr.Spec.ForProvider.Secrets.ActionsSecrets != nil {
+			crActionsSecretsToConfig, err := getOrgSecretsMapFromCr(ctx, c.github, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			ghActionsSecretsToConfig, err := getOrgSecretsWithConfig(ctx, c.github.Actions, name, cr.Spec.ForProvider.Secrets.ActionsSecrets)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			if !cmp.Equal(crActionsSecretsToConfig, ghActionsSecretsToConfig) {
+				return notUpToDate, nil
+			}
+		}
+		if cr.Spec.ForProvider.Secrets.DependabotSecrets != nil {
+			crDependabotSecretsToConfig, err := getOrgSecretsMapFromCr(ctx, c.github, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			ghDependabotSecretsToConfig, err := getOrgSecretsWithConfig(ctx, c.github.Dependabot, name, cr.Spec.ForProvider.Secrets.DependabotSecrets)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			if !cmp.Equal(crDependabotSecretsToConfig, ghDependabotSecretsToConfig) {
+				return notUpToDate, nil
+			}
+		}
+	}
+
 	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {
 		return notUpToDate, nil
 	}
@@ -188,6 +221,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalCreation{}, errors.New("Creation of organizations not supported!")
 }
 
+//nolint:gocyclo
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Organization)
 	if !ok {
@@ -215,6 +249,23 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 			return managed.ExternalUpdate{}, err
 		}
 	}
+
+	secrets := cr.Spec.ForProvider.Secrets
+	if secrets != nil {
+		if secrets.ActionsSecrets != nil {
+			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.ActionsSecrets, &ActionsSecretSetter{client: gh})
+			if err != nil {
+				return managed.ExternalUpdate{}, err
+			}
+		}
+		if secrets.DependabotSecrets != nil {
+			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.DependabotSecrets, &DependabotSecretSetter{client: gh})
+			if err != nil {
+				return managed.ExternalUpdate{}, err
+			}
+		}
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -310,5 +361,107 @@ func updateRepos(ctx context.Context, gh *ghclient.Client, name string, missingR
 		}
 	}
 
+	return nil
+}
+
+func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.Client, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
+	crOrgSecretsToConfig := make(map[string][]int64, len(secrets))
+	for _, secret := range secrets {
+		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
+		for _, selectedRepo := range secret.RepositoryAccessList {
+			ghRepo, _, err := gh.Repositories.Get(ctx, org, selectedRepo.Repo)
+			if err != nil {
+				return nil, err
+			}
+			repoIds = append(repoIds, ghRepo.GetID())
+		}
+		sort.Slice(repoIds, func(i, j int) bool {
+			return repoIds[i] < repoIds[j]
+		})
+		crOrgSecretsToConfig[secret.Name] = repoIds
+	}
+	return crOrgSecretsToConfig, nil
+}
+
+type OrgSecretGetter interface {
+	GetOrgSecret(ctx context.Context, owner, secretName string) (*github.Secret, *github.Response, error)
+	ListSelectedReposForOrgSecret(ctx context.Context, owner, secretName string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+}
+
+func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
+	orgSecretsToConfig := make(map[string][]int64, len(secrets))
+	for _, secret := range secrets {
+		ghSecret, _, err := c.GetOrgSecret(ctx, owner, secret.Name)
+		if err != nil {
+			return nil, err
+		}
+		repoIds := make([]int64, 0)
+		if ghSecret != nil && ghSecret.Visibility == "selected" {
+			opts := &github.ListOptions{PerPage: 100}
+			for {
+				ghRepo, resp, err := c.ListSelectedReposForOrgSecret(ctx, owner, secret.Name, opts)
+				if err != nil {
+					return nil, err
+				}
+				for _, selectedRepo := range ghRepo.Repositories {
+					repoIds = append(repoIds, selectedRepo.GetID())
+				}
+				if resp.NextPage == 0 {
+					break
+				}
+				opts.Page = resp.NextPage
+			}
+			sort.Slice(repoIds, func(i, j int) bool {
+				return repoIds[i] < repoIds[j]
+			})
+		}
+		orgSecretsToConfig[secret.Name] = repoIds
+	}
+	return orgSecretsToConfig, nil
+}
+
+type OrgSecretSetter interface {
+	SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error
+}
+
+type ActionsSecretSetter struct {
+	client *ghclient.Client
+}
+
+type DependabotSecretSetter struct {
+	client *ghclient.Client
+}
+
+func (a *ActionsSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error {
+	_, err := a.client.Actions.SetSelectedReposForOrgSecret(ctx, org, name, ids)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DependabotSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error {
+	_, err := d.client.Dependabot.SetSelectedReposForOrgSecret(ctx, org, name, ids)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
+	for _, secret := range secrets {
+		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
+		for _, repo := range secret.RepositoryAccessList {
+			ghRepo, _, err := gh.Repositories.Get(ctx, owner, repo.Repo)
+			if err != nil {
+				return err
+			}
+			repoIds = append(repoIds, ghRepo.GetID())
+		}
+		err := setter.SetSelectedReposForOrgSecret(ctx, owner, secret.Name, repoIds)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
