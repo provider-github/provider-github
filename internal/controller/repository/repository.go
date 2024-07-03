@@ -25,7 +25,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"k8s.io/utils/pointer"
+	pointer "k8s.io/utils/ptr"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -213,20 +213,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
-	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
+	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
 	if archivedCr != *repo.Archived {
 		return notUpToDate, nil
 	}
 
 	// repo visibility makes sense only when a repo is not a fork
 	if !*repo.Fork {
-		privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+		privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
 		if privateCr != *repo.Private {
 			return notUpToDate, nil
 		}
 	}
 
-	isTemplate := pointer.BoolDeref(cr.Spec.ForProvider.IsTemplate, false)
+	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
 	if isTemplate != *repo.IsTemplate {
 		return notUpToDate, nil
 	}
@@ -649,7 +649,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	name := meta.GetExternalName(cr)
 
 	// handle optional *bool fields
-	privateCr := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+	privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
 
 	var err error
 	switch {
@@ -882,7 +882,7 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 		var checks []*github.RequiredStatusCheck
 		for _, check := range rule.RequiredStatusChecks.Checks {
 			// if nil, allow any app to set the status of a check
-			appId := pointer.Int64Deref(check.AppID, -1)
+			appId := pointer.Deref(check.AppID, -1)
 			checks = append(checks, &github.RequiredStatusCheck{
 				Context: check.Context,
 				AppID:   &appId,
@@ -1454,7 +1454,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 
-	archivedCr := pointer.BoolDeref(cr.Spec.ForProvider.Archived, false)
+	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
 
 	// repo visibility makes sense only when a repo is not a fork
 	var privateCr *bool
@@ -1464,11 +1464,11 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 	if repo.Fork != nil && !*repo.Fork {
-		val := pointer.BoolDeref(cr.Spec.ForProvider.Private, true)
+		val := pointer.Deref(cr.Spec.ForProvider.Private, true)
 		privateCr = &val
 	}
 
-	isTemplate := pointer.BoolDeref(cr.Spec.ForProvider.IsTemplate, false)
+	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
 
 	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
 		Name:        &name,
@@ -1523,7 +1523,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 
 	name := meta.GetExternalName(cr)
 
-	forceDelete := pointer.BoolDeref(cr.Spec.ForProvider.ForceDelete, false)
+	forceDelete := pointer.Deref(cr.Spec.ForProvider.ForceDelete, false)
 	if !forceDelete {
 		return errors.New("You can only delete repositories by setting `forceDelete: true`")
 	}

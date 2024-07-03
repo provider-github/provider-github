@@ -92,7 +92,6 @@ dev: $(KIND) $(KUBECTL)
 	@$(KIND) create cluster --name=$(PROJECT_NAME)-dev
 	@$(KUBECTL) cluster-info --context kind-$(PROJECT_NAME)-dev
 	@$(INFO) Installing Crossplane CRDs
-	# https://github.com/crossplane/crossplane/issues/5336
 	@$(KUBECTL) apply --server-side -k https://github.com/crossplane/crossplane//cluster?ref=master
 	@$(INFO) Installing Provider GitHub CRDs
 	@$(KUBECTL) apply -R -f package/crds
@@ -120,16 +119,6 @@ $(GOMPLATE):
 	@$(OK) installing gomplate $(SAFEHOSTPLATFORM)
 
 export GOMPLATE
-
-# This target prepares repo for your provider by replacing all "github"
-# occurrences with your provider name.
-# This target can only be run once, if you want to rerun for some reason,
-# consider stashing/resetting your git state.
-# Arguments:
-#   provider: Camel case name of your provider, e.g. GitHub, PlanetScale
-provider.prepare:
-	@[ "${provider}" ] || ( echo "argument \"provider\" is not set"; exit 1 )
-	@PROVIDER=$(provider) ./hack/helpers/prepare.sh
 
 # This target adds a new api type and its controller.
 # You would still need to register new api in "apis/<provider>.go" and

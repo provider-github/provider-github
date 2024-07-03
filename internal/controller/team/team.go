@@ -22,7 +22,7 @@ import (
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/pointer"
+	pointer "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -144,14 +144,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	crParentTeamSlug := slug.Make(pointer.StringDeref(cr.Spec.ForProvider.Parent, ""))
+	crParentTeamSlug := slug.Make(pointer.Deref(cr.Spec.ForProvider.Parent, ""))
 	ghParentTeamSlug := ""
 	if t.Parent != nil {
 		ghParentTeamSlug = *t.Parent.Slug
 	}
 
 	if crParentTeamSlug != ghParentTeamSlug ||
-		pointer.StringDeref(cr.Spec.ForProvider.Privacy, "secret") != *t.Privacy ||
+		pointer.Deref(cr.Spec.ForProvider.Privacy, "secret") != *t.Privacy ||
 		cr.Spec.ForProvider.Description != *t.Description ||
 		!reflect.DeepEqual(util.SortByKey(ghMToPermission), util.SortByKey(crMToPermission)) {
 
@@ -217,7 +217,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	name := meta.GetExternalName(cr)
 	teamSlug := slug.Make(name)
-	privacy := pointer.StringDeref(cr.Spec.ForProvider.Privacy, "secret")
+	privacy := pointer.Deref(cr.Spec.ForProvider.Privacy, "secret")
 
 	t := github.NewTeam{
 		Name:        name,
@@ -301,7 +301,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		removeParent = false
 	}
 
-	privacy := pointer.StringDeref(cr.Spec.ForProvider.Privacy, "secret")
+	privacy := pointer.Deref(cr.Spec.ForProvider.Privacy, "secret")
 	newTeam := github.NewTeam{
 		Name:        name,
 		Privacy:     &privacy,
