@@ -14,17 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package {{ .Env.KIND | strings.ToLower }}
+package team
 
 import (
 	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-github/v62/github"
 
-	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-  // "github.com/crossplane/provider-github/internal/clients/fake"
+	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/clients/fake"
 
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -40,16 +41,38 @@ import (
 // https://github.com/golang/go/wiki/TestComments
 // https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md#contributing-code
 
-type {{ .Env.KIND | strings.ToLower }}Modifier func(*v1alpha1.{{ .Env.KIND }})
+var (
+	teamPrivacy     = "secret"
+	teamDescription = "description"
 
-// func withProperty() {{ .Env.KIND | strings.ToLower }}Modifier {
-// 	return func(r *v1alpha1.{{ .Env.KIND }}) {
+	member1     = "test-user-1"
+	member1Role = "maintainer"
+	member2     = "test-user-2"
+	member2Role = "member"
+)
+
+type teamModifier func(*v1alpha1.Team)
+
+// func withProperty() teamModifier {
+// 	return func(r *v1alpha1.Team) {
 // 		r.Spec.ForProvider.ConfigurableField = "value"
 // 	}
 // }
 
-func {{ .Env.KIND | strings.ToLower }}(m ...{{ .Env.KIND | strings.ToLower }}Modifier) *v1alpha1.{{ .Env.KIND }} {
-	cr := &v1alpha1.{{ .Env.KIND }}{}
+func team(m ...teamModifier) *v1alpha1.Team {
+	cr := &v1alpha1.Team{}
+
+	cr.Spec.ForProvider.Description = teamDescription
+	cr.Spec.ForProvider.Members = []v1alpha1.TeamMemberUser{
+		{
+			User: member1,
+			Role: member1Role,
+		},
+		{
+			User: member2,
+			Role: member2Role,
+		},
+	}
 
 	meta.SetExternalName(cr, "")
 
@@ -57,6 +80,24 @@ func {{ .Env.KIND | strings.ToLower }}(m ...{{ .Env.KIND | strings.ToLower }}Mod
 		f(cr)
 	}
 	return cr
+}
+
+func githubTeam(role string) []*github.User {
+	if role == "maintainer" {
+		return []*github.User{
+			{
+				Login: &member1,
+			},
+		}
+	}
+
+	// Role is member here because there are only
+	// member and maintainer
+	return []*github.User{
+		{
+			Login: &member2,
+		},
+	}
 }
 
 func TestObserve(t *testing.T) {
@@ -80,7 +121,33 @@ func TestObserve(t *testing.T) {
 		args   args
 		want   want
 	}{
-		// TODO: Add test cases.
+		"UpToDate": {
+			fields: fields{
+				github: &ghclient.Client{
+					Teams: &fake.MockTeamsClient{
+						MockGetTeamBySlug: func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error) {
+							return &github.Team{
+								Privacy:     &teamPrivacy,
+								Description: &teamDescription,
+							}, nil, nil
+						},
+						MockListTeamMembersBySlug: func(ctx context.Context, org, slug string, opts *github.TeamListTeamMembersOptions) ([]*github.User, *github.Response, error) {
+							return githubTeam(opts.Role), fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			},
+			args: args{
+				mg: team(),
+			},
+			want: want{
+				o: managed.ExternalObservation{
+					ResourceExists:   true,
+					ResourceUpToDate: true,
+				},
+				err: nil,
+			},
+		},
 	}
 
 	for name, tc := range cases {

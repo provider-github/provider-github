@@ -1,34 +1,46 @@
-# provider-template
+# provider-github
 
-`provider-template` is a minimal [Crossplane](https://crossplane.io/) Provider
-that is meant to be used as a template for implementing new Providers. It comes
-with the following features that are meant to be refactored:
+`provider-github` is a [Crossplane](https://crossplane.io/) Provider
+that is meant to be used to manage github organizations.
 
-- A `ProviderConfig` type that only points to a credentials `Secret`.
-- A `MyType` resource type that serves as an example managed resource.
-- A managed resource controller that reconciles `MyType` objects and simply
-  prints their configuration in its `Observe` method.
+The project is in a prototyping phase but it's already functional and
+implements follwing objects with partial functionality:
+
+* Organization
+  * actions enabled repositories
+  * actions and dependabot secrets repository access
+  * description
+  * creation and deletion not supported
+* Team
+  * visibility
+  * description
+  * members
+  * parent team
+* Repository
+  * user permissions  
+  * team permissions
+  * webhooks
+  * branch protection rules
+  * Repository rules
+    * rulesets
+* Membership
+  * role
+
 
 ## Developing
 
-1. Use this repository as a template to create a new one.
+To add a new resource follow these steps:
 1. Run `make submodules` to initialize the "build" Make submodule we use for CI/CD.
-1. Rename the provider by running the following command:
-```shell
-  export provider_name=MyProvider # Camel case, e.g. GitHub
-  make provider.prepare provider=${provider_name}
-```
-4. Add your new type by running the following command:
+2. Add your new type by running the following command:
 ```shell
   export group=sample # lower case e.g. core, cache, database, storage, etc.
   export type=MyType # Camel casee.g. Bucket, Database, CacheCluster, etc.
-  make provider.addtype provider=${provider_name} group=${group} kind=${type}
+  make provider.addtype provider=GitHub group=${group} kind=${type}
 ```
-5. Replace the *sample* group with your new group in apis/{provider}.go
-5. Replace the *mytype* type with your new type in internal/controller/{provider}.go
-5. Replace the default controller and ProviderConfig implementations with your own
+3. Call the `Setup` function of your controller here `internal/controller/github.go`
+4. Run `make run` to run locally
 5. Run `make reviewable` to run code generation, linters, and tests.
-5. Run `make build` to build the provider.
+6. Run `make build` to build the provider.
 
 Refer to Crossplane's [CONTRIBUTING.md] file for more information on how the
 Crossplane community prefers to work. The [Provider Development][provider-dev]

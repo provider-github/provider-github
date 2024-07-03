@@ -14,44 +14,45 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package {{ .Env.KIND | strings.ToLower }}
+package membership
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-  "github.com/google/go-github/v54/github"
+	"github.com/google/go-github/v62/github"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
-	"{{ .Env.PROJECT_REPO | strings.ToLower }}/apis/{{ .Env.GROUP | strings.ToLower }}/{{ .Env.APIVERSION | strings.ToLower }}"
-	apisv1alpha1 "{{ .Env.PROJECT_REPO | strings.ToLower }}/apis/v1alpha1"
-	"{{ .Env.PROJECT_REPO | strings.ToLower }}/internal/features"
-	ghclient "{{ .Env.PROJECT_REPO | strings.ToLower }}/internal/clients"
+	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	ghclient "github.com/crossplane/provider-github/internal/clients"
+	"github.com/crossplane/provider-github/internal/features"
 )
 
 const (
-	errNot{{ .Env.KIND }}    = "managed resource is not a {{ .Env.KIND }} custom resource"
-	errTrackPCUsage = "cannot track ProviderConfig usage"
-	errGetPC        = "cannot get ProviderConfig"
-	errGetCreds     = "cannot get credentials"
+	errNotMembership = "managed resource is not a Membership custom resource"
+	errTrackPCUsage  = "cannot track ProviderConfig usage"
+	errGetPC         = "cannot get ProviderConfig"
+	errGetCreds      = "cannot get credentials"
 
 	errNewClient = "cannot create new Service"
 )
 
-// Setup adds a controller that reconciles {{ .Env.KIND }} managed resources.
+// Setup adds a controller that reconciles Membership managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options) error {
-	name := managed.ControllerName(v1alpha1.{{ .Env.KIND }}GroupKind)
+	name := managed.ControllerName(v1alpha1.MembershipGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
@@ -59,10 +60,10 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	}
 
 	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.{{ .Env.KIND }}GroupVersionKind),
+		resource.ManagedKind(v1alpha1.MembershipGroupVersionKind),
 		managed.WithExternalConnecter(&connector{
-			kube:         mgr.GetClient(),
-			usage:        resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			kube:        mgr.GetClient(),
+			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
 			newClientFn: ghclient.NewClient}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
@@ -73,20 +74,20 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
 		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.{{ .Env.KIND }}{}).
+		For(&v1alpha1.Membership{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
 type connector struct {
-	kube         client.Client
-	usage        resource.Tracker
-	newClientFn  func(string) (*ghclient.Client, error)
+	kube        client.Client
+	usage       resource.Tracker
+	newClientFn func(string) (*ghclient.Client, error)
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.{{ .Env.KIND }})
+	cr, ok := mg.(*v1alpha1.Membership)
 	if !ok {
-		return nil, errors.New(errNot{{ .Env.KIND }})
+		return nil, errors.New(errNotMembership)
 	}
 
 	if err := c.usage.Track(ctx, mg); err != nil {
@@ -117,48 +118,115 @@ type external struct {
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*v1alpha1.{{ .Env.KIND }})
+	cr, ok := mg.(*v1alpha1.Membership)
 	if !ok {
-		return managed.ExternalObservation{}, errors.New(errNot{{ .Env.KIND }})
+		return managed.ExternalObservation{}, errors.New(errNotMembership)
 	}
 
-	fmt.Printf("Observing: %+v", cr)
+	name := meta.GetExternalName(cr)
+	m, _, err := c.github.Organizations.GetOrgMembership(ctx, name, cr.Spec.ForProvider.Org)
+
+	if ghclient.Is404(err) {
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+
+	if *m.Role != cr.Spec.ForProvider.Role {
+		return managed.ExternalObservation{
+			ResourceExists:   true,
+			ResourceUpToDate: false,
+		}, nil
+	}
+
+	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalObservation{
-		ResourceExists: true,
+		ResourceExists:   true,
 		ResourceUpToDate: true,
 	}, nil
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*v1alpha1.{{ .Env.KIND }})
+	cr, ok := mg.(*v1alpha1.Membership)
 	if !ok {
-		return managed.ExternalCreation{}, errors.New(errNot{{ .Env.KIND }})
+		return managed.ExternalCreation{}, errors.New(errNotMembership)
 	}
 
-	fmt.Printf("Creating: %+v", cr)
+	name := meta.GetExternalName(cr)
+
+	user, _, err := c.github.Users.Get(ctx, name)
+	if err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	role := cr.Spec.ForProvider.Role
+	if role == "direct_member" {
+		return managed.ExternalCreation{}, errors.New("Don't use `direct_member`, use `member` instead!")
+	}
+	if role == "member" {
+		role = "direct_member"
+	}
+
+	inv := &github.CreateOrgInvitationOptions{
+		InviteeID: user.ID,
+		Role:      &role,
+		TeamID:    []int64{},
+	}
+
+	_, _, err = c.github.Organizations.CreateOrgInvitation(ctx, cr.Spec.ForProvider.Org, inv)
+	if err != nil {
+		return managed.ExternalCreation{}, err
+	}
+
+	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalCreation{}, nil
 }
 
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*v1alpha1.{{ .Env.KIND }})
+	cr, ok := mg.(*v1alpha1.Membership)
 	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errNot{{ .Env.KIND }})
+		return managed.ExternalUpdate{}, errors.New(errNotMembership)
 	}
 
-	fmt.Printf("Updating: %+v", cr)
+	name := meta.GetExternalName(cr)
+	u, _, err := c.github.Users.Get(ctx, name)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+
+	m := &github.Membership{
+		User: u,
+		Role: &cr.Spec.ForProvider.Role,
+	}
+
+	_, _, err = c.github.Organizations.EditOrgMembership(ctx, name, cr.Spec.ForProvider.Org, m)
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
 
 	return managed.ExternalUpdate{}, nil
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*v1alpha1.{{ .Env.KIND }})
+	cr, ok := mg.(*v1alpha1.Membership)
 	if !ok {
-		return errors.New(errNot{{ .Env.KIND }})
+		return errors.New(errNotMembership)
 	}
 
-	fmt.Printf("Deleting: %+v", cr)
+	name := meta.GetExternalName(cr)
+	role := cr.Spec.ForProvider.Role
+
+	if role == "admin" {
+		return errors.New("You can only delete member users. Admin users cannot be deleted")
+	}
+
+	_, err := c.github.Organizations.RemoveOrgMembership(ctx, name, cr.Spec.ForProvider.Org)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

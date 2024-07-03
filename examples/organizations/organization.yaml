@@ -1,0 +1,17 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Organization
+metadata:
+  name: pgh-sample-organization
+spec: 
+  deletionPolicy: "Orphan"
+  forProvider:
+    description: this is a sample organization
+    secrets:
+      actionsSecrets:
+        - name: foo-secret
+          repositoryAccessList:
+            - repo: my-awesome-repo
+      dependabotSecrets:
+        - name: dependabot-token
+          repositoryAccessList:
+            - repo: my-awesome-repo
