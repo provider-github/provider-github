@@ -861,6 +861,16 @@ func (in *RepositoryWebhook) DeepCopyInto(out *RepositoryWebhook) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.Secret != nil {
+		in, out := &in.Secret, &out.Secret
+		*out = new(string)
+		**out = **in
+	}
+	if in.SecretKeyRef != nil {
+		in, out := &in.SecretKeyRef, &out.SecretKeyRef
+		*out = new(v1.SecretKeySelector)
+		**out = **in
+	}
 	if in.Events != nil {
 		in, out := &in.Events, &out.Events
 		*out = make([]string, len(*in))

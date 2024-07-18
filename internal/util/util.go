@@ -17,6 +17,9 @@
 package util
 
 import (
+	// nolint:gosec
+	"crypto/md5"
+	"encoding/hex"
 	"reflect"
 	"sort"
 
@@ -275,4 +278,18 @@ func IntDerefToPointer(ptr *int, def int) *int {
 func Int64DerefToPointer(ptr *int64, def int64) *int64 {
 	i := pointer.Deref(ptr, def)
 	return &i
+}
+
+// GenerateMD5Hash hashes a string to MD5
+func GenerateMD5Hash(s string) string {
+	// Create an MD5 hash of the string
+	// nolint:gosec
+	hash := md5.New()
+	hash.Write([]byte(s))
+	hashedBytes := hash.Sum(nil)
+
+	// Encode the hash as a hexadecimal string
+	hashedString := hex.EncodeToString(hashedBytes)
+
+	return hashedString
 }
