@@ -17,12 +17,15 @@
 package util
 
 import (
+	// nolint:gosec
+	"crypto/md5"
+	"encoding/hex"
 	"reflect"
 	"sort"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
-	"k8s.io/utils/pointer"
+	pointer "k8s.io/utils/ptr"
 )
 
 func SortByKey(m map[string]string) map[string]string {
@@ -252,27 +255,41 @@ func ToStringPtr(s string) *string {
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',
 // uses 'def' as a default if 'ptr' is nil, and returns a new pointer to the resulting bool.
 func BoolDerefToPointer(ptr *bool, def bool) *bool {
-	b := pointer.BoolDeref(ptr, def)
+	b := pointer.Deref(ptr, def)
 	return &b
 }
 
 // StringDerefToPointer is a helper function that dereferences a pointer to a string 'ptr',
 // and returns a new pointer to the resulting string. If 'ptr' is nil, it uses 'def' as a default value.
 func StringDerefToPointer(ptr *string, def string) *string {
-	s := pointer.StringDeref(ptr, def)
+	s := pointer.Deref(ptr, def)
 	return &s
 }
 
 // IntDerefToPointer is a helper function that dereferences a pointer to an int 'ptr',
 // and returns a new pointer to the resulting int. If 'ptr' is nil, it uses 'def' as a default value.
 func IntDerefToPointer(ptr *int, def int) *int {
-	i := pointer.IntDeref(ptr, def)
+	i := pointer.Deref(ptr, def)
 	return &i
 }
 
 // Int64DerefToPointer is a helper function that dereferences a pointer to an int64 'ptr',
 // and returns a new pointer to the resulting int64. If 'ptr' is nil, it uses 'def' as a default value.
 func Int64DerefToPointer(ptr *int64, def int64) *int64 {
-	i := pointer.Int64Deref(ptr, def)
+	i := pointer.Deref(ptr, def)
 	return &i
+}
+
+// GenerateMD5Hash hashes a string to MD5
+func GenerateMD5Hash(s string) string {
+	// Create an MD5 hash of the string
+	// nolint:gosec
+	hash := md5.New()
+	hash.Write([]byte(s))
+	hashedBytes := hash.Sum(nil)
+
+	// Encode the hash as a hexadecimal string
+	hashedString := hex.EncodeToString(hashedBytes)
+
+	return hashedString
 }

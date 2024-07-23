@@ -128,6 +128,16 @@ type RepositoryWebhook struct {
 	// +kubebuilder:validation:Enum=json;form
 	ContentType string `json:"contentType"`
 
+	// Webhook secret, see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
+	// Internal field not exposed to Kubernetes API
+	Secret *string `json:"-"`
+
+	// Reference to a secret key containing the webhook secret.
+	// You can use the webhook secret to limit incoming requests to only those originating from GitHub.
+	// For more information, see https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
+	// +optional
+	SecretKeyRef *xpv1.SecretKeySelector `json:"secretKeyRef,omitempty"`
+
 	// Determines what events the hook is triggered for. See https://docs.github.com/en/webhooks/webhook-events-and-payloads
 	Events []string `json:"events"`
 

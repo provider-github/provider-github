@@ -1,9 +1,21 @@
 ---
+apiVersion: v1
+data:
+  foo_com: LW5ldyBzb1NlY3JldE11Y2hXb3cxMzM3Cg==
+kind: Secret
+metadata:
+  name: sample-repository-webhook-secrets
+  namespace: production
+type: Opaque
+---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Repository
 metadata:
   name: sample-repository
 spec:
+  writeConnectionSecretToRef:
+    name: sample-repository-repo-state
+    namespace: production
   forProvider:
     createFromTemplate:
       owner: octo-org
@@ -28,6 +40,16 @@ spec:
       - workflow_job
       insecureSsl: false
       url: https://example.com
+    - active: true
+      contentType: json
+      events:
+      - workflow_job
+      insecureSsl: false
+      url: https://foo.com
+      secretKeyRef:
+        key: foo_com
+        name: sample-repository-webhook-secrets
+        namespace: production
     branchProtectionRules:
       - branch: main
         enforceAdmins: true

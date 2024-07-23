@@ -35,7 +35,7 @@ import (
 	"github.com/crossplane/provider-github/internal/util"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/pointer"
+	pointer "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -200,7 +200,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
-	if cr.Spec.ForProvider.Description != pointer.StringDeref(org.Description, "") {
+	if cr.Spec.ForProvider.Description != pointer.Deref(org.Description, "") {
 		return notUpToDate, nil
 	}
 
