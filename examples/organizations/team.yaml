@@ -1,3 +1,4 @@
+---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Team
 metadata:
@@ -10,9 +11,8 @@ spec:
     members:
     - userRef:
         name: pgh-sample-user
-      role: maintainer
+      role: maintainer # Note: If the user is an ORG admin, make sure to set it to "maintainer". GitHub enforces that ORG admins can only be maintainers in teams
     privacy: closed
-
 ---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Team
@@ -28,5 +28,5 @@ spec:
     members:
     - userRef:
         name: pgh-sample-user
-      role: maintainer
+      role: maintainer # Note: If the user is an ORG admin, make sure to set it to "maintainer". GitHub enforces that ORG admins can only be maintainers in teams
     privacy: closed
