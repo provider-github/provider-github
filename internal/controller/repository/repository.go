@@ -341,7 +341,7 @@ func (c *external) getRepoWebhookSecretFromState(ctx context.Context, cr *v1alph
 		return "", errors.New("`spec.writeConnectionSecretToReference` is not set")
 	}
 
-	secretKey := util.GenerateMD5Hash(webhook.Config.GetURL())
+	secretKey := util.GenerateSHA1Hash(webhook.Config.GetURL())
 	secretName := cr.Spec.WriteConnectionSecretToReference.Name
 	secretNamespace := cr.Spec.WriteConnectionSecretToReference.Namespace
 	nn := types.NamespacedName{
@@ -885,7 +885,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 				return managed.ExternalCreation{}, err
 			}
 			if hookConfig.Config.Secret != nil {
-				err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateMD5Hash(hook.Url), webhookSecretState{
+				err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
 					WebhookUrl:    *hookConfig.Config.URL,
 					WebhookSecret: *hookConfig.Config.Secret,
 				})
@@ -1026,7 +1026,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 			return err
 		}
 		if hook.Secret != nil {
-			err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateMD5Hash(hook.Url))
+			err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url))
 			if err != nil {
 				return err
 			}
@@ -1040,7 +1040,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 			return err
 		}
 		if hookConfig.Config.Secret != nil {
-			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateMD5Hash(hook.Url), webhookSecretState{
+			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
 				WebhookUrl:    *hookConfig.Config.URL,
 				WebhookSecret: *hookConfig.Config.Secret,
 			})
@@ -1062,14 +1062,14 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 		}
 
 		// Clear connection secret entry first, if it exists
-		err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateMD5Hash(*hookConfig.Config.URL))
+		err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(*hookConfig.Config.URL))
 		if err != nil {
 			return err
 		}
 
 		// Add updated connection secret entry, if needed
 		if hookConfig.Config.Secret != nil {
-			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateMD5Hash(hook.Url), webhookSecretState{
+			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
 				WebhookUrl:    *hookConfig.Config.URL,
 				WebhookSecret: *hookConfig.Config.Secret,
 			})
