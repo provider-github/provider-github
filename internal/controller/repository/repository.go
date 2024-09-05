@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -267,7 +268,8 @@ func getUserPermissionMapFromCr(users []v1alpha1.RepositoryUser) map[string]stri
 	crMToPermission := make(map[string]string, len(users))
 
 	for _, user := range users {
-		crMToPermission[user.User] = user.Role
+		username := strings.ToLower(user.User)
+		crMToPermission[username] = user.Role
 	}
 
 	return crMToPermission
@@ -541,11 +543,12 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 		}
 
 		for _, m := range users {
-			uToPermission[*m.Login] = "pull"
+			username := strings.ToLower(*m.Login)
+			uToPermission[username] = "pull"
 
 			for _, p := range permissionsOrdered {
 				if m.Permissions[p] {
-					uToPermission[*m.Login] = p
+					uToPermission[username] = p
 					break
 				}
 			}
