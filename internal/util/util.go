@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
@@ -292,4 +293,12 @@ func GenerateSHA1Hash(s string) string {
 	hashedString := hex.EncodeToString(hashedBytes)
 
 	return hashedString
+}
+
+// ToLowerSlice converts all the strings in the slice to lowercase.
+func ToLowerSlice(input []string) []string {
+	for i, v := range input {
+		input[i] = strings.ToLower(v)
+	}
+	return input
 }
