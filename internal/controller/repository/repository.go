@@ -623,13 +623,13 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 		if restr != nil {
 			restr.BlockCreations = util.BoolDerefToPointer(restr.BlockCreations, false)
 			if restr.Users != nil {
-				restr.Users = util.SortAndReturn(restr.Users)
+				restr.Users = util.SortAndReturn(util.ToLowerSlice(restr.Users))
 			}
 			if restr.Teams != nil {
-				restr.Teams = util.SortAndReturn(restr.Teams)
+				restr.Teams = util.SortAndReturn(util.ToLowerSlice(restr.Teams))
 			}
 			if restr.Apps != nil {
-				restr.Apps = util.SortAndReturn(restr.Apps)
+				restr.Apps = util.SortAndReturn(util.ToLowerSlice(restr.Apps))
 			}
 		}
 
@@ -641,25 +641,25 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 			allowances := rPRs.BypassPullRequestAllowances
 			if allowances != nil {
 				if allowances.Users != nil {
-					allowances.Users = util.SortAndReturn(allowances.Users)
+					allowances.Users = util.SortAndReturn(util.ToLowerSlice(allowances.Users))
 				}
 				if allowances.Teams != nil {
-					allowances.Teams = util.SortAndReturn(allowances.Teams)
+					allowances.Teams = util.SortAndReturn(util.ToLowerSlice(allowances.Teams))
 				}
 				if allowances.Apps != nil {
-					allowances.Apps = util.SortAndReturn(allowances.Apps)
+					allowances.Apps = util.SortAndReturn(util.ToLowerSlice(allowances.Apps))
 				}
 			}
 			dismissal := rPRs.DismissalRestrictions
 			if dismissal != nil {
 				if dismissal.Users != nil {
-					dismissal.Users = util.SortAndReturnPointer(*dismissal.Users)
+					dismissal.Users = util.SortAndReturnPointer(util.ToLowerSlice(*dismissal.Users))
 				}
 				if dismissal.Teams != nil {
-					dismissal.Teams = util.SortAndReturnPointer(*dismissal.Teams)
+					dismissal.Teams = util.SortAndReturnPointer(util.ToLowerSlice(*dismissal.Teams))
 				}
 				if dismissal.Apps != nil {
-					dismissal.Apps = util.SortAndReturnPointer(*dismissal.Apps)
+					dismissal.Apps = util.SortAndReturnPointer(util.ToLowerSlice(*dismissal.Apps))
 				}
 			}
 		}
@@ -731,21 +731,21 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 					for i, user := range dismissal.Users {
 						users[i] = user.GetLogin()
 					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(users)
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(util.ToLowerSlice(users))
 				}
 				if len(dismissal.Teams) > 0 {
 					teams := make([]string, len(dismissal.Teams))
 					for i, team := range dismissal.Teams {
 						teams[i] = team.GetSlug()
 					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(teams)
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(util.ToLowerSlice(teams))
 				}
 				if len(dismissal.Apps) > 0 {
 					apps := make([]string, len(dismissal.Apps))
 					for i, app := range dismissal.Apps {
 						apps[i] = app.GetSlug()
 					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(apps)
+					bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(util.ToLowerSlice(apps))
 				}
 			}
 
@@ -757,21 +757,21 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 					for i, user := range allowances.Users {
 						users[i] = user.GetLogin()
 					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(users)
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(util.ToLowerSlice(users))
 				}
 				if len(allowances.Teams) > 0 {
 					teams := make([]string, len(allowances.Teams))
 					for i, team := range allowances.Teams {
 						teams[i] = team.GetSlug()
 					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(teams)
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
 				}
 				if len(allowances.Apps) > 0 {
 					apps := make([]string, len(allowances.Apps))
 					for i, app := range allowances.Apps {
 						apps[i] = app.GetSlug()
 					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(apps)
+					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
 				}
 			}
 		}
@@ -785,21 +785,21 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 				for i, user := range restr.Users {
 					users[i] = user.GetLogin()
 				}
-				bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(users)
+				bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(util.ToLowerSlice(users))
 			}
 			if len(restr.Teams) > 0 {
 				teams := make([]string, len(restr.Teams))
 				for i, team := range restr.Teams {
 					teams[i] = team.GetSlug()
 				}
-				bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(teams)
+				bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
 			}
 			if len(restr.Apps) > 0 {
 				apps := make([]string, len(restr.Apps))
 				for i, app := range restr.Apps {
 					apps[i] = app.GetSlug()
 				}
-				bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(apps)
+				bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
 			}
 		}
 

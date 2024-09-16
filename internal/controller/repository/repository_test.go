@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -59,6 +60,8 @@ var (
 	team1Role = "admin"
 	team2     = "test-team-2"
 	team2Role = "pull"
+
+	githubApp1 = "my-awesome-app"
 
 	webhook1url            = "https://example.org/webhook"
 	webhook1active         = true
@@ -107,21 +110,21 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 	cr.Spec.ForProvider.Permissions = v1alpha1.RepositoryPermissions{
 		Users: []v1alpha1.RepositoryUser{
 			{
-				User: user1,
+				User: strings.ToUpper(user1),
 				Role: user1Role,
 			},
 			{
-				User: user2,
+				User: strings.ToUpper(user2),
 				Role: user2Role,
 			},
 		},
 		Teams: []v1alpha1.RepositoryTeam{
 			{
-				Team: team1,
+				Team: strings.ToUpper(team1),
 				Role: team1Role,
 			},
 			{
-				Team: team2,
+				Team: strings.ToUpper(team2),
 				Role: team2Role,
 			},
 		},
@@ -153,6 +156,41 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 				Checks: []*v1alpha1.RequiredStatusCheck{
 					{
 						Context: bpr1requiredStatusCheck,
+					},
+				},
+			},
+			BranchProtectionRestrictions: &v1alpha1.BranchProtectionRestrictions{
+				Users: []string{
+					strings.ToUpper(user1),
+				},
+				Teams: []string{
+					strings.ToUpper(team1),
+				},
+				Apps: []string{
+					strings.ToUpper(githubApp1),
+				},
+			},
+			RequiredPullRequestReviews: &v1alpha1.RequiredPullRequestReviews{
+				BypassPullRequestAllowances: &v1alpha1.BypassPullRequestAllowancesRequest{
+					Users: []string{
+						strings.ToUpper(user1),
+					},
+					Teams: []string{
+						strings.ToUpper(team1),
+					},
+					Apps: []string{
+						strings.ToUpper(githubApp1),
+					},
+				},
+				DismissalRestrictions: &v1alpha1.DismissalRestrictionsRequest{
+					Users: &[]string{
+						strings.ToUpper(user1),
+					},
+					Teams: &[]string{
+						strings.ToUpper(team1),
+					},
+					Apps: &[]string{
+						strings.ToUpper(githubApp1),
 					},
 				},
 			},
@@ -253,6 +291,59 @@ func githubProtectedBranch() *github.Protection {
 		},
 		RequiredSignatures: &github.SignaturesProtectedBranch{
 			Enabled: &bpr1requireSignedCommits,
+		},
+		Restrictions: &github.BranchRestrictions{
+			Users: []*github.User{
+				{
+					Login: &user1,
+				},
+			},
+			Teams: []*github.Team{
+				{
+					Slug: &team1,
+				},
+			},
+			Apps: []*github.App{
+				{
+					Slug: &githubApp1,
+				},
+			},
+		},
+		RequiredPullRequestReviews: &github.PullRequestReviewsEnforcement{
+			BypassPullRequestAllowances: &github.BypassPullRequestAllowances{
+				Users: []*github.User{
+					{
+						Login: &user1,
+					},
+				},
+				Teams: []*github.Team{
+					{
+						Slug: &team1,
+					},
+				},
+				Apps: []*github.App{
+					{
+						Slug: &githubApp1,
+					},
+				},
+			},
+			DismissalRestrictions: &github.DismissalRestrictions{
+				Users: []*github.User{
+					{
+						Login: &user1,
+					},
+				},
+				Teams: []*github.Team{
+					{
+						Slug: &team1,
+					},
+				},
+				Apps: []*github.App{
+					{
+						Slug: &githubApp1,
+					},
+				},
+			},
 		},
 	}
 }
