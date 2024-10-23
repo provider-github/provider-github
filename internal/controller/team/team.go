@@ -19,6 +19,7 @@ package team
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -173,7 +174,8 @@ func getUserPermissionMapFromCr(users []v1alpha1.TeamMemberUser) map[string]stri
 	crMToPermission := make(map[string]string, len(users))
 
 	for _, user := range users {
-		crMToPermission[user.User] = user.Role
+		username := strings.ToLower(user.User)
+		crMToPermission[username] = user.Role
 	}
 
 	return crMToPermission
@@ -196,7 +198,8 @@ func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, sl
 			}
 
 			for _, m := range members {
-				mToPermission[*m.Login] = role
+				username := strings.ToLower(*m.Login)
+				mToPermission[username] = role
 			}
 
 			if resp.NextPage == 0 {
