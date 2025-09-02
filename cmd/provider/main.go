@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -41,6 +42,8 @@ import (
 	"github.com/crossplane/provider-github/apis/v1alpha1"
 	github "github.com/crossplane/provider-github/internal/controller"
 	"github.com/crossplane/provider-github/internal/features"
+	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -56,6 +59,7 @@ func main() {
 		namespace                  = app.Flag("namespace", "Namespace used to set as default scope in default secret store config.").Default("crossplane-system").Envar("POD_NAMESPACE").String()
 		enableExternalSecretStores = app.Flag("enable-external-secret-stores", "Enable support for ExternalSecretStores.").Default("false").Envar("ENABLE_EXTERNAL_SECRET_STORES").Bool()
 		enableManagementPolicies   = app.Flag("enable-management-policies", "Enable support for Management Policies.").Default("false").Envar("ENABLE_MANAGEMENT_POLICIES").Bool()
+		customMetricsAddr          = app.Flag("custom-metrics-addr", "The address the custom metric endpoint binds to.").Default(":8081").String()
 	)
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
@@ -94,6 +98,11 @@ func main() {
 	kingpin.FatalIfError(err, "Cannot create controller manager")
 	kingpin.FatalIfError(apis.AddToScheme(mgr.GetScheme()), "Cannot add GitHub APIs to scheme")
 
+	// Initialize rate limit metrics and register with controller-runtime manager
+	log.Info("Starting rate limit metrics initialization")
+	metrics := telemetry.NewRateLimitMetrics(mgr)
+	log.Info("Rate limit metrics initialized and registered with controller-runtime")
+
 	o := controller.Options{
 		Logger:                  log,
 		MaxConcurrentReconciles: *maxReconcileRate,
@@ -126,6 +135,16 @@ func main() {
 		log.Info("Alpha feature enabled", "flag", features.EnableAlphaManagementPolicies)
 	}
 
-	kingpin.FatalIfError(github.Setup(mgr, o), "Cannot setup GitHub controllers")
+	kingpin.FatalIfError(github.Setup(mgr, o, metrics), "Cannot setup GitHub controllers")
+
+	// Start custom metrics server on a different port
+	go func() {
+		log.Info("Starting custom metrics server", "addr", *customMetricsAddr)
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(*customMetricsAddr, nil); err != nil {
+			log.Info("Custom metrics server failed to start", "error", err)
+		}
+	}()
+
 	kingpin.FatalIfError(mgr.Start(ctrl.SetupSignalHandler()), "Cannot start controller manager")
 }

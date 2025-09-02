@@ -25,19 +25,20 @@ import (
 	"github.com/crossplane/provider-github/internal/controller/organization"
 	"github.com/crossplane/provider-github/internal/controller/repository"
 	"github.com/crossplane/provider-github/internal/controller/team"
+	"github.com/crossplane/provider-github/internal/telemetry"
 )
 
 // Setup creates all GitHub controllers with the supplied logger and adds them to
 // the supplied manager.
-func Setup(mgr ctrl.Manager, o controller.Options) error {
-	for _, setup := range []func(ctrl.Manager, controller.Options) error{
+func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
+	for _, setup := range []func(ctrl.Manager, controller.Options, *telemetry.RateLimitMetrics) error{
 		config.Setup,
 		organization.Setup,
 		repository.Setup,
 		membership.Setup,
 		team.Setup,
 	} {
-		if err := setup(mgr, o); err != nil {
+		if err := setup(mgr, o, metrics); err != nil {
 			return err
 		}
 	}

@@ -39,6 +39,7 @@ import (
 	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
+	"github.com/crossplane/provider-github/internal/telemetry"
 )
 
 const (
@@ -51,7 +52,7 @@ const (
 )
 
 // Setup adds a controller that reconciles Membership managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options) error {
+func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
 	name := managed.ControllerName(v1alpha1.MembershipGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
@@ -64,7 +65,8 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		managed.WithExternalConnecter(&connector{
 			kube:        mgr.GetClient(),
 			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newClientFn: ghclient.NewClient}),
+			newClientFn: ghclient.NewClient,
+			metrics:     metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -82,6 +84,7 @@ type connector struct {
 	kube        client.Client
 	usage       resource.Tracker
 	newClientFn func(string) (*ghclient.Client, error)
+	metrics     *telemetry.RateLimitMetrics
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
@@ -110,11 +113,18 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: gh}, nil
+	// Create rate limit tracking client
+	rateLimitClient := ghclient.NewRateLimitClient(gh, c.metrics)
+
+	// Get organization name for rate limit tracking
+	orgName := cr.Spec.ForProvider.Org
+	rateLimitClientWithOrg := rateLimitClient.WithRateLimitTracking(orgName)
+
+	return &external{github: rateLimitClientWithOrg}, nil
 }
 
 type external struct {
-	github *ghclient.Client
+	github *ghclient.RateLimitClient
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {

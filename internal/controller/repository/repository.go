@@ -51,6 +51,7 @@ import (
 	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
+	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/crossplane/provider-github/internal/util"
 )
 
@@ -64,7 +65,7 @@ const (
 )
 
 // Setup adds a controller that reconciles Repository managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options) error {
+func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
 	name := managed.ControllerName(v1alpha1.RepositoryGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
@@ -77,7 +78,8 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		managed.WithExternalConnecter(&connector{
 			kube:        mgr.GetClient(),
 			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newClientFn: ghclient.NewClient}),
+			newClientFn: ghclient.NewClient,
+			metrics:     metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -95,6 +97,7 @@ type connector struct {
 	kube        client.Client
 	usage       resource.Tracker
 	newClientFn func(string) (*ghclient.Client, error)
+	metrics     *telemetry.RateLimitMetrics
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
@@ -123,15 +126,22 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
+	// Create rate limit tracking client
+	rateLimitClient := ghclient.NewRateLimitClient(gh, c.metrics)
+
+	// Get organization name for rate limit tracking
+	orgName := cr.Spec.ForProvider.Org
+	rateLimitClientWithOrg := rateLimitClient.WithRateLimitTracking(orgName)
+
 	return &external{
-		github: gh,
+		github: rateLimitClientWithOrg,
 		kube:   c.kube,
 	}, nil
 }
 
 type external struct {
 	kube   client.Client
-	github *ghclient.Client
+	github *ghclient.RateLimitClient
 }
 
 //nolint:gocyclo
@@ -438,7 +448,7 @@ func (c *external) deleteConnectionSecretEntry(ctx context.Context, cr *v1alpha1
 	return nil
 }
 
-func getRepoWebhooks(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Hook, error) {
+func getRepoWebhooks(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Hook, error) {
 	opt := &github.ListOptions{PerPage: 100}
 	var allHooks []*github.Hook
 
@@ -502,7 +512,7 @@ func getRepoWebhookId(hooks []*github.Hook, webhookUrl string) (*int64, error) {
 	return nil, fmt.Errorf("cannot find repository webhook id for %s", webhookUrl)
 }
 
-func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
+func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.RateLimitClient, org, name string) (map[string]string, error) {
 	tToPermission := make(map[string]string)
 
 	opt := &github.ListOptions{PerPage: 100}
@@ -528,7 +538,7 @@ func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 
 var permissionsOrdered = [...]string{"admin", "maintain", "push", "triage", "pull"}
 
-func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
+func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.RateLimitClient, org, name string) (map[string]string, error) {
 	uToPermission := make(map[string]string)
 
 	opt := &github.ListCollaboratorsOptions{
@@ -565,7 +575,7 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 
 // listProtectedBranches retrieves all protected branches for a given GitHub repository.
 // It uses pagination to handle large numbers of branches, fetching 100 branches per API call.
-func listProtectedBranches(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Branch, error) {
+func listProtectedBranches(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Branch, error) {
 	opts := &github.BranchListOptions{
 		Protected:   github.Bool(true),
 		ListOptions: github.ListOptions{PerPage: 100},
@@ -676,7 +686,7 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 // It returns the BranchProtectionRules map, and any error encountered during the process.
 //
 //nolint:gocyclo
-func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
+func getBPRWithConfig(ctx context.Context, gh *ghclient.RateLimitClient, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
 	bprToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(branches))
 
 	for _, branch := range branches {
@@ -929,7 +939,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalCreation{}, nil
 }
 
-func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
 	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
 	ghUToPermission, err := getRepoUsersWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 
@@ -957,7 +967,7 @@ func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 	return err
 }
 
-func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTToPermission, err := getRepoTeamsWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
@@ -1003,7 +1013,7 @@ func crRepoHookToHookConfig(hook v1alpha1.RepositoryWebhook) *github.Hook {
 }
 
 //nolint:gocyclo
-func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
 	ghRepoWebhooks, err := getRepoWebhooks(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
 		return err
@@ -1089,7 +1099,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 // based on a provided BranchProtectionRule. It returns an error if the update operation fails.
 //
 //nolint:gocyclo
-func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.Client, owner, repoName string) error {
+func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.RateLimitClient, owner, repoName string) error {
 	protectionRequest := &github.ProtectionRequest{
 		EnforceAdmins:                  rule.EnforceAdmins,
 		RequireLinearHistory:           rule.RequireLinearHistory,
@@ -1172,7 +1182,7 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 // to match with those detailed in the repository resource object.
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
-func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
 	protectedBranches, err := listProtectedBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
 		return err
@@ -1217,7 +1227,7 @@ func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *g
 // depending on the configuration. If RequireSignedCommits is set to true, it enforces signed commits,
 // making them mandatory for all contributors. If it's false, signing commits is optional.
 // It returns an error if any of the GitHub API calls fail.
-func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, owner, repoName string, protectionRule *v1alpha1.BranchProtectionRule) error {
+func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.RateLimitClient, owner, repoName string, protectionRule *v1alpha1.BranchProtectionRule) error {
 	if protectionRule.RequireSignedCommits != nil && *protectionRule.RequireSignedCommits {
 		_, _, err := gh.Repositories.RequireSignaturesOnProtectedBranch(ctx, owner, repoName, protectionRule.Branch)
 		if err != nil {
@@ -1234,7 +1244,7 @@ func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, o
 
 // getRepositoryRules retrieves all the rules for a given GitHub repository.
 // It uses pagination to handle large numbers of rules, fetching 100 rules per API call.
-func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*github.Ruleset, error) {
+func getRepositoryRules(ctx context.Context, gh *ghclient.RateLimitClient, org, repo string) ([]*github.Ruleset, error) {
 	opt := &github.ListOptions{PerPage: 100}
 	var allRules []*github.Ruleset
 
@@ -1351,7 +1361,7 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]
 // branch rules fetched from the GitHub API.
 //
 //nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.Ruleset) (map[string]v1alpha1.RepositoryRuleset, error) {
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.RateLimitClient, owner, repo string, ghRulesets []*github.Ruleset) (map[string]v1alpha1.RepositoryRuleset, error) {
 	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
 
 	for _, rule := range ghRulesets {
@@ -1614,7 +1624,7 @@ func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Ruleset {
 // to match with those detailed in the repository resource object.
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
-func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
 	// Fetch the current repository rules from GitHub
 	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {

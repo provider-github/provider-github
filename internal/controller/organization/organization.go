@@ -32,6 +32,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/provider-github/internal/telemetry"
 	"github.com/crossplane/provider-github/internal/util"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,7 +58,7 @@ const (
 )
 
 // Setup adds a controller that reconciles Organization managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options) error {
+func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
 	name := managed.ControllerName(v1alpha1.OrganizationGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
@@ -70,7 +71,8 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 		managed.WithExternalConnecter(&connector{
 			kube:        mgr.GetClient(),
 			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newClientFn: ghclient.NewClient}),
+			newClientFn: ghclient.NewClient,
+			metrics:     metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -88,6 +90,7 @@ type connector struct {
 	kube        client.Client
 	usage       resource.Tracker
 	newClientFn func(string) (*ghclient.Client, error)
+	metrics     *telemetry.RateLimitMetrics
 }
 
 // Initializes external client
@@ -117,13 +120,20 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: gh}, nil
+	// Create rate limit tracking client
+	rateLimitClient := ghclient.NewRateLimitClient(gh, c.metrics)
+
+	// Get organization name for rate limit tracking
+	orgName := meta.GetExternalName(cr)
+	rateLimitClientWithOrg := rateLimitClient.WithRateLimitTracking(orgName)
+
+	return &external{github: rateLimitClientWithOrg}, nil
 }
 
 type external struct {
 	// A 'client' used to connect to the external resource API. In practice this
 	// would be something like an AWS SDK client.
-	github *ghclient.Client
+	github *ghclient.RateLimitClient
 }
 
 //nolint:gocyclo
@@ -297,7 +307,7 @@ func getSortedRepoNames(repos []*github.Repository) []string {
 	return repoNames
 }
 
-func getUpdateRepoIds(ctx context.Context, gh *ghclient.Client, org string, crRepos []string, aRepos []string) ([]int64, error) {
+func getUpdateRepoIds(ctx context.Context, gh *ghclient.RateLimitClient, org string, crRepos []string, aRepos []string) ([]int64, error) {
 	var updateRepos []string
 	for _, repo := range crRepos {
 		// Check if the repository from CRD is not in GitHub
@@ -317,7 +327,7 @@ func getUpdateRepoIds(ctx context.Context, gh *ghclient.Client, org string, crRe
 	return reposIds, nil
 }
 
-func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.Client, name string, cr *v1alpha1.Organization) ([]int64, []int64, error) {
+func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, cr *v1alpha1.Organization) ([]int64, []int64, error) {
 	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
@@ -342,7 +352,7 @@ func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.Client, name s
 	return missingReposIds, toDeleteReposIds, nil
 }
 
-func updateRepos(ctx context.Context, gh *ghclient.Client, name string, missingReposIds []int64, toDeleteReposIds []int64) error {
+func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, missingReposIds []int64, toDeleteReposIds []int64) error {
 	if len(missingReposIds) > 0 {
 		for _, missingRepo := range missingReposIds {
 			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
@@ -364,7 +374,7 @@ func updateRepos(ctx context.Context, gh *ghclient.Client, name string, missingR
 	return nil
 }
 
-func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.Client, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
+func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
 	crOrgSecretsToConfig := make(map[string][]int64, len(secrets))
 	for _, secret := range secrets {
 		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
@@ -425,11 +435,11 @@ type OrgSecretSetter interface {
 }
 
 type ActionsSecretSetter struct {
-	client *ghclient.Client
+	client *ghclient.RateLimitClient
 }
 
 type DependabotSecretSetter struct {
-	client *ghclient.Client
+	client *ghclient.RateLimitClient
 }
 
 func (a *ActionsSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error {
@@ -448,7 +458,7 @@ func (d *DependabotSecretSetter) SetSelectedReposForOrgSecret(ctx context.Contex
 	return nil
 }
 
-func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
+func updateOrgSecrets(ctx context.Context, gh *ghclient.RateLimitClient, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
 	for _, secret := range secrets {
 		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
 		for _, repo := range secret.RepositoryAccessList {
