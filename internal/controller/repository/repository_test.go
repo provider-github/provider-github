@@ -390,7 +390,6 @@ func githubRuleset() []*github.Ruleset {
 			},
 		},
 	}
-
 }
 
 func githubCollaborators() []*github.User {
@@ -434,7 +433,7 @@ func githubBranches() []*github.Branch {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -454,8 +453,8 @@ func TestObserve(t *testing.T) {
 		want   want
 	}{
 		"NotUpToDate": {
-			fields: fields{
-				github: &ghclient.Client{
+			fields: fields{github: &ghclient.RateLimitClient{
+				Client: &ghclient.Client{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -484,6 +483,7 @@ func TestObserve(t *testing.T) {
 					},
 				},
 			},
+			},
 			args: args{
 				mg: repository(withTeamPermission()),
 			},
@@ -496,8 +496,8 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		"UpToDate": {
-			fields: fields{
-				github: &ghclient.Client{
+			fields: fields{github: &ghclient.RateLimitClient{
+				Client: &ghclient.Client{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -529,6 +529,7 @@ func TestObserve(t *testing.T) {
 					},
 				},
 			},
+			},
 			args: args{
 				mg: repository(),
 			},
@@ -542,11 +543,13 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExist": {
 			fields: fields{
-				github: &ghclient.Client{
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return nil, nil, fake.Generate404Response()
 						},
+					},
 					},
 				},
 			},

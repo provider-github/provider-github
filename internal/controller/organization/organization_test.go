@@ -32,14 +32,6 @@ import (
 	"github.com/google/go-github/v62/github"
 )
 
-// Unlike many Kubernetes projects Crossplane does not use third party testing
-// libraries, per the common Go test review comments. Crossplane encourages the
-// use of table driven unit tests. The tests of the crossplane-runtime project
-// are representative of the testing style Crossplane encourages.
-//
-// https://github.com/golang/go/wiki/TestComments
-// https://github.com/crossplane/crossplane/blob/master/CONTRIBUTING.md#contributing-code
-
 var (
 	org              = "test-org"
 	description      = "test description"
@@ -77,9 +69,7 @@ func organization(repos []string, m ...organizationModifier) *v1alpha1.Organizat
 			{
 				Name: orgSecret1,
 				RepositoryAccessList: []v1alpha1.SecretSelectedRepo{
-					{
-						Repo: orgSecretRepo1,
-					},
+					{Repo: orgSecretRepo1},
 				},
 			},
 		},
@@ -87,9 +77,7 @@ func organization(repos []string, m ...organizationModifier) *v1alpha1.Organizat
 			{
 				Name: orgSecret1,
 				RepositoryAccessList: []v1alpha1.SecretSelectedRepo{
-					{
-						Repo: orgSecretRepo1,
-					},
+					{Repo: orgSecretRepo1},
 				},
 			},
 		},
@@ -147,7 +135,7 @@ func githubOrgSecretRepo() *github.Repository {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -168,7 +156,8 @@ func TestObserve(t *testing.T) {
 	}{
 		"NotUpToDate": {
 			fields: fields{
-				github: &ghclient.Client{
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
 					Organizations: &fake.MockOrganizationsClient{
 						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 							return githubOrganization(), nil, nil
@@ -198,6 +187,7 @@ func TestObserve(t *testing.T) {
 							return nil, fake.GenerateEmptyResponse(), nil
 						},
 					},
+					},
 				},
 			},
 			args: args{
@@ -213,7 +203,8 @@ func TestObserve(t *testing.T) {
 		},
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.Client{
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
 					Organizations: &fake.MockOrganizationsClient{
 						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 							return githubOrganization(), nil, nil
@@ -243,6 +234,7 @@ func TestObserve(t *testing.T) {
 							return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
 						},
 					},
+					},
 				},
 			},
 			args: args{
@@ -258,7 +250,8 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExists": {
 			fields: fields{
-				github: &ghclient.Client{
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
 					Organizations: &fake.MockOrganizationsClient{
 						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 							return nil, nil, fake.Generate404Response()
@@ -287,6 +280,7 @@ func TestObserve(t *testing.T) {
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return nil, nil, fake.Generate404Response()
 						},
+					},
 					},
 				},
 			},

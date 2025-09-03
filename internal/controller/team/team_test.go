@@ -102,7 +102,7 @@ func githubTeam(role string) []*github.User {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -123,16 +123,18 @@ func TestObserve(t *testing.T) {
 	}{
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.Client{
-					Teams: &fake.MockTeamsClient{
-						MockGetTeamBySlug: func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error) {
-							return &github.Team{
-								Privacy:     &teamPrivacy,
-								Description: &teamDescription,
-							}, nil, nil
-						},
-						MockListTeamMembersBySlug: func(ctx context.Context, org, slug string, opts *github.TeamListTeamMembersOptions) ([]*github.User, *github.Response, error) {
-							return githubTeam(opts.Role), fake.GenerateEmptyResponse(), nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Teams: &fake.MockTeamsClient{
+							MockGetTeamBySlug: func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error) {
+								return &github.Team{
+									Privacy:     &teamPrivacy,
+									Description: &teamDescription,
+								}, nil, nil
+							},
+							MockListTeamMembersBySlug: func(ctx context.Context, org, slug string, opts *github.TeamListTeamMembersOptions) ([]*github.User, *github.Response, error) {
+								return githubTeam(opts.Role), fake.GenerateEmptyResponse(), nil
+							},
 						},
 					},
 				},

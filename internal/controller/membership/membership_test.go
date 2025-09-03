@@ -90,7 +90,7 @@ func githubUser() *github.User {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -111,10 +111,12 @@ func TestObserve(t *testing.T) {
 	}{
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
-							return githubMembership(), nil, nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Organizations: &fake.MockOrganizationsClient{
+							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
+								return githubMembership(), nil, nil
+							},
 						},
 					},
 				},
@@ -132,10 +134,12 @@ func TestObserve(t *testing.T) {
 		},
 		"NotUpToDate": {
 			fields: fields{
-				github: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
-							return githubMembership(), nil, nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Organizations: &fake.MockOrganizationsClient{
+							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
+								return githubMembership(), nil, nil
+							},
 						},
 					},
 				},
@@ -153,10 +157,12 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExists": {
 			fields: fields{
-				github: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Organizations: &fake.MockOrganizationsClient{
+							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
 					},
 				},
@@ -187,7 +193,7 @@ func TestObserve(t *testing.T) {
 
 func TestCreate(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -208,10 +214,12 @@ func TestCreate(t *testing.T) {
 	}{
 		"InvalidRole": {
 			fields: fields{
-				github: &ghclient.Client{
-					Users: &fake.MockUsersClient{
-						MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
-							return githubUser(), nil, nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Users: &fake.MockUsersClient{
+							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
+								return githubUser(), nil, nil
+							},
 						},
 					},
 				},
@@ -226,27 +234,29 @@ func TestCreate(t *testing.T) {
 		},
 		"OK": {
 			fields: fields{
-				github: &ghclient.Client{
-					Users: &fake.MockUsersClient{
-						MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
-							return githubUser(), nil, nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Users: &fake.MockUsersClient{
+							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
+								return githubUser(), nil, nil
+							},
 						},
-					},
-					Organizations: &fake.MockOrganizationsClient{
-						MockCreateOrgInvitation: func(ctx context.Context, org string, opts *github.CreateOrgInvitationOptions) (*github.Invitation, *github.Response, error) {
-							m := membership().Spec.ForProvider
-							ghu := githubUser()
+						Organizations: &fake.MockOrganizationsClient{
+							MockCreateOrgInvitation: func(ctx context.Context, org string, opts *github.CreateOrgInvitationOptions) (*github.Invitation, *github.Response, error) {
+								m := membership().Spec.ForProvider
+								ghu := githubUser()
 
-							// because we work around a quirk in github api wher in invitations
-							// it's "direct_member" instead of member we check here directly
-							if org != m.Org ||
-								opts.InviteeID != ghu.ID ||
-								*opts.Role != "direct_member" {
+								// because we work around a quirk in github api wher in invitations
+								// it's "direct_member" instead of member we check here directly
+								if org != m.Org ||
+									opts.InviteeID != ghu.ID ||
+									*opts.Role != "direct_member" {
 
-								return nil, nil, errors.New("Objects don't match")
-							}
+									return nil, nil, errors.New("Objects don't match")
+								}
 
-							return nil, nil, nil
+								return nil, nil, nil
+							},
 						},
 					},
 				},
@@ -277,7 +287,7 @@ func TestCreate(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	type fields struct {
-		github *ghclient.Client
+		github *ghclient.RateLimitClient
 	}
 
 	type args struct {
@@ -298,15 +308,17 @@ func TestUpdate(t *testing.T) {
 	}{
 		"OK": {
 			fields: fields{
-				github: &ghclient.Client{
-					Users: &fake.MockUsersClient{
-						MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
-							return githubUser(), nil, nil
+				github: &ghclient.RateLimitClient{
+					Client: &ghclient.Client{
+						Users: &fake.MockUsersClient{
+							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
+								return githubUser(), nil, nil
+							},
 						},
-					},
-					Organizations: &fake.MockOrganizationsClient{
-						MockEditOrgMembership: func(ctx context.Context, user, org string, ghm *github.Membership) (*github.Membership, *github.Response, error) {
-							return nil, nil, nil
+						Organizations: &fake.MockOrganizationsClient{
+							MockEditOrgMembership: func(ctx context.Context, user, org string, ghm *github.Membership) (*github.Membership, *github.Response, error) {
+								return nil, nil, nil
+							},
 						},
 					},
 				},
