@@ -142,7 +142,7 @@ func main() {
 		log.Info("Starting custom metrics server", "addr", *customMetricsAddr)
 		http.Handle("/metrics", promhttp.Handler())
 		if err := http.ListenAndServe(*customMetricsAddr, nil); err != nil {
-			log.Info("Custom metrics server failed to start", "error", err)
+			zl.Error(err, "Custom metrics server failed to start")
 		}
 	}()
 
