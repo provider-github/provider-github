@@ -545,11 +545,11 @@ func TestObserve(t *testing.T) {
 			fields: fields{
 				github: &ghclient.RateLimitClient{
 					Client: &ghclient.Client{
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+						Repositories: &fake.MockRepositoriesClient{
+							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
-					},
 					},
 				},
 			},

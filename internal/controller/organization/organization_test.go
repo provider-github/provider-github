@@ -158,35 +158,35 @@ func TestObserve(t *testing.T) {
 			fields: fields{
 				github: &ghclient.RateLimitClient{
 					Client: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
-							return githubOrganization(), nil, nil
+						Organizations: &fake.MockOrganizationsClient{
+							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
+								return githubOrganization(), nil, nil
+							},
 						},
-					},
-					Actions: &fake.MockActionsClient{
-						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
-							return githubOrgRepoActions(), nil, nil
+						Actions: &fake.MockActionsClient{
+							MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+								return githubOrgRepoActions(), nil, nil
+							},
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return nil, fake.GenerateEmptyResponse(), nil
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return nil, fake.GenerateEmptyResponse(), nil
+							},
 						},
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return nil, fake.GenerateEmptyResponse(), nil
+						Dependabot: &fake.MockDependabotClient{
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return nil, fake.GenerateEmptyResponse(), nil
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return nil, fake.GenerateEmptyResponse(), nil
+							},
 						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return nil, fake.GenerateEmptyResponse(), nil
+						Repositories: &fake.MockRepositoriesClient{
+							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+								return nil, fake.GenerateEmptyResponse(), nil
+							},
 						},
-					},
-					Dependabot: &fake.MockDependabotClient{
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return nil, fake.GenerateEmptyResponse(), nil
-						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return nil, fake.GenerateEmptyResponse(), nil
-						},
-					},
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							return nil, fake.GenerateEmptyResponse(), nil
-						},
-					},
 					},
 				},
 			},
@@ -205,35 +205,35 @@ func TestObserve(t *testing.T) {
 			fields: fields{
 				github: &ghclient.RateLimitClient{
 					Client: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
-							return githubOrganization(), nil, nil
+						Organizations: &fake.MockOrganizationsClient{
+							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
+								return githubOrganization(), nil, nil
+							},
 						},
-					},
-					Actions: &fake.MockActionsClient{
-						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
-							return githubOrgRepoActions(), nil, nil
+						Actions: &fake.MockActionsClient{
+							MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+								return githubOrgRepoActions(), nil, nil
+							},
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
+							},
 						},
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
+						Dependabot: &fake.MockDependabotClient{
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
+							},
 						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
+						Repositories: &fake.MockRepositoriesClient{
+							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+								return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
+							},
 						},
-					},
-					Dependabot: &fake.MockDependabotClient{
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return githubOrgSecret(), fake.GenerateEmptyResponse(), nil
-						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return githubSelectedReposForOrgSecret(), fake.GenerateEmptyResponse(), nil
-						},
-					},
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
-						},
-					},
 					},
 				},
 			},
@@ -252,35 +252,35 @@ func TestObserve(t *testing.T) {
 			fields: fields{
 				github: &ghclient.RateLimitClient{
 					Client: &ghclient.Client{
-					Organizations: &fake.MockOrganizationsClient{
-						MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+						Organizations: &fake.MockOrganizationsClient{
+							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
-					},
-					Actions: &fake.MockActionsClient{
-						MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+						Actions: &fake.MockActionsClient{
+							MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+						Dependabot: &fake.MockDependabotClient{
+							MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
+							MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
+						Repositories: &fake.MockRepositoriesClient{
+							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+								return nil, nil, fake.Generate404Response()
+							},
 						},
-					},
-					Dependabot: &fake.MockDependabotClient{
-						MockGetOrgSecret: func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
-						},
-						MockListSelectedReposForOrgSecret: func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
-						},
-					},
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							return nil, nil, fake.Generate404Response()
-						},
-					},
 					},
 				},
 			},

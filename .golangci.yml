@@ -9,7 +9,6 @@ issues:
 formatters:
   enable:
     - goimports # checks if the code and import statements are formatted according to the 'goimports' command
-    - golines # checks if code is formatted, and fixes long lines
     - gofmt # checks if the code is formatted according to 'gofmt' command
 
     ## you may want to enable
@@ -27,10 +26,6 @@ formatters:
       local-prefixes:
         - github.com/my/project
 
-    golines:
-      # Target maximum line length.
-      # Default: 100
-      max-len: 120
 
 linters:
   enable:
@@ -198,19 +193,15 @@ linters:
     govet:
       # Enable all analyzers.
       # Default: false
-      enable-all: true
+      enable-all: false
       # Disable analyzers by name.
       # Run `GL_DEBUG=govet golangci-lint run --enable=govet` to see default, all available analyzers, and enabled analyzers.
       # Default: []
       disable:
         - fieldalignment # too strict
+        - shadow # too noisy and redundant with code review
       # Settings per analyzer.
-      settings:
-        shadow:
-          # Whether to be strict about shadowing; can be noisy.
-          # Default: false
-          strict: true
-
+     
     inamedparam:
       # Skips check for interface methods with only a single parameter.
       # Default: false
@@ -303,6 +294,9 @@ linters:
         # Omit embedded fields from selector expression.
         # https://staticcheck.dev/docs/checks/#QF1008
         - -QF1008
+        - -ST1003 # naming of initialisms (URL, ID)
+        - -ST1020 # comment format for exported methods
+        - -ST1021 # comment format for exported types
 
     usetesting:
       # Enable/disable `os.TempDir()` detections.

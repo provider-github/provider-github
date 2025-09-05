@@ -108,7 +108,7 @@ type RepositoriesClient interface {
 func NewClient(creds string) (*Client, error) {
 	credss := strings.Split(creds, ",")
 	if len(credss) != 3 {
-		return nil, errors.New("Invalid format for credentials!")
+		return nil, errors.New("invalid format for credentials")
 	}
 
 	appId, err := strconv.Atoi(credss[0])
