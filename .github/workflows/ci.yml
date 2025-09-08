@@ -125,6 +125,26 @@ jobs:
         if: failure() && steps.check-diff.outcome == 'failure'
         run: git diff
 
+  trivy-scan-fs:
+    runs-on: ubuntu-22.04
+    needs: detect-noop
+    if: needs.detect-noop.outputs.noop != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Run Trivy vulnerability scanner in fs mode
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          skip-dirs: design
+          scan-ref: '.'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
   unit-tests:
     runs-on: ubuntu-22.04
     needs: detect-noop
