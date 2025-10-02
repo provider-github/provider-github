@@ -40,6 +40,7 @@ import (
 
 	"github.com/crossplane/provider-github/apis"
 	"github.com/crossplane/provider-github/apis/v1alpha1"
+	ghclient "github.com/crossplane/provider-github/internal/clients"
 	github "github.com/crossplane/provider-github/internal/controller"
 	"github.com/crossplane/provider-github/internal/features"
 	"github.com/crossplane/provider-github/internal/telemetry"
@@ -143,6 +144,16 @@ func main() {
 		http.Handle("/metrics", promhttp.Handler())
 		if err := http.ListenAndServe(*customMetricsAddr, nil); err != nil {
 			zl.Error(err, "Custom metrics server failed to start")
+		}
+	}()
+
+	// Start periodic cleanup of expired GitHub clients
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ghclient.CleanupExpiredClients()
+			log.Debug("Cleaned up expired GitHub clients")
 		}
 	}()
 

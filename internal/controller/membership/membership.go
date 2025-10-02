@@ -65,7 +65,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		managed.WithExternalConnecter(&connector{
 			kube:        mgr.GetClient(),
 			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newClientFn: ghclient.NewClient,
+			newClientFn: ghclient.NewCachedClient,
 			metrics:     metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
