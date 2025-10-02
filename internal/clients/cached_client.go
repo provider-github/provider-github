@@ -32,7 +32,6 @@ import (
 // CachedClient represents a cached GitHub client with token reuse
 type CachedClient struct {
 	*Client
-	cacheKey string
 }
 
 // ClientCache manages cached GitHub clients to reduce token requests
