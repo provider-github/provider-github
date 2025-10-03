@@ -413,7 +413,7 @@ func getUpdateRepoIds(ctx context.Context, repoCache *repositoryCache, crRepos [
 	if len(updateRepos) == 0 {
 		return []int64{}, nil
 	}
-	
+
 	// Use batch repository ID lookup with caching
 	return repoCache.batchGetRepositoryIDs(ctx, updateRepos)
 }
@@ -455,7 +455,7 @@ func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string,
 				return ctx.Err()
 			default:
 			}
-			
+
 			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
 			if err != nil {
 				return err
@@ -471,7 +471,7 @@ func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string,
 				return ctx.Err()
 			default:
 			}
-			
+
 			_, err := gh.Actions.RemoveEnabledReposInOrg(ctx, name, toDeleteRepo)
 			if err != nil {
 				return err
@@ -484,10 +484,10 @@ func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string,
 
 func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
 	crOrgSecretsToConfig := make(map[string][]int64, len(secrets))
-	
+
 	// Create repository cache for this function to avoid repeated lookups
 	repoCache := newRepositoryCache(gh, org)
-	
+
 	for _, secret := range secrets {
 		// Check for context timeout before processing each secret
 		select {
@@ -495,19 +495,19 @@ func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, o
 			return nil, ctx.Err()
 		default:
 		}
-		
+
 		// Collect repository names for batch lookup
 		repoNames := make([]string, 0, len(secret.RepositoryAccessList))
 		for _, selectedRepo := range secret.RepositoryAccessList {
 			repoNames = append(repoNames, selectedRepo.Repo)
 		}
-		
+
 		// Batch lookup repository IDs using cache
 		repoIds, err := repoCache.batchGetRepositoryIDs(ctx, repoNames)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		sort.Slice(repoIds, func(i, j int) bool {
 			return repoIds[i] < repoIds[j]
 		})
@@ -530,7 +530,7 @@ func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner strin
 			return nil, ctx.Err()
 		default:
 		}
-		
+
 		ghSecret, _, err := c.GetOrgSecret(ctx, owner, secret.Name)
 		if err != nil {
 			return nil, err
@@ -545,7 +545,7 @@ func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner strin
 					return nil, ctx.Err()
 				default:
 				}
-				
+
 				ghRepo, resp, err := c.ListSelectedReposForOrgSecret(ctx, owner, secret.Name, opts)
 				if err != nil {
 					return nil, err
