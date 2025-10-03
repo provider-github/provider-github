@@ -56,6 +56,7 @@ func main() {
 		syncInterval     = app.Flag("sync", "How often all resources will be double-checked for drift from the desired state.").Short('s').Default("1h").Duration()
 		pollInterval     = app.Flag("poll", "How often individual resources will be checked for drift from the desired state").Default("1m").Duration()
 		maxReconcileRate = app.Flag("max-reconcile-rate", "The global maximum rate per second at which resources may checked for drift from the desired state.").Default("10").Int()
+		reconcileTimeout = app.Flag("reconcile-timeout", "Timeout for controller reconciliation operations.").Default("1m").Duration()
 
 		namespace                  = app.Flag("namespace", "Namespace used to set as default scope in default secret store config.").Default("crossplane-system").Envar("POD_NAMESPACE").String()
 		enableExternalSecretStores = app.Flag("enable-external-secret-stores", "Enable support for ExternalSecretStores.").Default("false").Envar("ENABLE_EXTERNAL_SECRET_STORES").Bool()
@@ -136,7 +137,11 @@ func main() {
 		log.Info("Alpha feature enabled", "flag", features.EnableAlphaManagementPolicies)
 	}
 
-	kingpin.FatalIfError(github.Setup(mgr, o, metrics), "Cannot setup GitHub controllers")
+	if *reconcileTimeout > 0 {
+		kingpin.FatalIfError(github.SetupWithTimeout(mgr, o, metrics, *reconcileTimeout), "Cannot setup GitHub controllers")
+	} else {
+		kingpin.FatalIfError(github.Setup(mgr, o, metrics), "Cannot setup GitHub controllers")
+	}
 
 	// Start custom metrics server on a different port
 	go func() {

@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"time"
+
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -43,4 +45,24 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		}
 	}
 	return nil
+}
+
+// SetupWithTimeout creates all GitHub controllers with configurable reconcile timeout
+func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, reconcileTimeout time.Duration) error {
+	// Setup all controllers with timeout
+	setupFuncs := []func(ctrl.Manager, controller.Options, *telemetry.RateLimitMetrics, time.Duration) error{
+		organization.SetupWithTimeout,
+		repository.SetupWithTimeout,
+		membership.SetupWithTimeout,
+		team.SetupWithTimeout,
+	}
+
+	for _, setup := range setupFuncs {
+		if err := setup(mgr, o, metrics, reconcileTimeout); err != nil {
+			return err
+		}
+	}
+
+	// Setup config controller (no timeout needed for config)
+	return config.Setup(mgr, o, metrics)
 }
