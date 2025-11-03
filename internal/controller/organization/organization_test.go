@@ -191,7 +191,8 @@ func TestObserve(t *testing.T) {
 				},
 			},
 			args: args{
-				mg: organization([]string{repo, repo2}, withDescription()),
+				ctx: context.Background(),
+				mg:  organization([]string{repo, repo2}, withDescription()),
 			},
 			want: want{
 				o: managed.ExternalObservation{
@@ -231,14 +232,18 @@ func TestObserve(t *testing.T) {
 						},
 						Repositories: &fake.MockRepositoriesClient{
 							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-								return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
+								if repo == orgSecretRepo1 {
+									return githubOrgSecretRepo(), fake.GenerateEmptyResponse(), nil
+								}
+								return nil, fake.GenerateEmptyResponse(), nil
 							},
 						},
 					},
 				},
 			},
 			args: args{
-				mg: organization([]string{repo, repo2}),
+				ctx: context.Background(),
+				mg:  organization([]string{repo, repo2}),
 			},
 			want: want{
 				o: managed.ExternalObservation{
@@ -285,7 +290,8 @@ func TestObserve(t *testing.T) {
 				},
 			},
 			args: args{
-				mg: organization([]string{repo, repo2}),
+				ctx: context.Background(),
+				mg:  organization([]string{repo, repo2}),
 			},
 			want: want{
 				o: managed.ExternalObservation{

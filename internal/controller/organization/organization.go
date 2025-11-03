@@ -21,6 +21,8 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"sync"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -48,6 +50,85 @@ import (
 	"github.com/google/go-github/v62/github"
 )
 
+// repositoryCache provides a per-reconciliation cache for repository ID lookups
+// to avoid repeated API calls for the same repositories
+type repositoryCache struct {
+	mu    sync.RWMutex
+	cache map[string]int64 // repo name -> repo ID
+	gh    *ghclient.RateLimitClient
+	org   string
+}
+
+// newRepositoryCache creates a new repository cache for the given organization
+func newRepositoryCache(gh *ghclient.RateLimitClient, org string) *repositoryCache {
+	return &repositoryCache{
+		cache: make(map[string]int64),
+		gh:    gh,
+		org:   org,
+	}
+}
+
+// getRepositoryID gets a repository ID, using cache if available
+func (rc *repositoryCache) getRepositoryID(ctx context.Context, repoName string) (int64, error) {
+	// Check cache first (read lock)
+	rc.mu.RLock()
+	if id, exists := rc.cache[repoName]; exists {
+		rc.mu.RUnlock()
+		return id, nil
+	}
+	rc.mu.RUnlock()
+
+	// Not in cache, fetch from API (write lock)
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	// Double-check in case another goroutine added it
+	if id, exists := rc.cache[repoName]; exists {
+		return id, nil
+	}
+
+	// Check for context timeout
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+
+	// Fetch from GitHub API
+	repo, _, err := rc.gh.Repositories.Get(ctx, rc.org, repoName)
+	if err != nil {
+		return 0, err
+	}
+
+	id := repo.GetID()
+	rc.cache[repoName] = id
+	return id, nil
+}
+
+// batchGetRepositoryIDs gets multiple repository IDs efficiently
+func (rc *repositoryCache) batchGetRepositoryIDs(ctx context.Context, repoNames []string) ([]int64, error) {
+	if len(repoNames) == 0 {
+		return []int64{}, nil
+	}
+
+	repoIDs := make([]int64, 0, len(repoNames))
+	for _, repoName := range repoNames {
+		// Check for context timeout
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		id, err := rc.getRepositoryID(ctx, repoName)
+		if err != nil {
+			return nil, err
+		}
+		repoIDs = append(repoIDs, id)
+	}
+	return repoIDs, nil
+}
+
 const (
 	errNotOrganization = "managed resource is not a Organization custom resource"
 	errTrackPCUsage    = "cannot track ProviderConfig usage"
@@ -59,6 +140,11 @@ const (
 
 // Setup adds a controller that reconciles Organization managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
+	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
+}
+
+// SetupWithTimeout adds a controller that reconciles Organization managed resources with configurable timeout.
+func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
 	name := managed.ControllerName(v1alpha1.OrganizationGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
@@ -66,8 +152,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
 	}
 
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.OrganizationGroupVersionKind),
+	reconcilerOptions := []managed.ReconcilerOption{
 		managed.WithExternalConnecter(&connector{
 			kube:        mgr.GetClient(),
 			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
@@ -76,7 +161,17 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...))
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	// Add timeout if specified
+	if timeout > 0 {
+		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1alpha1.OrganizationGroupVersionKind),
+		reconcilerOptions...)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
@@ -307,7 +402,7 @@ func getSortedRepoNames(repos []*github.Repository) []string {
 	return repoNames
 }
 
-func getUpdateRepoIds(ctx context.Context, gh *ghclient.RateLimitClient, org string, crRepos []string, aRepos []string) ([]int64, error) {
+func getUpdateRepoIds(ctx context.Context, repoCache *repositoryCache, crRepos []string, aRepos []string) ([]int64, error) {
 	var updateRepos []string
 	for _, repo := range crRepos {
 		// Check if the repository from CRD is not in GitHub
@@ -315,16 +410,12 @@ func getUpdateRepoIds(ctx context.Context, gh *ghclient.RateLimitClient, org str
 			updateRepos = append(updateRepos, repo)
 		}
 	}
-	reposIds := make([]int64, 0, len(updateRepos))
-	for _, repo := range updateRepos {
-		repo, _, err := gh.Repositories.Get(ctx, org, repo)
-		repoID := repo.GetID()
-		reposIds = append(reposIds, repoID)
-		if err != nil {
-			return nil, err
-		}
+	if len(updateRepos) == 0 {
+		return []int64{}, nil
 	}
-	return reposIds, nil
+
+	// Use batch repository ID lookup with caching
+	return repoCache.batchGetRepositoryIDs(ctx, updateRepos)
 }
 
 func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, cr *v1alpha1.Organization) ([]int64, []int64, error) {
@@ -339,12 +430,15 @@ func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.RateLimitClien
 	// Extract repository names from the list
 	aRepos := getSortedRepoNames(aResp.Repositories)
 
-	missingReposIds, err := getUpdateRepoIds(ctx, gh, name, crARepos, aRepos)
+	// Create repository cache for this reconciliation
+	repoCache := newRepositoryCache(gh, name)
+
+	missingReposIds, err := getUpdateRepoIds(ctx, repoCache, crARepos, aRepos)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	toDeleteReposIds, err := getUpdateRepoIds(ctx, gh, name, aRepos, crARepos)
+	toDeleteReposIds, err := getUpdateRepoIds(ctx, repoCache, aRepos, crARepos)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,6 +449,13 @@ func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.RateLimitClien
 func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, missingReposIds []int64, toDeleteReposIds []int64) error {
 	if len(missingReposIds) > 0 {
 		for _, missingRepo := range missingReposIds {
+			// Check for context timeout
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
 			if err != nil {
 				return err
@@ -364,6 +465,13 @@ func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string,
 
 	if len(toDeleteReposIds) > 0 {
 		for _, toDeleteRepo := range toDeleteReposIds {
+			// Check for context timeout
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			_, err := gh.Actions.RemoveEnabledReposInOrg(ctx, name, toDeleteRepo)
 			if err != nil {
 				return err
@@ -376,15 +484,30 @@ func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string,
 
 func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
 	crOrgSecretsToConfig := make(map[string][]int64, len(secrets))
+
+	// Create repository cache for this function to avoid repeated lookups
+	repoCache := newRepositoryCache(gh, org)
+
 	for _, secret := range secrets {
-		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
-		for _, selectedRepo := range secret.RepositoryAccessList {
-			ghRepo, _, err := gh.Repositories.Get(ctx, org, selectedRepo.Repo)
-			if err != nil {
-				return nil, err
-			}
-			repoIds = append(repoIds, ghRepo.GetID())
+		// Check for context timeout before processing each secret
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
+
+		// Collect repository names for batch lookup
+		repoNames := make([]string, 0, len(secret.RepositoryAccessList))
+		for _, selectedRepo := range secret.RepositoryAccessList {
+			repoNames = append(repoNames, selectedRepo.Repo)
+		}
+
+		// Batch lookup repository IDs using cache
+		repoIds, err := repoCache.batchGetRepositoryIDs(ctx, repoNames)
+		if err != nil {
+			return nil, err
+		}
+
 		sort.Slice(repoIds, func(i, j int) bool {
 			return repoIds[i] < repoIds[j]
 		})
@@ -401,6 +524,13 @@ type OrgSecretGetter interface {
 func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
 	orgSecretsToConfig := make(map[string][]int64, len(secrets))
 	for _, secret := range secrets {
+		// Check for context timeout before processing each secret
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		ghSecret, _, err := c.GetOrgSecret(ctx, owner, secret.Name)
 		if err != nil {
 			return nil, err
@@ -409,6 +539,13 @@ func getOrgSecretsWithConfig(ctx context.Context, c OrgSecretGetter, owner strin
 		if ghSecret != nil && ghSecret.Visibility == "selected" {
 			opts := &github.ListOptions{PerPage: 100}
 			for {
+				// Check for context timeout in pagination loop
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
+
 				ghRepo, resp, err := c.ListSelectedReposForOrgSecret(ctx, owner, secret.Name, opts)
 				if err != nil {
 					return nil, err
