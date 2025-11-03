@@ -4,6 +4,7 @@ PROJECT_NAME := provider-github
 PROJECT_REPO := github.com/crossplane/$(PROJECT_NAME)
 
 PLATFORMS ?= linux_amd64 linux_arm64
+GOLANGCILINT_VERSION ?= 2.4.0
 -include build/makelib/common.mk
 
 # ====================================================================================
