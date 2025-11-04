@@ -97,11 +97,21 @@ var (
 	rr1actorId                    int64 = 123
 	rr1Include                          = []string{"include"}
 	rr1Exclude                          = []string{"exclude"}
+
+	topic1 = "go"
+	topic2 = "kubernetes"
+	topic3 = "crossplane"
 )
 
 func withTeamPermission() repositoryModifier {
 	return func(r *v1alpha1.Repository) {
 		r.Spec.ForProvider.Permissions.Teams[1].Role = team1Role
+	}
+}
+
+func withDifferentTopics() repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.Topics = []string{"different", "topics"}
 	}
 }
 
@@ -225,6 +235,8 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 		},
 	}
 
+	cr.Spec.ForProvider.Topics = []string{topic1, topic2, topic3}
+
 	meta.SetExternalName(cr, repo)
 
 	for _, f := range m {
@@ -241,6 +253,7 @@ func githubRepository() *github.Repository {
 		Private:     &private,
 		IsTemplate:  &isTemplate,
 		Fork:        github.Bool(false),
+		Topics:      []string{topic1, topic2, topic3},
 	}
 }
 
@@ -537,6 +550,52 @@ func TestObserve(t *testing.T) {
 				o: managed.ExternalObservation{
 					ResourceExists:   true,
 					ResourceUpToDate: true,
+				},
+				err: nil,
+			},
+		},
+		"NotUpToDateTopicsMismatch": {
+			fields: fields{github: &ghclient.RateLimitClient{
+				Client: &ghclient.Client{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockEdit: func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error) {
+							return nil, nil, nil
+						},
+						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			},
+			},
+			args: args{
+				mg: repository(withDifferentTopics()),
+			},
+			want: want{
+				o: managed.ExternalObservation{
+					ResourceExists:   true,
+					ResourceUpToDate: false,
 				},
 				err: nil,
 			},
