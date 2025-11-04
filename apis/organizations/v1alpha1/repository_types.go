@@ -70,6 +70,12 @@ type RepositoryParameters struct {
 	// Default: false
 	// +optional
 	IsTemplate *bool `json:"isTemplate,omitempty"`
+
+	// Topics is the list of topics for the repository.
+	// Topics help categorize and discover repositories.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Topics []string `json:"topics,omitempty"`
 }
 
 // RepositoryParameters are the configurable fields of a Repository.

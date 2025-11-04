@@ -745,6 +745,14 @@ spec:
                       - name
                       type: object
                     type: array
+                  topics:
+                    description: |-
+                      Topics is the list of topics for the repository.
+                      Topics help categorize and discover repositories.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
                   webhooks:
                     items:
                       description: |-

@@ -271,6 +271,16 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return notUpToDate, nil
 	}
 
+	// Check topics
+	if cr.Spec.ForProvider.Topics != nil {
+		crTopics := util.SortAndReturn(cr.Spec.ForProvider.Topics)
+		ghTopics := util.SortAndReturn(repo.Topics)
+
+		if !reflect.DeepEqual(crTopics, ghTopics) {
+			return notUpToDate, nil
+		}
+	}
+
 	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalObservation{
@@ -947,6 +957,14 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 			}
 		}
 
+	}
+
+	// Set topics if specified
+	if cr.Spec.ForProvider.Topics != nil && len(cr.Spec.ForProvider.Topics) > 0 {
+		_, _, err = c.github.Repositories.ReplaceAllTopics(ctx, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Topics)
+		if err != nil {
+			return managed.ExternalCreation{}, err
+		}
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -1757,6 +1775,14 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 			return managed.ExternalUpdate{}, err
 		}
 
+	}
+
+	// Update topics if specified
+	if cr.Spec.ForProvider.Topics != nil {
+		_, _, err = c.github.Repositories.ReplaceAllTopics(ctx, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Topics)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
 	}
 
 	return managed.ExternalUpdate{}, nil

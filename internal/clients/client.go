@@ -102,6 +102,7 @@ type RepositoriesClient interface {
 	CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
 	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
 	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
+	ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
 }
 
 // NewClient creates a new client.

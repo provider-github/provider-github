@@ -125,6 +125,7 @@ type MockRepositoriesClient struct {
 	MockCreateRuleset                       func(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
 	MockUpdateRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
 	MockDeleteRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
+	MockReplaceAllTopics                    func(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
 }
 
 func (m *MockRepositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
@@ -225,6 +226,10 @@ func (m *MockRepositoriesClient) UpdateRuleset(ctx context.Context, owner, repo 
 
 func (m *MockRepositoriesClient) DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
 	return m.MockDeleteRuleset(ctx, owner, repo, rulesetID)
+}
+
+func (m *MockRepositoriesClient) ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error) {
+	return m.MockReplaceAllTopics(ctx, owner, repo, topics)
 }
 
 type MockTeamsClient struct {
