@@ -960,7 +960,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	// Set topics if specified
-	if cr.Spec.ForProvider.Topics != nil && len(cr.Spec.ForProvider.Topics) > 0 {
+	if len(cr.Spec.ForProvider.Topics) > 0 {
 		_, _, err = c.github.Repositories.ReplaceAllTopics(ctx, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Topics)
 		if err != nil {
 			return managed.ExternalCreation{}, err
