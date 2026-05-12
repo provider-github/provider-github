@@ -51,7 +51,7 @@ make generate            # Regenerate CRDs and zz_generated_*.go via controller-
 make lint                # golangci-lint (v2.4.0)
 ```
 
-If your system Go is 1.26+ (the project targets `go 1.23.12`), `make reviewable` / `make lint` will panic with `file requires newer Go version go1.26 (application built with go1.25)`. Set `GOTOOLCHAIN=go1.23.12` to work around it locally — CI is unaffected because it uses Go 1.23.
+If your system Go is 1.26+ (the project targets `go 1.24.0`), `make reviewable` / `make lint` will panic with `file requires newer Go version go1.26 (application built with go1.25)`. Set `GOTOOLCHAIN=go1.24.0` to work around it locally — CI is unaffected because it uses Go 1.24.
 
 Run a single test:
 
