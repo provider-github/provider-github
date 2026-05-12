@@ -54,15 +54,17 @@ var (
 	clientCacheTimeout = 50 * time.Minute
 )
 
-// generateCacheKey creates a consistent cache key from credentials
-func generateCacheKey(creds string) string {
+// GenerateCacheKey creates a consistent cache key from credentials. The same
+// key is used both for the client cache and for the per-app rate-limit quota
+// pool, so that each unique credential blob has a single shared identity.
+func GenerateCacheKey(creds string) string {
 	hash := sha256.Sum256([]byte(creds))
 	return fmt.Sprintf("%x", hash[:8]) // Use first 8 bytes of hash
 }
 
 // NewCachedClient creates a new cached GitHub client that reuses tokens
 func NewCachedClient(creds string) (*Client, error) {
-	cacheKey := generateCacheKey(creds)
+	cacheKey := GenerateCacheKey(creds)
 
 	globalClientCache.mu.Lock()
 	defer globalClientCache.mu.Unlock()
@@ -91,6 +93,20 @@ func NewCachedClient(creds string) (*Client, error) {
 	}
 
 	return client, nil
+}
+
+// ExtractAppIDs returns the GitHub App ID and Installation ID from a
+// credential string. The credential string format is
+// "appID,installationID,privateKeyPEM"; PEM bodies are base64 plus
+// dashes/newlines and never contain commas, so a 3-way split on the first
+// two commas is sufficient. The returned values are kept as raw strings
+// because they are used as Prometheus label values, not for arithmetic.
+func ExtractAppIDs(creds string) (appID, installationID string, err error) {
+	parts := strings.SplitN(creds, ",", 3)
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("invalid format for credentials")
+	}
+	return parts[0], parts[1], nil
 }
 
 // createNewClient contains the original client creation logic

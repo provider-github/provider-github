@@ -29,6 +29,15 @@ import (
 type ProviderConfigSpec struct {
 	// Credentials required to authenticate to this provider.
 	Credentials ProviderCredentials `json:"credentials"`
+
+	// AdditionalCredentials is an optional list of extra GitHub App
+	// credentials. When set, the provider treats Credentials together with
+	// these as a pool: on every reconcile it picks the credential with the
+	// most available rate-limit quota and skips any whose quota was
+	// recently exhausted (HTTP 429), giving the GitHub apps time to
+	// reset before being tried again.
+	// +optional
+	AdditionalCredentials []ProviderCredentials `json:"additionalCredentials,omitempty"`
 }
 
 // ProviderCredentials required to authenticate.

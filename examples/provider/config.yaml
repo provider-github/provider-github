@@ -19,3 +19,37 @@ spec:
       namespace: crossplane-system
       name: example-provider-secret
       key: creds
+
+---
+# Multi-app example: additionalCredentials lets you pool extra GitHub Apps
+# alongside the primary credentials. On each reconcile the provider picks
+# the app with the most remaining rate-limit quota and skips any whose
+# quota was recently exhausted (HTTP 429) until X-RateLimit-Reset (with a
+# 30s floor). Each entry has the same shape as `credentials`.
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: crossplane-system
+  name: example-provider-secret-app2
+type: Opaque
+data:
+  # creds: $APP_ID,$INSTALLATION_ID,$PRIVATE_KEY
+
+---
+apiVersion: github.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: example-multi-app
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: example-provider-secret
+      key: creds
+  additionalCredentials:
+    - source: Secret
+      secretRef:
+        namespace: crossplane-system
+        name: example-provider-secret-app2
+        key: creds

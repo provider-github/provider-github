@@ -47,7 +47,6 @@ const (
 	errNotMembership = "managed resource is not a Membership custom resource"
 	errTrackPCUsage  = "cannot track ProviderConfig usage"
 	errGetPC         = "cannot get ProviderConfig"
-	errGetCreds      = "cannot get credentials"
 
 	errNewClient = "cannot create new Service"
 )
@@ -68,10 +67,9 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 
 	reconcilerOptions := []managed.ReconcilerOption{
 		managed.WithExternalConnecter(&connector{
-			kube:        mgr.GetClient(),
-			usage:       resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newClientFn: ghclient.NewCachedClient,
-			metrics:     metrics}),
+			kube:    mgr.GetClient(),
+			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			metrics: metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
@@ -96,10 +94,9 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 }
 
 type connector struct {
-	kube        client.Client
-	usage       resource.Tracker
-	newClientFn func(string) (*ghclient.Client, error)
-	metrics     *telemetry.RateLimitMetrics
+	kube    client.Client
+	usage   resource.Tracker
+	metrics *telemetry.RateLimitMetrics
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
@@ -117,25 +114,12 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	cd := pc.Spec.Credentials
-	data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
-	if err != nil {
-		return nil, errors.Wrap(err, errGetCreds)
-	}
-
-	gh, err := c.newClientFn(string(data))
+	rlc, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	// Create rate limit tracking client
-	rateLimitClient := ghclient.NewRateLimitClient(gh, c.metrics)
-
-	// Get organization name for rate limit tracking
-	orgName := cr.Spec.ForProvider.Org
-	rateLimitClientWithOrg := rateLimitClient.WithRateLimitTracking(orgName)
-
-	return &external{github: rateLimitClientWithOrg}, nil
+	return &external{github: rlc}, nil
 }
 
 type external struct {
