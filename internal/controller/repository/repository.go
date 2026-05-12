@@ -32,6 +32,7 @@ import (
 	pointer "k8s.io/utils/ptr"
 
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -208,11 +209,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
-		protectedBranches, err := listProtectedBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		protectedBranches, existingBranches, err := listBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 		crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+		skipped := filterMissingBranchProtectionRules(crBPRToConfig, existingBranches)
+		setBranchProtectionPartialCondition(ctx, cr, skipped)
 		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
 		if err != nil {
 			return managed.ExternalObservation{}, err
@@ -582,11 +585,14 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.RateLimitClie
 	return uToPermission, nil
 }
 
-// listProtectedBranches retrieves all protected branches for a given GitHub repository.
-// It uses pagination to handle large numbers of branches, fetching 100 branches per API call.
-func listProtectedBranches(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Branch, error) {
+// listBranches lists all branches for a GitHub repository in a single
+// paginated call and returns both the protected subset and the set of all
+// branch names. Callers use the protected subset to fetch existing
+// protection configs, and the name set to filter out CR rules that point
+// at branches the repo doesn't have — preventing wasted 404 calls to
+// UpdateBranchProtection.
+func listBranches(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Branch, map[string]bool, error) {
 	opts := &github.BranchListOptions{
-		Protected:   github.Bool(true),
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
 	var allBranches []*github.Branch
@@ -594,7 +600,7 @@ func listProtectedBranches(ctx context.Context, gh *ghclient.RateLimitClient, or
 	for {
 		branches, resp, err := gh.Repositories.ListBranches(ctx, org, repoName, opts)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		allBranches = append(allBranches, branches...)
 
@@ -604,7 +610,63 @@ func listProtectedBranches(ctx context.Context, gh *ghclient.RateLimitClient, or
 		opts.Page = resp.NextPage
 	}
 
-	return allBranches, nil
+	existing := make(map[string]bool, len(allBranches))
+	var protected []*github.Branch
+	for _, b := range allBranches {
+		existing[b.GetName()] = true
+		if b.GetProtected() {
+			protected = append(protected, b)
+		}
+	}
+	return protected, existing, nil
+}
+
+// filterMissingBranchProtectionRules removes entries from rules whose
+// branch is not present in existing. Returns the sorted list of skipped
+// branch names so callers can log and emit an Event. Mutates rules.
+func filterMissingBranchProtectionRules(rules map[string]v1alpha1.BranchProtectionRule, existing map[string]bool) []string {
+	var skipped []string
+	for branch := range rules {
+		if !existing[branch] {
+			skipped = append(skipped, branch)
+			delete(rules, branch)
+		}
+	}
+	sort.Strings(skipped)
+	return skipped
+}
+
+// Condition surfaced on the Repository CR when one or more declared
+// branch protection rules can't be applied because their target branch
+// doesn't exist in the repo. Conditions are quieter than Events:
+// Crossplane only writes a status update when the condition's
+// (Status, Reason, Message) actually changes, so steady-state and
+// controller restarts don't generate noise.
+const (
+	typeBranchProtectionPartial xpv1.ConditionType   = "BranchProtectionPartial"
+	reasonBranchesMissing       xpv1.ConditionReason = "BranchesMissing"
+	reasonAllBranchesPresent    xpv1.ConditionReason = "AllBranchesPresent"
+)
+
+// setBranchProtectionPartialCondition reflects the current skipped set
+// on the CR's status. Idempotent — SetConditions ignores writes whose
+// (Status, Reason, Message) match the existing condition.
+func setBranchProtectionPartialCondition(ctx context.Context, cr *v1alpha1.Repository, skipped []string) {
+	c := xpv1.Condition{
+		Type:               typeBranchProtectionPartial,
+		LastTransitionTime: metav1.Now(),
+	}
+	if len(skipped) == 0 {
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonAllBranchesPresent
+	} else {
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonBranchesMissing
+		c.Message = fmt.Sprintf("branches do not exist in repo: %s", strings.Join(skipped, ", "))
+		ctrl.LoggerFrom(ctx).Info("skipping branch protection rules for missing branches",
+			"repository", meta.GetExternalName(cr), "branches", skipped)
+	}
+	cr.SetConditions(c)
 }
 
 // getBPRMapFromCr generates a map from a slice of BranchProtectionRules. Each rule is first processed:
@@ -919,8 +981,14 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		_, existingBranches, err := listBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		if err != nil {
+			return managed.ExternalCreation{}, err
+		}
 		// getBPRMapFromCr() provides defaults for optional *bool fields
 		rulesMap := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+		skipped := filterMissingBranchProtectionRules(rulesMap, existingBranches)
+		setBranchProtectionPartialCondition(ctx, cr, skipped)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
@@ -1200,11 +1268,13 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
 func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
-	protectedBranches, err := listProtectedBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	protectedBranches, existingBranches, err := listBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
 		return err
 	}
 	crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
+	skipped := filterMissingBranchProtectionRules(crBPRToConfig, existingBranches)
+	setBranchProtectionPartialCondition(ctx, cr, skipped)
 	ghBPRToConfig, err := getBPRWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, protectedBranches)
 	if err != nil {
 		return err

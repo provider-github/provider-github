@@ -27,11 +27,13 @@ import (
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-github/v62/github"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -636,5 +638,144 @@ func TestObserve(t *testing.T) {
 				t.Errorf("\n%s\ne.Observe(...): -want, +got:\n%s\n", tc.reason, diff)
 			}
 		})
+	}
+}
+
+// filterMissingBranchProtectionRules is what stops the controller from
+// calling UpdateBranchProtection on branches that don't exist. Asserts:
+// rules for missing branches are removed from the map, rules for existing
+// branches are kept untouched, and the skipped list is returned sorted so
+// the condition message is stable across reconciles.
+func TestFilterMissingBranchProtectionRules(t *testing.T) {
+	cases := map[string]struct {
+		rules       map[string]v1alpha1.BranchProtectionRule
+		existing    map[string]bool
+		wantRules   map[string]v1alpha1.BranchProtectionRule
+		wantSkipped []string
+	}{
+		"AllBranchesExist_NothingFiltered": {
+			rules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			existing: map[string]bool{"main": true, "develop": true},
+			wantRules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			wantSkipped: nil,
+		},
+		"SomeMissing_FilteredAndReturnedSorted": {
+			rules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"release": {Branch: "release"},
+				"develop": {Branch: "develop"},
+			},
+			existing: map[string]bool{"main": true},
+			wantRules: map[string]v1alpha1.BranchProtectionRule{
+				"main": {Branch: "main"},
+			},
+			wantSkipped: []string{"develop", "release"},
+		},
+		"AllMissing_MapEmptied": {
+			rules: map[string]v1alpha1.BranchProtectionRule{
+				"develop": {Branch: "develop"},
+				"release": {Branch: "release"},
+			},
+			existing:    map[string]bool{},
+			wantRules:   map[string]v1alpha1.BranchProtectionRule{},
+			wantSkipped: []string{"develop", "release"},
+		},
+		"EmptyInput_NoChange": {
+			rules:       map[string]v1alpha1.BranchProtectionRule{},
+			existing:    map[string]bool{"main": true},
+			wantRules:   map[string]v1alpha1.BranchProtectionRule{},
+			wantSkipped: nil,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gotSkipped := filterMissingBranchProtectionRules(tc.rules, tc.existing)
+			if diff := cmp.Diff(tc.wantSkipped, gotSkipped); diff != "" {
+				t.Errorf("skipped: -want, +got:\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantRules, tc.rules); diff != "" {
+				t.Errorf("rules after filter: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// setBranchProtectionPartialCondition is the operator-facing signal for
+// "some desired BPRs can't apply right now". Asserts: non-empty skipped →
+// status True with sorted branch names in the message; empty skipped →
+// status False (resource is fully converged on this dimension). Crossplane's
+// SetConditions dedupes identical writes, so steady-state reconciles don't
+// thrash the status — this test pins the (Status, Reason, Message) shape
+// that dedup depends on.
+func TestSetBranchProtectionPartialCondition(t *testing.T) {
+	cases := map[string]struct {
+		skipped     []string
+		wantStatus  corev1.ConditionStatus
+		wantReason  xpv1.ConditionReason
+		wantInMsg   []string
+		wantMsgZero bool
+	}{
+		"Empty_FalseAndAllBranchesPresentReason": {
+			skipped:     nil,
+			wantStatus:  corev1.ConditionFalse,
+			wantReason:  "AllBranchesPresent",
+			wantMsgZero: true,
+		},
+		"NonEmpty_TrueAndNamesBranchesInMessage": {
+			skipped:    []string{"develop", "release"},
+			wantStatus: corev1.ConditionTrue,
+			wantReason: "BranchesMissing",
+			wantInMsg:  []string{"develop", "release"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cr := &v1alpha1.Repository{}
+			setBranchProtectionPartialCondition(context.Background(), cr, tc.skipped)
+
+			c := cr.GetCondition("BranchProtectionPartial")
+			if c.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", c.Status, tc.wantStatus)
+			}
+			if c.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", c.Reason, tc.wantReason)
+			}
+			if tc.wantMsgZero && c.Message != "" {
+				t.Errorf("Message = %q, want empty", c.Message)
+			}
+			for _, want := range tc.wantInMsg {
+				if !strings.Contains(c.Message, want) {
+					t.Errorf("Message %q missing %q", c.Message, want)
+				}
+			}
+		})
+	}
+}
+
+// SetConditions on identical content is idempotent. Calling
+// setBranchProtectionPartialCondition twice with the same skipped set
+// must not append a duplicate to status.conditions — otherwise every
+// reconcile would grow the slice and produce K8s status writes.
+func TestSetBranchProtectionPartialCondition_Idempotent(t *testing.T) {
+	cr := &v1alpha1.Repository{}
+	setBranchProtectionPartialCondition(context.Background(), cr, []string{"develop"})
+	setBranchProtectionPartialCondition(context.Background(), cr, []string{"develop"})
+
+	count := 0
+	for _, c := range cr.Status.Conditions {
+		if c.Type == "BranchProtectionPartial" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("BranchProtectionPartial conditions = %d, want 1", count)
 	}
 }
