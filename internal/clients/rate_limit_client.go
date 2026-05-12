@@ -328,6 +328,42 @@ func (rac *RateLimitActionsClient) SetSelectedReposForOrgSecret(ctx context.Cont
 	return resp, err
 }
 
+func (rac *RateLimitActionsClient) GetOrgVariable(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error) {
+	return recordRateLimit(ctx, rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.GetOrgVariable", func() (*github.ActionsVariable, *github.Response, error) {
+		return rac.ActionsClient.GetOrgVariable(ctx, org, name)
+	})
+}
+
+func (rac *RateLimitActionsClient) CreateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
+	resp, err := rac.ActionsClient.CreateOrgVariable(ctx, org, variable)
+	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.CreateOrgVariable", resp, err)
+	return resp, err
+}
+
+func (rac *RateLimitActionsClient) UpdateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
+	resp, err := rac.ActionsClient.UpdateOrgVariable(ctx, org, variable)
+	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.UpdateOrgVariable", resp, err)
+	return resp, err
+}
+
+func (rac *RateLimitActionsClient) DeleteOrgVariable(ctx context.Context, org, name string) (*github.Response, error) {
+	resp, err := rac.ActionsClient.DeleteOrgVariable(ctx, org, name)
+	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.DeleteOrgVariable", resp, err)
+	return resp, err
+}
+
+func (rac *RateLimitActionsClient) ListSelectedReposForOrgVariable(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+	return recordRateLimit(ctx, rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.ListSelectedReposForOrgVariable", func() (*github.SelectedReposList, *github.Response, error) {
+		return rac.ActionsClient.ListSelectedReposForOrgVariable(ctx, org, name, opts)
+	})
+}
+
+func (rac *RateLimitActionsClient) SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
+	resp, err := rac.ActionsClient.SetSelectedReposForOrgVariable(ctx, org, name, ids)
+	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.SetSelectedReposForOrgVariable", resp, err)
+	return resp, err
+}
+
 // RateLimitDependabotClient methods
 func (rdc *RateLimitDependabotClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
 	return recordRateLimit(ctx, rdc.metrics, rdc.org, rdc.appID, rdc.installationID, rdc.cacheKey, "Dependabot.GetOrgSecret", func() (*github.Secret, *github.Response, error) {

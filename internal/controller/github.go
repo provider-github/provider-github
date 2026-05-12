@@ -25,6 +25,7 @@ import (
 	"github.com/crossplane/provider-github/internal/controller/config"
 	"github.com/crossplane/provider-github/internal/controller/membership"
 	"github.com/crossplane/provider-github/internal/controller/organization"
+	"github.com/crossplane/provider-github/internal/controller/organizationvariable"
 	"github.com/crossplane/provider-github/internal/controller/repository"
 	"github.com/crossplane/provider-github/internal/controller/team"
 	"github.com/crossplane/provider-github/internal/telemetry"
@@ -39,6 +40,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		repository.Setup,
 		membership.Setup,
 		team.Setup,
+		organizationvariable.Setup,
 	} {
 		if err := setup(mgr, o, metrics); err != nil {
 			return err
@@ -55,6 +57,7 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		repository.SetupWithTimeout,
 		membership.SetupWithTimeout,
 		team.SetupWithTimeout,
+		organizationvariable.SetupWithTimeout,
 	}
 
 	for _, setup := range setupFuncs {

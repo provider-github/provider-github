@@ -43,6 +43,12 @@ type ActionsClient interface {
 	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
+	GetOrgVariable(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error)
+	CreateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
+	UpdateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
+	DeleteOrgVariable(ctx context.Context, org, name string) (*github.Response, error)
+	ListSelectedReposForOrgVariable(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
+	SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
 }
 
 type DependabotClient interface {
