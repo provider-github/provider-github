@@ -9,8 +9,7 @@ import (
 
 type MockActionsClient struct {
 	MockListEnabledReposInOrg           func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
-	MockAddEnabledReposInOrg            func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
-	MockRemoveEnabledReposInOrg         func(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
+	MockSetEnabledReposInOrg            func(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
 	MockGetOrgSecret                    func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	MockListSelectedReposForOrgSecret   func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 	MockSetSelectedReposForOrgSecret    func(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
@@ -26,12 +25,8 @@ func (m *MockActionsClient) ListEnabledReposInOrg(ctx context.Context, owner str
 	return m.MockListEnabledReposInOrg(ctx, owner, opts)
 }
 
-func (m *MockActionsClient) AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
-	return m.MockAddEnabledReposInOrg(ctx, owner, repositoryID)
-}
-
-func (m *MockActionsClient) RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
-	return m.MockRemoveEnabledReposInOrg(ctx, owner, repositoryID)
+func (m *MockActionsClient) SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error) {
+	return m.MockSetEnabledReposInOrg(ctx, owner, repositoryIDs)
 }
 
 func (m *MockActionsClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {

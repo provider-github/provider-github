@@ -27,6 +27,23 @@ import (
 
 // ActionsConfiguration are the configurable fields of an Organization Actions.
 type ActionsConfiguration struct {
+	// EnabledRepos is the set of repositories allowed to run GitHub
+	// Actions at the organization level (equivalent to GitHub's
+	// "selected_repository_ids" list when the org's Actions permission
+	// policy is "selected"). The provider reconciles the org's enabled
+	// list to match this field via a single atomic PUT.
+	//
+	// The field is tri-state:
+	//   - omitted / nil: the provider does not manage the enabled list;
+	//     whatever is already configured on GitHub is left untouched.
+	//   - empty slice ([]): the provider sets the enabled list to empty,
+	//     disabling Actions for every repository in the org.
+	//   - non-empty: the provider sets the enabled list to exactly these
+	//     repositories, adding any missing and removing any extras.
+	//
+	// To stop managing the list, remove the field. Setting it to [] is
+	// an explicit "wipe" and will affect every repo in the org.
+	// +optional
 	EnabledRepos []ActionEnabledRepo `json:"enabledRepos,omitempty"`
 }
 

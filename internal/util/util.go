@@ -80,16 +80,6 @@ func MergeMaps(m1 map[string]string, m2 map[string]string) map[string]string {
 	return merged
 }
 
-// Contains function to check if a string slice contains a specific string
-func Contains(slice []string, str string) bool {
-	for _, s := range slice {
-		if s == str {
-			return true
-		}
-	}
-	return false
-}
-
 func DiffRepoWebhooks(a, b map[string]v1alpha1.RepositoryWebhook) (map[string]v1alpha1.RepositoryWebhook, map[string]v1alpha1.RepositoryWebhook, map[string]v1alpha1.RepositoryWebhook) {
 	inANotInB := make(map[string]v1alpha1.RepositoryWebhook)
 	inBNotInA := make(map[string]v1alpha1.RepositoryWebhook)
@@ -241,12 +231,6 @@ func ToIntPtr(i int) *int {
 	return &i
 }
 
-// ToInt64Ptr is a helper function that takes an int64 'i' as input and returns a pointer to 'i'.
-// This can be useful when you want to create a pointer to an int64 value.
-func ToInt64Ptr(i int64) *int64 {
-	return &i
-}
-
 // ToStringPtr is a helper function that takes a string 's' as input and returns a pointer to 's'.
 // This can be useful when you want to create a pointer to a string value.
 func ToStringPtr(s string) *string {
@@ -270,13 +254,6 @@ func StringDerefToPointer(ptr *string, def string) *string {
 // IntDerefToPointer is a helper function that dereferences a pointer to an int 'ptr',
 // and returns a new pointer to the resulting int. If 'ptr' is nil, it uses 'def' as a default value.
 func IntDerefToPointer(ptr *int, def int) *int {
-	i := pointer.Deref(ptr, def)
-	return &i
-}
-
-// Int64DerefToPointer is a helper function that dereferences a pointer to an int64 'ptr',
-// and returns a new pointer to the resulting int64. If 'ptr' is nil, it uses 'def' as a default value.
-func Int64DerefToPointer(ptr *int64, def int64) *int64 {
 	i := pointer.Deref(ptr, def)
 	return &i
 }

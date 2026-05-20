@@ -35,7 +35,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
@@ -243,18 +242,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
-		aResp, _, err := c.github.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
-
+		repos, err := listEnabledReposInOrg(ctx, c.github, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 
 		crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
-		aRepos := getSortedRepoNames(aResp.Repositories)
+		aRepos := getSortedRepoNames(repos)
 
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
 		if !reflect.DeepEqual(aRepos, crARepos) {
 			return notUpToDate, nil
 		}
@@ -328,13 +323,8 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
-	missingReposIds, toDeleteReposIds, err := getMissingAndToDeleteRepos(ctx, gh, name, cr)
-	if err != nil {
-		return managed.ExternalUpdate{}, err
-	}
 	if cr.Spec.ForProvider.Actions.EnabledRepos != nil {
-		err = updateRepos(ctx, gh, name, missingReposIds, toDeleteReposIds)
-		if err != nil {
+		if err := setEnabledReposForActions(ctx, gh, name, cr); err != nil {
 			return managed.ExternalUpdate{}, err
 		}
 	}
@@ -386,84 +376,59 @@ func getSortedRepoNames(repos []*github.Repository) []string {
 	return repoNames
 }
 
-func getUpdateRepoIds(ctx context.Context, repoCache *repositoryCache, crRepos []string, aRepos []string) ([]int64, error) {
-	var updateRepos []string
-	for _, repo := range crRepos {
-		// Check if the repository from CRD is not in GitHub
-		if !util.Contains(aRepos, repo) {
-			updateRepos = append(updateRepos, repo)
+// listEnabledReposInOrg returns every repository enabled for Actions in
+// the given organization, iterating through all pages. The single-page
+// shape of github.Actions.ListEnabledReposInOrg silently truncates the
+// result to one page, which produces a phantom diff against the CR's
+// enabled-repos list and triggers idempotent re-adds on every reconcile
+// when the org has more than 100 enabled repos.
+func listEnabledReposInOrg(ctx context.Context, gh *ghclient.RateLimitClient, org string) ([]*github.Repository, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var all []*github.Repository
+	for {
+		resp, httpResp, err := gh.Actions.ListEnabledReposInOrg(ctx, org, opts)
+		if err != nil {
+			return nil, err
 		}
+		all = append(all, resp.Repositories...)
+		if httpResp.NextPage == 0 {
+			break
+		}
+		opts.Page = httpResp.NextPage
 	}
-	if len(updateRepos) == 0 {
-		return []int64{}, nil
-	}
-
-	// Use batch repository ID lookup with caching
-	return repoCache.batchGetRepositoryIDs(ctx, updateRepos)
+	return all, nil
 }
 
-func getMissingAndToDeleteRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, cr *v1alpha1.Organization) ([]int64, []int64, error) {
+// setEnabledReposForActions reconciles the org's Actions-enabled repo list
+// to match the CR spec using a single PUT call instead of per-repo
+// Add/Remove. To avoid an unnecessary write when the diff Observe saw is
+// unrelated to enabledRepos (e.g. only description or secrets drifted),
+// it first lists the current state and skips the Set when names match.
+func setEnabledReposForActions(ctx context.Context, gh *ghclient.RateLimitClient, name string, cr *v1alpha1.Organization) error {
 	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
-	aResp, _, err := gh.Actions.ListEnabledReposInOrg(ctx, name, &github.ListOptions{PerPage: 100})
+	repos, err := listEnabledReposInOrg(ctx, gh, name)
 	if err != nil {
-		return nil, nil, err
+		return err
+	}
+	if reflect.DeepEqual(crARepos, getSortedRepoNames(repos)) {
+		return nil
 	}
 
-	// Extract repository names from the list
-	aRepos := getSortedRepoNames(aResp.Repositories)
-
-	// Create repository cache for this reconciliation
 	repoCache := newRepositoryCache(gh, name)
-
-	missingReposIds, err := getUpdateRepoIds(ctx, repoCache, crARepos, aRepos)
+	// Seed the cache from the list we already have. Without this, every
+	// Update would re-fetch IDs for repos that are already enabled — a
+	// burst of N Repositories.Get calls on an org with many enabled repos.
+	for _, r := range repos {
+		repoCache.cache[r.GetName()] = r.GetID()
+	}
+	ids, err := repoCache.batchGetRepositoryIDs(ctx, crARepos)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-
-	toDeleteReposIds, err := getUpdateRepoIds(ctx, repoCache, aRepos, crARepos)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return missingReposIds, toDeleteReposIds, nil
-}
-
-func updateRepos(ctx context.Context, gh *ghclient.RateLimitClient, name string, missingReposIds []int64, toDeleteReposIds []int64) error {
-	if len(missingReposIds) > 0 {
-		for _, missingRepo := range missingReposIds {
-			// Check for context timeout
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			_, err := gh.Actions.AddEnabledReposInOrg(ctx, name, missingRepo)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	if len(toDeleteReposIds) > 0 {
-		for _, toDeleteRepo := range toDeleteReposIds {
-			// Check for context timeout
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			_, err := gh.Actions.RemoveEnabledReposInOrg(ctx, name, toDeleteRepo)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	_, err = gh.Actions.SetEnabledReposInOrg(ctx, name, ids)
+	return err
 }
 
 func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
