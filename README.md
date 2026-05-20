@@ -4,28 +4,39 @@
 that is meant to be used to manage github organizations.
 
 The project is in a prototyping phase but it's already functional and
-implements follwing objects with partial functionality:
+implements the following resources with partial functionality:
 
-* Organization
-  * actions enabled repositories
-  * actions and dependabot secrets repository access
+* **Organization** — manages an existing organization (creation and deletion are not supported)
   * description
-  * creation and deletion not supported
-* Team
-  * visibility
-  * description
-  * members
-  * parent team
-* Repository
-  * user permissions  
+  * Actions enabled repositories
+  * Actions secrets — repository access (secret values are set out-of-band)
+  * Dependabot secrets — repository access (secret values are set out-of-band)
+* **OrganizationVariable** — Actions variables at the organization level
+  * value
+  * visibility (`all`, `private`, `selected`)
+  * selected repositories
+* **Repository**
+  * description, visibility (private/public), topics, template flag
+  * creation from a template repository or as a fork
+  * user (collaborator) permissions
   * team permissions
   * webhooks
-  * branch protection rules
-  * Repository rules
-    * rulesets
-* Membership
+  * branch protection rules (including required status checks, required reviews, restrictions, signed commits)
+  * repository rulesets
+  * archive-on-delete safeguard
+* **Team**
+  * description
+  * visibility (`secret`, `closed`)
+  * members
+  * parent team
+* **Membership** — organization membership
   * role
 
+## GitHub App permissions
+
+See [PERMISSIONS.md](./PERMISSIONS.md) for the GitHub App permissions
+the provider requires, including a per-resource breakdown for
+least-privilege setups.
 
 ## Operational considerations
 
