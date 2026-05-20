@@ -18,6 +18,8 @@ package organization
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
@@ -443,4 +445,115 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 	if diff := cmp.Diff([]string{"r2"}, lookedUp); diff != "" {
 		t.Errorf("Repositories.Get lookups mismatch (-want +got):\n%s\nCache seeding from listEnabledReposInOrg result must skip already-enabled repos.", diff)
 	}
+}
+
+// setEnabledReposForActions must surface a pagination error from
+// listEnabledReposInOrg without calling Set. A silent partial-page
+// result would leak into the diff and could trigger a wrong Set call
+// against a truncated view of the enabled-repos list.
+func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
+	listCalls := 0
+	setCalled := false
+	gh := &ghclient.RateLimitClient{
+		Client: &ghclient.Client{
+			Actions: &fake.MockActionsClient{
+				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+					listCalls++
+					if listCalls == 1 {
+						// Page 1: return some repos and signal there's a next page.
+						r := fake.GenerateEmptyResponse()
+						r.NextPage = 2
+						return &github.ActionsEnabledOnOrgRepos{Repositories: []*github.Repository{{Name: github.String("r1")}}}, r, nil
+					}
+					// Page 2: simulate an API error mid-walk.
+					return nil, fake.GenerateEmptyResponse(), errors.New("github: 503 service unavailable")
+				},
+				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {
+					setCalled = true
+					return fake.GenerateEmptyResponse(), nil
+				},
+			},
+		},
+	}
+	cr := organization([]string{"r1", "r2"})
+	err := setEnabledReposForActions(context.Background(), gh, org, cr)
+	if err == nil {
+		t.Fatal("expected pagination error to surface; silent partial pages would let the helper Set a wrong list")
+	}
+	if setCalled {
+		t.Error("SetEnabledReposInOrg was called despite a partial-page error — the desired-state PUT must not fire on incomplete diff input")
+	}
+}
+
+// setEnabledReposForActions must surface a Set error verbatim.
+// Update() relies on the helper's error to decide whether to mark the
+// CR Synced=False, so swallowing a Set failure would silently mislabel
+// state as in-sync.
+func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
+	wantErr := errors.New("github: 422 invalid repository id")
+	gh := &ghclient.RateLimitClient{
+		Client: &ghclient.Client{
+			Actions: &fake.MockActionsClient{
+				// CR wants only r1; GH has r1+r2 enabled. Names differ, so
+				// Set fires (with r1's resolved ID from the seeded cache).
+				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+					return &github.ActionsEnabledOnOrgRepos{
+						Repositories: []*github.Repository{
+							{Name: github.String("r1"), ID: github.Int64(11)},
+							{Name: github.String("r2"), ID: github.Int64(22)},
+						},
+					}, fake.GenerateEmptyResponse(), nil
+				},
+				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), wantErr
+				},
+			},
+		},
+	}
+	cr := organization([]string{"r1"})
+	err := setEnabledReposForActions(context.Background(), gh, org, cr)
+	if err == nil || !errorContains(err, "422") {
+		t.Fatalf("expected Set error to bubble up unchanged, got: %v", err)
+	}
+}
+
+// setEnabledReposForActions must surface an error from the per-repo
+// Repositories.Get fallback (cache miss path). A swallow here would
+// produce zero-value IDs in the Set call, which GitHub rejects — but
+// would manifest as an unrelated 422, not the actual root cause.
+func TestSetEnabledReposForActions_GetErrorPropagates(t *testing.T) {
+	wantErr := errors.New("github: 404 not found")
+	setCalled := false
+	gh := &ghclient.RateLimitClient{
+		Client: &ghclient.Client{
+			Actions: &fake.MockActionsClient{
+				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
+					return &github.ActionsEnabledOnOrgRepos{
+						Repositories: []*github.Repository{{Name: github.String("r1"), ID: github.Int64(11)}},
+					}, fake.GenerateEmptyResponse(), nil
+				},
+				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {
+					setCalled = true
+					return fake.GenerateEmptyResponse(), nil
+				},
+			},
+			Repositories: &fake.MockRepositoriesClient{
+				MockGet: func(ctx context.Context, owner, repoName string) (*github.Repository, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), wantErr
+				},
+			},
+		},
+	}
+	cr := organization([]string{"r1", "r2"}) // r2 is a cache miss → triggers Get → returns error
+	err := setEnabledReposForActions(context.Background(), gh, org, cr)
+	if err == nil || !errorContains(err, "404") {
+		t.Fatalf("expected Get error to surface, got: %v", err)
+	}
+	if setCalled {
+		t.Error("SetEnabledReposInOrg was called despite ID-resolution failure — that would have produced a malformed PUT and a confusing GitHub-side error")
+	}
+}
+
+func errorContains(err error, substr string) bool {
+	return err != nil && strings.Contains(err.Error(), substr)
 }
