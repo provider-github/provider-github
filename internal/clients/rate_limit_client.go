@@ -460,18 +460,6 @@ func (rac *RateLimitActionsClient) ListEnabledReposInOrg(ctx context.Context, ow
 	})
 }
 
-func (rac *RateLimitActionsClient) AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
-	resp, err := rac.ActionsClient.AddEnabledReposInOrg(ctx, owner, repositoryID)
-	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.AddEnabledReposInOrg", resp, err)
-	return resp, err
-}
-
-func (rac *RateLimitActionsClient) RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error) {
-	resp, err := rac.ActionsClient.RemoveEnabledReposInOrg(ctx, owner, repositoryID)
-	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.RemoveEnabledReposInOrg", resp, err)
-	return resp, err
-}
-
 func (rac *RateLimitActionsClient) SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error) {
 	resp, err := rac.ActionsClient.SetEnabledReposInOrg(ctx, owner, repositoryIDs)
 	recordResponse(rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Actions.SetEnabledReposInOrg", resp, err)

@@ -38,8 +38,6 @@ type Client struct {
 
 type ActionsClient interface {
 	ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error)
-	AddEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
-	RemoveEnabledReposInOrg(ctx context.Context, owner string, repositoryID int64) (*github.Response, error)
 	SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
 	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
