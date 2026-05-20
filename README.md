@@ -40,9 +40,17 @@ The `Organization` CR's `spec.forProvider.actions.enabledRepos` field
 lists the repositories that are allowed to run GitHub Actions at the
 organization level (this maps to GitHub's `selected_repository_ids`
 list under `Actions › General › Allow select repositories` in the org
-settings, and to the `actions/permissions/repositories` REST API). The
-two timeout-sensitive scenarios below both involve reconciling that
-list.
+settings, and to the `actions/permissions/repositories` REST API).
+
+The field is **tri-state** — omitting it leaves the org's enabled list
+unmanaged, setting it to `[]` explicitly wipes the list (disabling
+Actions for every repo in the org), and a non-empty list reconciles
+the list to exactly those repositories. See the field's CRD docstring
+(`kubectl explain organization.spec.forProvider.actions.enabledRepos`)
+for the full contract.
+
+The two timeout-sensitive scenarios below both involve reconciling
+that list.
 
 **Default: `1m`.** Suitable for steady-state reconciliation and small
 spec changes. The default is **not** enough for two operational

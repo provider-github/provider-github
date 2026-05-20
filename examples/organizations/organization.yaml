@@ -14,6 +14,12 @@ spec:
       # are validated at reconcile time, so a typo or a not-yet-created
       # Repository surfaces as an explicit resolution error instead of a
       # GitHub-side failure.
+      #
+      # The field is tri-state: omit it entirely to leave the org's
+      # enabled-repos list unmanaged; set it to [] to explicitly disable
+      # Actions on every repo; or list entries (as below) to reconcile
+      # the org to exactly that set. See the field's CRD docstring for
+      # the full contract.
       enabledRepos:
         # Literal external-name (the GitHub repo name). Use when the repo
         # is not managed by this provider.
