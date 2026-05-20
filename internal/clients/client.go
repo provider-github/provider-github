@@ -19,11 +19,7 @@ package clients
 import (
 	"context"
 	"errors"
-	"net/http"
-	"strconv"
-	"strings"
 
-	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v62/github"
 )
 
@@ -108,40 +104,6 @@ type RepositoriesClient interface {
 	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
 	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 	ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
-}
-
-// NewClient creates a new client.
-func NewClient(creds string) (*Client, error) {
-	credss := strings.Split(creds, ",")
-	if len(credss) != 3 {
-		return nil, errors.New("invalid format for credentials")
-	}
-
-	appId, err := strconv.Atoi(credss[0])
-	if err != nil {
-		return nil, err
-	}
-
-	installationId, err := strconv.Atoi(credss[1])
-	if err != nil {
-		return nil, err
-	}
-
-	itr, err := ghinstallation.New(http.DefaultTransport, int64(appId), int64(installationId), []byte(credss[2]))
-	if err != nil {
-		return nil, err
-	}
-
-	ghclient := github.NewClient(&http.Client{Transport: itr})
-
-	return &Client{
-		Actions:       ghclient.Actions,
-		Dependabot:    ghclient.Dependabot,
-		Organizations: ghclient.Organizations,
-		Users:         ghclient.Users,
-		Teams:         ghclient.Teams,
-		Repositories:  ghclient.Repositories,
-	}, nil
 }
 
 func Is404(err error) bool {
