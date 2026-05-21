@@ -17,9 +17,7 @@ limitations under the License.
 package telemetry
 
 import (
-	"errors"
 	"net/http"
-	"time"
 
 	"github.com/google/go-github/v62/github"
 	"github.com/prometheus/client_golang/prometheus"
@@ -209,42 +207,4 @@ func (m *RateLimitMetrics) RecordRateLimitInfo(resp *github.Response, org, appID
 		m.rateLimitRemaining.WithLabelValues(org, appID, installationID).Set(float64(resp.Rate.Remaining))
 		m.rateLimitResetTime.WithLabelValues(org, appID, installationID).Set(float64(resp.Rate.Reset.Unix()))
 	}
-}
-
-// IsRateLimited checks if the error is due to rate limiting
-func IsRateLimited(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var errResp *github.ErrorResponse
-	if errors.As(err, &errResp) {
-		return errResp.Response.StatusCode == http.StatusTooManyRequests
-	}
-
-	return false
-}
-
-// GetRateLimitInfo extracts rate limit information from GitHub response
-func GetRateLimitInfo(resp *github.Response) (limit, remaining int, resetTime time.Time) {
-	if resp == nil {
-		return 0, 0, time.Time{}
-	}
-
-	return resp.Rate.Limit, resp.Rate.Remaining, resp.Rate.Reset.Time
-}
-
-// IsRateLimitExceeded checks if the response indicates rate limit exceeded
-func IsRateLimitExceeded(resp *github.Response) bool {
-	return resp != nil && resp.StatusCode == 429
-}
-
-// GetRateLimitUsagePercentage calculates the percentage of rate limit used
-func GetRateLimitUsagePercentage(resp *github.Response) float64 {
-	if resp == nil || resp.Rate.Limit == 0 {
-		return 0
-	}
-
-	used := resp.Rate.Limit - resp.Rate.Remaining
-	return float64(used) / float64(resp.Rate.Limit) * 100
 }
