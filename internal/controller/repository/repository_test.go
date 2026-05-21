@@ -18,6 +18,10 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"sort"
 	"strings"
 	"testing"
 
@@ -646,62 +650,179 @@ func TestObserve(t *testing.T) {
 // rules for missing branches are removed from the map, rules for existing
 // branches are kept untouched, and the skipped list is returned sorted so
 // the condition message is stable across reconciles.
+// filterMissingBranchProtectionRules has two responsibilities:
+//
+//   - Short-circuit branches already in protectedSet without calling
+//     GetBranch (they exist by construction — you can't protect a
+//     missing branch).
+//   - For the rest, hit Repositories.GetBranch: 404 means the branch
+//     is missing and the rule is dropped; 2xx means the branch exists
+//     but is unprotected (the rule will be applied by Update); any
+//     other error propagates.
+//
+// The wantCalls assertion pins the short-circuit — if a future change
+// stops respecting protectedSet, every reconcile would emit an extra
+// GetBranch per already-protected branch, which is the whole API-cost
+// reason the protectedSet path exists.
 func TestFilterMissingBranchProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	const org = "test-org"
+	const repo = "test-repo"
+
+	type mockBranches struct {
+		exists  map[string]bool   // GetBranch returns 200 with name == requested
+		missing map[string]bool   // GetBranch returns 404
+		renamed map[string]string // GetBranch returns 200 but with a different name (key → value mapping)
+		errFor  string            // GetBranch returns a non-404 error for this branch
+	}
+
 	cases := map[string]struct {
-		rules       map[string]v1alpha1.BranchProtectionRule
-		existing    map[string]bool
-		wantRules   map[string]v1alpha1.BranchProtectionRule
-		wantSkipped []string
+		rules        map[string]v1alpha1.BranchProtectionRule
+		protectedSet map[string]bool
+		mock         mockBranches
+		wantRules    map[string]v1alpha1.BranchProtectionRule
+		wantSkipped  []string
+		wantCalls    []string
+		wantErr      bool
 	}{
-		"AllBranchesExist_NothingFiltered": {
+		"AllAlreadyProtected_NoGetBranchCalls": {
 			rules: map[string]v1alpha1.BranchProtectionRule{
 				"main":    {Branch: "main"},
 				"develop": {Branch: "develop"},
 			},
-			existing: map[string]bool{"main": true, "develop": true},
+			protectedSet: map[string]bool{"main": true, "develop": true},
 			wantRules: map[string]v1alpha1.BranchProtectionRule{
 				"main":    {Branch: "main"},
 				"develop": {Branch: "develop"},
 			},
 			wantSkipped: nil,
+			wantCalls:   nil,
 		},
-		"SomeMissing_FilteredAndReturnedSorted": {
+		"UnprotectedButExisting_CheckedAndKept": {
+			rules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			protectedSet: map[string]bool{"main": true},
+			mock:         mockBranches{exists: map[string]bool{"develop": true}},
+			wantRules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			wantSkipped: nil,
+			wantCalls:   []string{"develop"},
+		},
+		"MissingBranches_Skipped": {
 			rules: map[string]v1alpha1.BranchProtectionRule{
 				"main":    {Branch: "main"},
 				"release": {Branch: "release"},
-				"develop": {Branch: "develop"},
+				"ghost":   {Branch: "ghost"},
 			},
-			existing: map[string]bool{"main": true},
-			wantRules: map[string]v1alpha1.BranchProtectionRule{
-				"main": {Branch: "main"},
+			protectedSet: map[string]bool{"main": true},
+			mock: mockBranches{
+				missing: map[string]bool{"release": true, "ghost": true},
 			},
-			wantSkipped: []string{"develop", "release"},
+			wantRules:   map[string]v1alpha1.BranchProtectionRule{"main": {Branch: "main"}},
+			wantSkipped: []string{"ghost", "release"},
+			wantCalls:   []string{"ghost", "release"},
 		},
-		"AllMissing_MapEmptied": {
+		"MixedExistingAndMissing": {
 			rules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
 				"develop": {Branch: "develop"},
-				"release": {Branch: "release"},
+				"ghost":   {Branch: "ghost"},
 			},
-			existing:    map[string]bool{},
-			wantRules:   map[string]v1alpha1.BranchProtectionRule{},
-			wantSkipped: []string{"develop", "release"},
+			protectedSet: map[string]bool{"main": true},
+			mock: mockBranches{
+				exists:  map[string]bool{"develop": true},
+				missing: map[string]bool{"ghost": true},
+			},
+			wantRules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			wantSkipped: []string{"ghost"},
+			wantCalls:   []string{"develop", "ghost"},
 		},
-		"EmptyInput_NoChange": {
-			rules:       map[string]v1alpha1.BranchProtectionRule{},
-			existing:    map[string]bool{"main": true},
-			wantRules:   map[string]v1alpha1.BranchProtectionRule{},
-			wantSkipped: nil,
+		"EmptyInput_NoCallsNoSkipped": {
+			rules:        map[string]v1alpha1.BranchProtectionRule{},
+			protectedSet: map[string]bool{"main": true},
+			wantRules:    map[string]v1alpha1.BranchProtectionRule{},
+			wantSkipped:  nil,
+			wantCalls:    nil,
+		},
+		"Non404Error_Propagates": {
+			rules:        map[string]v1alpha1.BranchProtectionRule{"feature": {Branch: "feature"}},
+			protectedSet: map[string]bool{},
+			mock:         mockBranches{errFor: "feature"},
+			wantErr:      true,
+		},
+		// Renamed branches must not be silently accepted as existing — the rule
+		// will 404 on the actual UpdateBranchProtection call because PUT doesn't
+		// follow the rename redirect. Surface the new name in the skipped entry
+		// so the operator knows what to put in the CR.
+		"RenamedBranch_DroppedAndNameSurfaced": {
+			rules: map[string]v1alpha1.BranchProtectionRule{
+				"main":    {Branch: "main"},
+				"develop": {Branch: "develop"},
+			},
+			protectedSet: map[string]bool{},
+			mock: mockBranches{
+				renamed: map[string]string{"main": "trunk"},
+				exists:  map[string]bool{"develop": true},
+			},
+			wantRules:   map[string]v1alpha1.BranchProtectionRule{"develop": {Branch: "develop"}},
+			wantSkipped: []string{"main (was renamed to trunk)"},
+			wantCalls:   []string{"develop", "main"},
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			gotSkipped := filterMissingBranchProtectionRules(tc.rules, tc.existing)
+			var calls []string
+			gh := &ghclient.RateLimitClient{
+				Client: &ghclient.Client{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGetBranch: func(_ context.Context, _, _, branch string, _ int) (*github.Branch, *github.Response, error) {
+							calls = append(calls, branch)
+							switch {
+							case branch == tc.mock.errFor:
+								return nil, &github.Response{Response: &http.Response{StatusCode: http.StatusInternalServerError}}, errors.New("boom")
+							case tc.mock.missing[branch]:
+								// Real GetBranch returns a bare fmt.Errorf + non-nil resp.StatusCode=404, not a *github.ErrorResponse.
+								return nil, &github.Response{Response: &http.Response{StatusCode: http.StatusNotFound}}, fmt.Errorf("unexpected status code: 404 Not Found")
+							case tc.mock.renamed[branch] != "":
+								// 200 with a different name — GetBranch followed a rename redirect.
+								return &github.Branch{Name: github.String(tc.mock.renamed[branch])}, fake.GenerateEmptyResponse(), nil
+							case tc.mock.exists[branch]:
+								return &github.Branch{Name: github.String(branch)}, fake.GenerateEmptyResponse(), nil
+							default:
+								return nil, nil, errors.New("unexpected branch in mock: " + branch)
+							}
+						},
+					},
+				},
+			}
+
+			gotSkipped, err := filterMissingBranchProtectionRules(ctx, gh, org, repo, tc.rules, tc.protectedSet)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if diff := cmp.Diff(tc.wantSkipped, gotSkipped); diff != "" {
 				t.Errorf("skipped: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.wantRules, tc.rules); diff != "" {
 				t.Errorf("rules after filter: -want, +got:\n%s", diff)
+			}
+			sort.Strings(calls)
+			if diff := cmp.Diff(tc.wantCalls, calls); diff != "" {
+				t.Errorf("GetBranch calls: -want, +got:\n%s", diff)
 			}
 		})
 	}
