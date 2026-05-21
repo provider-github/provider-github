@@ -25,11 +25,16 @@ import (
 
 type Client struct {
 	Actions       ActionsClient
+	Apps          AppsClient
 	Dependabot    DependabotClient
 	Organizations OrganizationsClient
 	Users         UsersClient
 	Teams         TeamsClient
 	Repositories  RepositoriesClient
+}
+
+type AppsClient interface {
+	ListRepos(ctx context.Context, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error)
 }
 
 type ActionsClient interface {

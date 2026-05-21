@@ -62,6 +62,7 @@ func main() {
 		enableExternalSecretStores = app.Flag("enable-external-secret-stores", "Enable support for ExternalSecretStores.").Default("false").Envar("ENABLE_EXTERNAL_SECRET_STORES").Bool()
 		enableManagementPolicies   = app.Flag("enable-management-policies", "Enable support for Management Policies.").Default("false").Envar("ENABLE_MANAGEMENT_POLICIES").Bool()
 		customMetricsAddr          = app.Flag("custom-metrics-addr", "The address the custom metric endpoint binds to.").Default(":8081").String()
+		heartbeatInterval          = app.Flag("heartbeat-interval", "How often each GitHub App installation is pinged to keep it on the high rate-limit tier.").Default("10m").Envar("HEARTBEAT_INTERVAL").Duration()
 	)
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 
@@ -162,5 +163,8 @@ func main() {
 		}
 	}()
 
-	kingpin.FatalIfError(mgr.Start(ctrl.SetupSignalHandler()), "Cannot start controller manager")
+	signalCtx := ctrl.SetupSignalHandler()
+	go ghclient.HeartbeatApps(signalCtx, metrics, *heartbeatInterval)
+
+	kingpin.FatalIfError(mgr.Start(signalCtx), "Cannot start controller manager")
 }

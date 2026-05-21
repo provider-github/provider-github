@@ -41,9 +41,12 @@ type ClientCache struct {
 }
 
 type cachedClientEntry struct {
-	client    *Client
-	createdAt time.Time
-	cacheKey  string
+	client          *Client
+	createdAt       time.Time
+	cacheKey        string
+	appID           string
+	installationID  string
+	installationOrg string
 }
 
 var (
@@ -62,8 +65,8 @@ func GenerateCacheKey(creds string) string {
 	return fmt.Sprintf("%x", hash[:8]) // Use first 8 bytes of hash
 }
 
-// NewCachedClient creates a new cached GitHub client that reuses tokens
-func NewCachedClient(creds string) (*Client, error) {
+// NewCachedClient creates a new cached GitHub client that reuses tokens.
+func NewCachedClient(creds, org string) (*Client, error) {
 	cacheKey := GenerateCacheKey(creds)
 
 	globalClientCache.mu.Lock()
@@ -85,11 +88,14 @@ func NewCachedClient(creds string) (*Client, error) {
 		return nil, err
 	}
 
-	// Cache the new client
+	appID, installationID, _ := ExtractAppIDs(creds)
 	globalClientCache.clients[cacheKey] = &cachedClientEntry{
-		client:    client,
-		createdAt: time.Now(),
-		cacheKey:  cacheKey,
+		client:          client,
+		createdAt:       time.Now(),
+		cacheKey:        cacheKey,
+		appID:           appID,
+		installationID:  installationID,
+		installationOrg: org,
 	}
 
 	return client, nil
@@ -135,12 +141,47 @@ func createNewClient(creds string) (*Client, error) {
 
 	return &Client{
 		Actions:       ghclient.Actions,
+		Apps:          ghclient.Apps,
 		Dependabot:    ghclient.Dependabot,
 		Organizations: ghclient.Organizations,
 		Users:         ghclient.Users,
 		Teams:         ghclient.Teams,
 		Repositories:  ghclient.Repositories,
 	}, nil
+}
+
+// SnapshotCacheKeys returns the cache keys currently held (including expired ones; pair with Lookup).
+func (c *ClientCache) SnapshotCacheKeys() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	keys := make([]string, 0, len(c.clients))
+	for k := range c.clients {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// Lookup returns the cached client for key, or (nil, false) if missing or expired.
+func (c *ClientCache) Lookup(key string) (*Client, bool) {
+	e, ok := c.LookupEntry(key)
+	if !ok {
+		return nil, false
+	}
+	return e.client, true
+}
+
+// LookupEntry returns the cached entry for key, or (nil, false) if missing or expired.
+func (c *ClientCache) LookupEntry(key string) (*cachedClientEntry, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.clients[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(entry.createdAt) >= clientCacheTimeout {
+		return nil, false
+	}
+	return entry, true
 }
 
 // CleanupExpiredClients removes expired clients from cache (optional background cleanup)

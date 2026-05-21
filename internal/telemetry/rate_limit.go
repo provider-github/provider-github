@@ -56,6 +56,10 @@ type RateLimitMetrics struct {
 	// random_tiebreak, only_candidate) so operators can see why each
 	// credential was chosen.
 	picksTotal *prometheus.CounterVec
+
+	// Heartbeat counters — total attempts and failures; pair to compute error rate.
+	heartbeatTotal       *prometheus.CounterVec
+	heartbeatErrorsTotal *prometheus.CounterVec
 }
 
 // labels carried by every rate-limit metric:
@@ -120,6 +124,20 @@ func newRateLimitMetrics() *RateLimitMetrics {
 			},
 			append(rateLimitLabels, "reason"),
 		),
+		heartbeatTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "github_app_heartbeat_total",
+				Help: "Total number of background heartbeat pings against each cached App installation, regardless of outcome.",
+			},
+			rateLimitLabels,
+		),
+		heartbeatErrorsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "github_app_heartbeat_errors_total",
+				Help: "Total number of failed background heartbeat pings. Pair with github_app_heartbeat_total to compute error rate.",
+			},
+			rateLimitLabels,
+		),
 	}
 }
 
@@ -135,6 +153,8 @@ func NewRateLimitMetrics(_ ctrl.Manager) *RateLimitMetrics {
 	prometheus.MustRegister(m.appUnhealthyTotal)
 	prometheus.MustRegister(m.apiCallsTotal)
 	prometheus.MustRegister(m.picksTotal)
+	prometheus.MustRegister(m.heartbeatTotal)
+	prometheus.MustRegister(m.heartbeatErrorsTotal)
 
 	return m
 }
@@ -150,6 +170,16 @@ func NewForTest() *RateLimitMetrics {
 // given call. Counts every attempt, regardless of outcome.
 func (m *RateLimitMetrics) RecordAPICall(org, appID, installationID, method string) {
 	m.apiCallsTotal.WithLabelValues(org, appID, installationID, method).Inc()
+}
+
+// RecordAppHeartbeat increments github_app_heartbeat_total.
+func (m *RateLimitMetrics) RecordAppHeartbeat(org, appID, installationID string) {
+	m.heartbeatTotal.WithLabelValues(org, appID, installationID).Inc()
+}
+
+// RecordAppHeartbeatError increments github_app_heartbeat_errors_total.
+func (m *RateLimitMetrics) RecordAppHeartbeatError(org, appID, installationID string) {
+	m.heartbeatErrorsTotal.WithLabelValues(org, appID, installationID).Inc()
 }
 
 // RecordPickerPick increments the github_app_picker_picks_total counter

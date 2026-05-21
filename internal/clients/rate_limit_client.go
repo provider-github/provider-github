@@ -98,9 +98,33 @@ func (rc *RateLimitClient) WithRateLimitTracking(org, appID, installationID, cac
 				installationID:     installationID,
 				cacheKey:           cacheKey,
 			},
+			Apps: &RateLimitAppsClient{
+				AppsClient:     rc.Apps,
+				metrics:        rc.metrics,
+				org:            org,
+				appID:          appID,
+				installationID: installationID,
+				cacheKey:       cacheKey,
+			},
 		},
 		metrics: rc.metrics,
 	}
+}
+
+// RateLimitAppsClient wraps the Apps client with rate limit tracking.
+type RateLimitAppsClient struct {
+	AppsClient
+	metrics        *telemetry.RateLimitMetrics
+	org            string
+	appID          string
+	installationID string
+	cacheKey       string
+}
+
+func (rac *RateLimitAppsClient) ListRepos(ctx context.Context, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
+	return recordRateLimit(ctx, rac.metrics, rac.org, rac.appID, rac.installationID, rac.cacheKey, "Apps.ListRepos", func() (*github.ListRepositories, *github.Response, error) {
+		return rac.AppsClient.ListRepos(ctx, opts)
+	})
 }
 
 // recordResponse fans the outcome of a GitHub call out to both Prometheus

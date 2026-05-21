@@ -82,7 +82,7 @@ func ResolveAndConnect(ctx context.Context, kube client.Client, pc *apisv1alpha1
 		metrics.RecordPickerPick(org, appID, installationID, pickReason)
 	}
 
-	gh, err := NewCachedClient(chosen)
+	gh, err := NewCachedClient(chosen, org)
 	if err != nil {
 		// Treat construction failures (non-numeric IDs, malformed PEM,
 		// etc.) the same way as token-mint failures: record on the pool

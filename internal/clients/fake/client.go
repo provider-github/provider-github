@@ -65,6 +65,14 @@ func (m *MockActionsClient) SetSelectedReposForOrgVariable(ctx context.Context, 
 	return m.MockSetSelectedReposForOrgVariable(ctx, org, name, ids)
 }
 
+type MockAppsClient struct {
+	MockListRepos func(ctx context.Context, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error)
+}
+
+func (m *MockAppsClient) ListRepos(ctx context.Context, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
+	return m.MockListRepos(ctx, opts)
+}
+
 type MockDependabotClient struct {
 	MockGetOrgSecret                  func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	MockListSelectedReposForOrgSecret func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
