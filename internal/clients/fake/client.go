@@ -140,6 +140,7 @@ type MockRepositoriesClient struct {
 	MockDeleteHook                          func(ctx context.Context, owner, repo string, id int64) (*github.Response, error)
 	MockListHooks                           func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
 	MockListBranches                        func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error)
+	MockGetBranch                           func(ctx context.Context, owner, repo, branch string, maxRedirects int) (*github.Branch, *github.Response, error)
 	MockGetBranchProtection                 func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error)
 	MockUpdateBranchProtection              func(ctx context.Context, owner, repo, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error)
 	MockRemoveBranchProtection              func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
@@ -211,6 +212,10 @@ func (m *MockRepositoriesClient) ListHooks(ctx context.Context, owner, repo stri
 
 func (m *MockRepositoriesClient) ListBranches(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
 	return m.MockListBranches(ctx, owner, repo, opts)
+}
+
+func (m *MockRepositoriesClient) GetBranch(ctx context.Context, owner, repo, branch string, maxRedirects int) (*github.Branch, *github.Response, error) {
+	return m.MockGetBranch(ctx, owner, repo, branch, maxRedirects)
 }
 
 func (m *MockRepositoriesClient) GetBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {

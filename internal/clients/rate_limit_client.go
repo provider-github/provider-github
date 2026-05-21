@@ -325,6 +325,12 @@ func (rrc *RateLimitRepositoriesClient) ListBranches(ctx context.Context, owner,
 	})
 }
 
+func (rrc *RateLimitRepositoriesClient) GetBranch(ctx context.Context, owner, repo, branch string, maxRedirects int) (*github.Branch, *github.Response, error) {
+	return recordRateLimit(ctx, rrc.metrics, rrc.org, rrc.appID, rrc.installationID, rrc.cacheKey, "Repositories.GetBranch", func() (*github.Branch, *github.Response, error) {
+		return rrc.RepositoriesClient.GetBranch(ctx, owner, repo, branch, maxRedirects)
+	})
+}
+
 func (rrc *RateLimitRepositoriesClient) GetBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 	return recordRateLimit(ctx, rrc.metrics, rrc.org, rrc.appID, rrc.installationID, rrc.cacheKey, "Repositories.GetBranchProtection", func() (*github.Protection, *github.Response, error) {
 		return rrc.RepositoriesClient.GetBranchProtection(ctx, owner, repo, branch)

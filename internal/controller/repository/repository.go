@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"sort"
 	"strings"
@@ -209,12 +210,15 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
-		protectedBranches, existingBranches, err := listBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		protectedBranches, err := listProtectedBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 		crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
-		skipped := filterMissingBranchProtectionRules(crBPRToConfig, existingBranches)
+		skipped, err := filterMissingBranchProtectionRules(ctx, c.github, cr.Spec.ForProvider.Org, name, crBPRToConfig, protectedBranchSet(protectedBranches))
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
 		setBranchProtectionPartialCondition(ctx, cr, skipped)
 		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
 		if err != nil {
@@ -585,55 +589,83 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.RateLimitClie
 	return uToPermission, nil
 }
 
-// listBranches lists all branches for a GitHub repository in a single
-// paginated call and returns both the protected subset and the set of all
-// branch names. Callers use the protected subset to fetch existing
-// protection configs, and the name set to filter out CR rules that point
-// at branches the repo doesn't have — preventing wasted 404 calls to
-// UpdateBranchProtection.
-func listBranches(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Branch, map[string]bool, error) {
+// listProtectedBranches returns every protected branch on a repo,
+// iterating pages. The Protected=true filter on GitHub keeps the
+// page count tiny (typically 1 page) regardless of how many feature
+// branches the repo has, so per-Observe pagination cost stays
+// constant even on monorepos with thousands of branches.
+func listProtectedBranches(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string) ([]*github.Branch, error) {
 	opts := &github.BranchListOptions{
+		Protected:   github.Bool(true),
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
-	var allBranches []*github.Branch
-
+	var protected []*github.Branch
 	for {
 		branches, resp, err := gh.Repositories.ListBranches(ctx, org, repoName, opts)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		allBranches = append(allBranches, branches...)
-
+		protected = append(protected, branches...)
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
 	}
-
-	existing := make(map[string]bool, len(allBranches))
-	var protected []*github.Branch
-	for _, b := range allBranches {
-		existing[b.GetName()] = true
-		if b.GetProtected() {
-			protected = append(protected, b)
-		}
-	}
-	return protected, existing, nil
+	return protected, nil
 }
 
+// 1 hop covers a single branch rename; deeper chains aren't worth chasing.
+const branchRenameRedirectsToFollow = 1
+
 // filterMissingBranchProtectionRules removes entries from rules whose
-// branch is not present in existing. Returns the sorted list of skipped
-// branch names so callers can log and emit an Event. Mutates rules.
-func filterMissingBranchProtectionRules(rules map[string]v1alpha1.BranchProtectionRule, existing map[string]bool) []string {
+// target branch doesn't exist in the repo. Returns the sorted list of
+// skipped branch names so callers can log and emit an Event. Mutates
+// rules.
+//
+// Branches already in protectedSet exist by construction (you cannot
+// protect a branch that doesn't exist), so they're accepted without
+// any extra API call. The rest are confirmed with a per-branch
+// Repositories.GetBranch — 404 means the branch is missing and the
+// rule is dropped; a redirect to a different name means the branch
+// was renamed (mutating endpoints don't follow redirects, so the rule
+// can't apply against the old name) and the skipped entry carries the
+// new name so the operator can update the CR; any other error
+// propagates.
+func filterMissingBranchProtectionRules(ctx context.Context, gh *ghclient.RateLimitClient, org, repoName string, rules map[string]v1alpha1.BranchProtectionRule, protectedSet map[string]bool) ([]string, error) {
 	var skipped []string
 	for branch := range rules {
-		if !existing[branch] {
+		if protectedSet[branch] {
+			continue
+		}
+		// GetBranch reports non-200 with a bare fmt.Errorf, so check resp.StatusCode rather than Is404(err).
+		got, resp, err := gh.Repositories.GetBranch(ctx, org, repoName, branch, branchRenameRedirectsToFollow)
+		if err == nil {
+			if got != nil && got.GetName() != branch {
+				skipped = append(skipped, fmt.Sprintf("%s (was renamed to %s)", branch, got.GetName()))
+				delete(rules, branch)
+			}
+			continue
+		}
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			skipped = append(skipped, branch)
 			delete(rules, branch)
+			continue
 		}
+		return nil, err
 	}
 	sort.Strings(skipped)
-	return skipped
+	return skipped, nil
+}
+
+// protectedBranchSet returns the set of branch names from a list of
+// protected branches, for fast "is this branch already protected?"
+// lookup in filterMissingBranchProtectionRules.
+func protectedBranchSet(branches []*github.Branch) map[string]bool {
+	set := make(map[string]bool, len(branches))
+	for _, b := range branches {
+		set[b.GetName()] = true
+	}
+	return set
 }
 
 // Condition surfaced on the Repository CR when one or more declared
@@ -981,13 +1013,16 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
-		_, existingBranches, err := listBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		protectedBranches, err := listProtectedBranches(ctx, c.github, cr.Spec.ForProvider.Org, name)
 		if err != nil {
 			return managed.ExternalCreation{}, err
 		}
 		// getBPRMapFromCr() provides defaults for optional *bool fields
 		rulesMap := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
-		skipped := filterMissingBranchProtectionRules(rulesMap, existingBranches)
+		skipped, err := filterMissingBranchProtectionRules(ctx, c.github, cr.Spec.ForProvider.Org, name, rulesMap, protectedBranchSet(protectedBranches))
+		if err != nil {
+			return managed.ExternalCreation{}, err
+		}
 		setBranchProtectionPartialCondition(ctx, cr, skipped)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
@@ -1268,12 +1303,15 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
 func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.RateLimitClient, repoName string) error {
-	protectedBranches, existingBranches, err := listBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	protectedBranches, err := listProtectedBranches(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
 		return err
 	}
 	crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
-	skipped := filterMissingBranchProtectionRules(crBPRToConfig, existingBranches)
+	skipped, err := filterMissingBranchProtectionRules(ctx, gh, cr.Spec.ForProvider.Org, repoName, crBPRToConfig, protectedBranchSet(protectedBranches))
+	if err != nil {
+		return err
+	}
 	setBranchProtectionPartialCondition(ctx, cr, skipped)
 	ghBPRToConfig, err := getBPRWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, protectedBranches)
 	if err != nil {
