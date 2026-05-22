@@ -90,7 +90,7 @@ func githubUser() *github.User {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -111,8 +111,8 @@ func TestObserve(t *testing.T) {
 	}{
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
 								return githubMembership(), nil, nil
@@ -134,8 +134,8 @@ func TestObserve(t *testing.T) {
 		},
 		"NotUpToDate": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
 								return githubMembership(), nil, nil
@@ -157,8 +157,8 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExists": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
 								return nil, nil, fake.Generate404Response()
@@ -193,7 +193,7 @@ func TestObserve(t *testing.T) {
 
 func TestCreate(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -214,8 +214,8 @@ func TestCreate(t *testing.T) {
 	}{
 		"InvalidRole": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Users: &fake.MockUsersClient{
 							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
 								return githubUser(), nil, nil
@@ -234,8 +234,8 @@ func TestCreate(t *testing.T) {
 		},
 		"OK": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Users: &fake.MockUsersClient{
 							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
 								return githubUser(), nil, nil
@@ -287,7 +287,7 @@ func TestCreate(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -308,8 +308,8 @@ func TestUpdate(t *testing.T) {
 	}{
 		"OK": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Users: &fake.MockUsersClient{
 							MockGet: func(ctx context.Context, user string) (*github.User, *github.Response, error) {
 								return githubUser(), nil, nil

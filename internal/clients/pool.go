@@ -60,8 +60,6 @@ func (e *CooldownError) Unwrap() error {
 // AppQuota is a snapshot of the last-known rate-limit state for one credential.
 type AppQuota struct {
 	Remaining     int
-	Limit         int
-	Reset         time.Time
 	CooldownUntil time.Time
 	// ConsecutiveFailures counts (nil-response, non-nil-error) outcomes
 	// since the last successful HTTP response. Drives the exponential
@@ -127,9 +125,7 @@ func (p *quotaPool) recordResponse(cacheKey string, resp *github.Response, err e
 	q.ConsecutiveFailures = 0
 
 	if resp.Rate.Limit > 0 {
-		q.Limit = resp.Rate.Limit
 		q.Remaining = resp.Rate.Remaining
-		q.Reset = resp.Rate.Reset.Time
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {

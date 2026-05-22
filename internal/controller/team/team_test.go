@@ -102,7 +102,7 @@ func githubTeam(role string) []*github.User {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -123,8 +123,8 @@ func TestObserve(t *testing.T) {
 	}{
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Teams: &fake.MockTeamsClient{
 							MockGetTeamBySlug: func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error) {
 								return &github.Team{

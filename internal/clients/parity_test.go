@@ -25,37 +25,38 @@ import (
 	"testing"
 )
 
-// TestRateLimitClientWrapperParity asserts that every method on every service
-// interface in client.go has an explicit wrapper on the corresponding
-// RateLimit*Client struct in rate_limit_client.go.
+// TestWrapperParity asserts that every method on every service interface
+// in services.go has an explicit wrapper on the corresponding per-service
+// struct in client.go.
 //
-// Each RateLimit*Client embeds the service interface, so a missing wrapper
-// compiles fine — the call falls through to the underlying go-github client
-// and bypasses both github_api_calls_total recording and the per-App quota
-// pool's response-header capture. The observability gap and picker blind
-// spot are silent, hence this parity test as a regression guard.
-func TestRateLimitClientWrapperParity(t *testing.T) {
+// Each per-service wrapper embeds the service interface, so a missing
+// wrapper compiles fine — the call falls through to the underlying
+// go-github client and bypasses both github_api_calls_total recording and
+// the per-credential cooldown pool's response-header capture. The
+// observability gap and picker blind spot are silent, hence this parity
+// test as a regression guard.
+func TestWrapperParity(t *testing.T) {
 	pairings := map[string]string{
-		"ActionsClient":       "RateLimitActionsClient",
-		"DependabotClient":    "RateLimitDependabotClient",
-		"OrganizationsClient": "RateLimitOrganizationsClient",
-		"UsersClient":         "RateLimitUsersClient",
-		"TeamsClient":         "RateLimitTeamsClient",
-		"RepositoriesClient":  "RateLimitRepositoriesClient",
+		"ActionsClient":       "actionsClient",
+		"DependabotClient":    "dependabotClient",
+		"OrganizationsClient": "organizationsClient",
+		"UsersClient":         "usersClient",
+		"TeamsClient":         "teamsClient",
+		"RepositoriesClient":  "repositoriesClient",
 	}
 
-	interfaceMethods := parseInterfaceMethods(t, "client.go")
-	wrapperMethods := parseStructMethods(t, "rate_limit_client.go")
+	interfaceMethods := parseInterfaceMethods(t, "services.go")
+	wrapperMethods := parseStructMethods(t, "client.go")
 
 	for ifaceName, wrapperName := range pairings {
 		iface, ok := interfaceMethods[ifaceName]
 		if !ok {
-			t.Errorf("interface %s not found in client.go", ifaceName)
+			t.Errorf("interface %s not found in services.go", ifaceName)
 			continue
 		}
 		wrapper, ok := wrapperMethods[wrapperName]
 		if !ok {
-			t.Errorf("struct %s not found in rate_limit_client.go", wrapperName)
+			t.Errorf("struct %s not found in client.go", wrapperName)
 			continue
 		}
 

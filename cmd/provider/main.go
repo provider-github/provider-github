@@ -157,7 +157,7 @@ func main() {
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			ghclient.CleanupExpiredClients()
+			ghclient.CleanupExpiredServices()
 			log.Debug("Cleaned up expired GitHub clients")
 		}
 	}()

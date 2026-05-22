@@ -114,16 +114,16 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	rlc, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
+	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: rlc}, nil
+	return &external{github: gh}, nil
 }
 
 type external struct {
-	github *ghclient.RateLimitClient
+	github *ghclient.Client
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {

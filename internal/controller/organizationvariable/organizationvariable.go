@@ -116,16 +116,16 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	rlc, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
+	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: rlc}, nil
+	return &external{github: gh}, nil
 }
 
 type external struct {
-	github *ghclient.RateLimitClient
+	github *ghclient.Client
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -229,7 +229,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 // buildActionsVariable produces the payload for CreateOrgVariable /
 // UpdateOrgVariable. For visibility=selected, it resolves repository
 // names to IDs so they're sent in the same request.
-func buildActionsVariable(ctx context.Context, gh *ghclient.RateLimitClient, cr *v1alpha1.OrganizationVariable) (*github.ActionsVariable, error) {
+func buildActionsVariable(ctx context.Context, gh *ghclient.Client, cr *v1alpha1.OrganizationVariable) (*github.ActionsVariable, error) {
 	visibility := cr.Spec.ForProvider.Visibility
 	v := &github.ActionsVariable{
 		Name:       meta.GetExternalName(cr),
@@ -260,7 +260,7 @@ func repoNamesFromCR(refs []v1alpha1.VariableSelectedRepo) []string {
 
 // listSelectedRepoIDs paginates through all repositories that have
 // access to the variable on GitHub's side, returning their numeric IDs.
-func listSelectedRepoIDs(ctx context.Context, gh *ghclient.RateLimitClient, org, name string) ([]int64, error) {
+func listSelectedRepoIDs(ctx context.Context, gh *ghclient.Client, org, name string) ([]int64, error) {
 	opts := &github.ListOptions{PerPage: 100}
 	var ids []int64
 	for {
@@ -290,11 +290,11 @@ func sortInt64(s []int64) {
 type repoIDCache struct {
 	mu    sync.Mutex
 	cache map[string]int64
-	gh    *ghclient.RateLimitClient
+	gh    *ghclient.Client
 	org   string
 }
 
-func newRepoIDCache(gh *ghclient.RateLimitClient, org string) *repoIDCache {
+func newRepoIDCache(gh *ghclient.Client, org string) *repoIDCache {
 	return &repoIDCache{cache: map[string]int64{}, gh: gh, org: org}
 }
 
