@@ -26,6 +26,21 @@ spec:
       - crossplane
       - github
       - infrastructure-as-code
+    defaultBranch: main
+    allowMergeCommit: true
+    allowSquashMerge: true
+    allowRebaseMerge: false
+    allowAutoMerge: false
+    allowUpdateBranch: true
+    deleteBranchOnMerge: true
+    hasIssues: true
+    hasProjects: false
+    hasWiki: false
+    hasDiscussions: false
+    mergeCommitTitle: PR_TITLE
+    mergeCommitMessage: PR_BODY
+    squashMergeCommitTitle: PR_TITLE
+    squashMergeCommitMessage: PR_BODY
     orgRef:
       name: pgh-sample-organization
     permissions:

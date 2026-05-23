@@ -121,6 +121,102 @@ func withDifferentTopics() repositoryModifier {
 	}
 }
 
+func withDifferentDescription() repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.Description = description + "-drift"
+	}
+}
+
+func withDefaultBranch(b string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.DefaultBranch = &b
+	}
+}
+
+func withAllowMergeCommit(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.AllowMergeCommit = &b
+	}
+}
+
+func withAllowSquashMerge(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.AllowSquashMerge = &b
+	}
+}
+
+func withAllowRebaseMerge(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.AllowRebaseMerge = &b
+	}
+}
+
+func withAllowAutoMerge(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.AllowAutoMerge = &b
+	}
+}
+
+func withAllowUpdateBranch(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.AllowUpdateBranch = &b
+	}
+}
+
+func withDeleteBranchOnMerge(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.DeleteBranchOnMerge = &b
+	}
+}
+
+func withHasIssues(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.HasIssues = &b
+	}
+}
+
+func withHasProjects(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.HasProjects = &b
+	}
+}
+
+func withHasWiki(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.HasWiki = &b
+	}
+}
+
+func withHasDiscussions(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.HasDiscussions = &b
+	}
+}
+
+func withMergeCommitTitle(s string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.MergeCommitTitle = &s
+	}
+}
+
+func withMergeCommitMessage(s string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.MergeCommitMessage = &s
+	}
+}
+
+func withSquashMergeCommitTitle(s string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.SquashMergeCommitTitle = &s
+	}
+}
+
+func withSquashMergeCommitMessage(s string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.SquashMergeCommitMessage = &s
+	}
+}
+
 func repository(m ...repositoryModifier) *v1alpha1.Repository {
 	cr := &v1alpha1.Repository{}
 	cr.Spec.ForProvider.Permissions = v1alpha1.RepositoryPermissions{
@@ -242,6 +338,7 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 	}
 
 	cr.Spec.ForProvider.Topics = []string{topic1, topic2, topic3}
+	cr.Spec.ForProvider.Description = description
 
 	meta.SetExternalName(cr, repo)
 
@@ -640,6 +737,78 @@ func TestObserve(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.want.o, got); diff != "" {
 				t.Errorf("\n%s\ne.Observe(...): -want, +got:\n%s\n", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestObserveMainSettingsDrift pins drift detection for the repo main-settings
+// fields. Each case flips a single spec field; Observe must report not-up-to-date.
+func TestObserveMainSettingsDrift(t *testing.T) {
+	upToDateClient := func() *ghclient.Client {
+		return &ghclient.Client{
+			Services: &ghclient.Services{
+				Repositories: &fake.MockRepositoriesClient{
+					MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+						return githubRepository(), nil, nil
+					},
+					MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+						return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+					},
+					MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+						return githubTeams(), fake.GenerateEmptyResponse(), nil
+					},
+					MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+						return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+					},
+					MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+						return githubBranches(), fake.GenerateEmptyResponse(), nil
+					},
+					MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+						return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+					},
+					MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						return githubRuleset(), fake.GenerateEmptyResponse(), nil
+					},
+					MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+					},
+				},
+			},
+		}
+	}
+
+	cases := map[string]repositoryModifier{
+		"DescriptionDrift":              withDifferentDescription(),
+		"DefaultBranchDrift":            withDefaultBranch("main"),
+		"AllowMergeCommitDrift":         withAllowMergeCommit(true),
+		"AllowSquashMergeDrift":         withAllowSquashMerge(true),
+		"AllowRebaseMergeDrift":         withAllowRebaseMerge(true),
+		"AllowAutoMergeDrift":           withAllowAutoMerge(true),
+		"AllowUpdateBranchDrift":        withAllowUpdateBranch(true),
+		"DeleteBranchOnMergeDrift":      withDeleteBranchOnMerge(true),
+		"HasIssuesDrift":                withHasIssues(true),
+		"HasProjectsDrift":              withHasProjects(true),
+		"HasWikiDrift":                  withHasWiki(true),
+		"HasDiscussionsDrift":           withHasDiscussions(true),
+		"MergeCommitTitleDrift":         withMergeCommitTitle("PR_TITLE"),
+		"MergeCommitMessageDrift":       withMergeCommitMessage("PR_BODY"),
+		"SquashMergeCommitTitleDrift":   withSquashMergeCommitTitle("PR_TITLE"),
+		"SquashMergeCommitMessageDrift": withSquashMergeCommitMessage("PR_BODY"),
+	}
+
+	for name, mod := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := external{github: upToDateClient()}
+			got, err := e.Observe(context.Background(), repository(mod))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got.ResourceExists {
+				t.Errorf("Observe(): want ResourceExists=true, got false")
+			}
+			if got.ResourceUpToDate {
+				t.Errorf("Observe(): want ResourceUpToDate=false (drift), got true")
 			}
 		})
 	}

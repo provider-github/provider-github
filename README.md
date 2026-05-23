@@ -17,6 +17,10 @@ implements the following resources with partial functionality:
   * selected repositories
 * **Repository**
   * description, visibility (private/public), topics, template flag
+  * default branch
+  * feature toggles — Issues, Projects, Wiki, Discussions
+  * merge strategies — merge / squash / rebase / auto-merge / update-branch / delete-branch-on-merge
+  * merge commit format (title and body, for both merge and squash-merge)
   * creation from a template repository or as a fork
   * user (collaborator) permissions
   * team permissions
