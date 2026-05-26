@@ -137,7 +137,7 @@ func githubOrgSecretRepo() *github.Repository {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -158,8 +158,8 @@ func TestObserve(t *testing.T) {
 	}{
 		"NotUpToDate": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 								return githubOrganization(), nil, nil
@@ -206,8 +206,8 @@ func TestObserve(t *testing.T) {
 		},
 		"UpToDate": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 								return githubOrganization(), nil, nil
@@ -257,8 +257,8 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExists": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Organizations: &fake.MockOrganizationsClient{
 							MockGet: func(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
 								return nil, nil, fake.Generate404Response()
@@ -330,8 +330,8 @@ func TestListEnabledReposInOrg_Paginates(t *testing.T) {
 		{{Name: github.String("c")}},
 	}
 	calls := 0
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					i := calls
@@ -370,8 +370,8 @@ func TestListEnabledReposInOrg_Paginates(t *testing.T) {
 // for some other reason (e.g. description or secrets drifted).
 func TestSetEnabledReposForActions_SkipsWhenAlreadyMatching(t *testing.T) {
 	setCalled := false
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					return &github.ActionsEnabledOnOrgRepos{
@@ -404,8 +404,8 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 	var setIDs []int64
 	setCalls := 0
 	var lookedUp []string
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					// Org currently has only r1 (with ID, as real GitHub returns); CR wants r1+r2.
@@ -454,8 +454,8 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
 	listCalls := 0
 	setCalled := false
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					listCalls++
@@ -491,8 +491,8 @@ func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
 // state as in-sync.
 func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
 	wantErr := errors.New("github: 422 invalid repository id")
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				// CR wants only r1; GH has r1+r2 enabled. Names differ, so
 				// Set fires (with r1's resolved ID from the seeded cache).
@@ -524,8 +524,8 @@ func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
 func TestSetEnabledReposForActions_GetErrorPropagates(t *testing.T) {
 	wantErr := errors.New("github: 404 not found")
 	setCalled := false
-	gh := &ghclient.RateLimitClient{
-		Client: &ghclient.Client{
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					return &github.ActionsEnabledOnOrgRepos{

@@ -29,29 +29,24 @@ import (
 	"github.com/google/go-github/v62/github"
 )
 
-// CachedClient represents a cached GitHub client with token reuse
-type CachedClient struct {
-	*Client
-}
-
-// ClientCache manages cached GitHub clients to reduce token requests
-type ClientCache struct {
+// ServicesCache caches *Services keyed by credential hash so that
+// installation tokens are reused across calls within a TTL.
+type ServicesCache struct {
 	mu      sync.RWMutex
-	clients map[string]*cachedClientEntry
+	entries map[string]*cachedServicesEntry
 }
 
-type cachedClientEntry struct {
-	client    *Client
+type cachedServicesEntry struct {
+	services  *Services
 	createdAt time.Time
-	cacheKey  string
 }
 
 var (
-	globalClientCache = &ClientCache{
-		clients: make(map[string]*cachedClientEntry),
+	globalServicesCache = &ServicesCache{
+		entries: make(map[string]*cachedServicesEntry),
 	}
 	// Cache clients for 50 minutes (GitHub App tokens expire after 1 hour)
-	clientCacheTimeout = 50 * time.Minute
+	servicesCacheTimeout = 50 * time.Minute
 )
 
 // GenerateCacheKey creates a consistent cache key from credentials. The same
@@ -62,37 +57,36 @@ func GenerateCacheKey(creds string) string {
 	return fmt.Sprintf("%x", hash[:8]) // Use first 8 bytes of hash
 }
 
-// NewCachedClient creates a new cached GitHub client that reuses tokens
-func NewCachedClient(creds string) (*Client, error) {
+// NewCachedServices creates a new cached GitHub client that reuses tokens
+func NewCachedServices(creds string) (*Services, error) {
 	cacheKey := GenerateCacheKey(creds)
 
-	globalClientCache.mu.Lock()
-	defer globalClientCache.mu.Unlock()
+	globalServicesCache.mu.Lock()
+	defer globalServicesCache.mu.Unlock()
 
 	// Check if we have a valid cached client
-	if entry, exists := globalClientCache.clients[cacheKey]; exists {
+	if entry, exists := globalServicesCache.entries[cacheKey]; exists {
 		// Check if cache entry is still valid
-		if time.Since(entry.createdAt) < clientCacheTimeout {
-			return entry.client, nil
+		if time.Since(entry.createdAt) < servicesCacheTimeout {
+			return entry.services, nil
 		}
 		// Remove expired entry
-		delete(globalClientCache.clients, cacheKey)
+		delete(globalServicesCache.entries, cacheKey)
 	}
 
 	// Create new client using existing logic
-	client, err := createNewClient(creds)
+	services, err := createNewServices(creds)
 	if err != nil {
 		return nil, err
 	}
 
 	// Cache the new client
-	globalClientCache.clients[cacheKey] = &cachedClientEntry{
-		client:    client,
+	globalServicesCache.entries[cacheKey] = &cachedServicesEntry{
+		services:  services,
 		createdAt: time.Now(),
-		cacheKey:  cacheKey,
 	}
 
-	return client, nil
+	return services, nil
 }
 
 // ExtractAppIDs returns the GitHub App ID and Installation ID from a
@@ -109,8 +103,8 @@ func ExtractAppIDs(creds string) (appID, installationID string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// createNewClient contains the original client creation logic
-func createNewClient(creds string) (*Client, error) {
+// createNewServices contains the original client creation logic
+func createNewServices(creds string) (*Services, error) {
 	credss := strings.Split(creds, ",")
 	if len(credss) != 3 {
 		return nil, fmt.Errorf("invalid format for credentials")
@@ -133,7 +127,7 @@ func createNewClient(creds string) (*Client, error) {
 
 	ghclient := github.NewClient(&http.Client{Transport: itr})
 
-	return &Client{
+	return &Services{
 		Actions:       ghclient.Actions,
 		Dependabot:    ghclient.Dependabot,
 		Organizations: ghclient.Organizations,
@@ -143,15 +137,15 @@ func createNewClient(creds string) (*Client, error) {
 	}, nil
 }
 
-// CleanupExpiredClients removes expired clients from cache (optional background cleanup)
-func CleanupExpiredClients() {
-	globalClientCache.mu.Lock()
-	defer globalClientCache.mu.Unlock()
+// CleanupExpiredServices removes expired clients from cache (optional background cleanup)
+func CleanupExpiredServices() {
+	globalServicesCache.mu.Lock()
+	defer globalServicesCache.mu.Unlock()
 
 	now := time.Now()
-	for key, entry := range globalClientCache.clients {
-		if now.Sub(entry.createdAt) >= clientCacheTimeout {
-			delete(globalClientCache.clients, key)
+	for key, entry := range globalServicesCache.entries {
+		if now.Sub(entry.createdAt) >= servicesCacheTimeout {
+			delete(globalServicesCache.entries, key)
 		}
 	}
 }

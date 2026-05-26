@@ -452,7 +452,7 @@ func githubBranches() []*github.Branch {
 
 func TestObserve(t *testing.T) {
 	type fields struct {
-		github *ghclient.RateLimitClient
+		github *ghclient.Client
 	}
 
 	type args struct {
@@ -472,8 +472,8 @@ func TestObserve(t *testing.T) {
 		want   want
 	}{
 		"NotUpToDate": {
-			fields: fields{github: &ghclient.RateLimitClient{
-				Client: &ghclient.Client{
+			fields: fields{github: &ghclient.Client{
+				Services: &ghclient.Services{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -515,8 +515,8 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		"UpToDate": {
-			fields: fields{github: &ghclient.RateLimitClient{
-				Client: &ghclient.Client{
+			fields: fields{github: &ghclient.Client{
+				Services: &ghclient.Services{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -561,8 +561,8 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		"NotUpToDateTopicsMismatch": {
-			fields: fields{github: &ghclient.RateLimitClient{
-				Client: &ghclient.Client{
+			fields: fields{github: &ghclient.Client{
+				Services: &ghclient.Services{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							return githubRepository(), nil, nil
@@ -608,8 +608,8 @@ func TestObserve(t *testing.T) {
 		},
 		"DoesNotExist": {
 			fields: fields{
-				github: &ghclient.RateLimitClient{
-					Client: &ghclient.Client{
+				github: &ghclient.Client{
+					Services: &ghclient.Services{
 						Repositories: &fake.MockRepositoriesClient{
 							MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 								return nil, nil, fake.Generate404Response()
@@ -780,8 +780,8 @@ func TestFilterMissingBranchProtectionRules(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			var calls []string
-			gh := &ghclient.RateLimitClient{
-				Client: &ghclient.Client{
+			gh := &ghclient.Client{
+				Services: &ghclient.Services{
 					Repositories: &fake.MockRepositoriesClient{
 						MockGetBranch: func(_ context.Context, _, _, branch string, _ int) (*github.Branch, *github.Response, error) {
 							calls = append(calls, branch)

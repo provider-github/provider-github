@@ -50,7 +50,7 @@ func swapGlobalPool(t *testing.T, p *quotaPool) {
 // under the supplied cacheKey, with CooldownUntil set to the response's
 // Reset time — the wire that lets the picker skip the credential on
 // subsequent Connects.
-func TestRateLimitClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
+func TestClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	resetAt := now.Add(15 * time.Minute)
 
@@ -70,10 +70,10 @@ func TestRateLimitClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
 		},
 	}
 
-	c := &Client{Organizations: orgs}
-	rlc := NewRateLimitClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-cache-key")
+	c := &Services{Organizations: orgs}
+	client := NewClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-cache-key")
 
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
 
 	q := globalPool.snapshot("app-cache-key")
 	if !q.CooldownUntil.Equal(resetAt) {
@@ -81,7 +81,7 @@ func TestRateLimitClient_RecordsToPoolOnTooManyRequests(t *testing.T) {
 	}
 }
 
-func TestRateLimitClient_RecordsToPoolOnSuccess(t *testing.T) {
+func TestClient_RecordsToPoolOnSuccess(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -98,10 +98,10 @@ func TestRateLimitClient_RecordsToPoolOnSuccess(t *testing.T) {
 		},
 	}
 
-	c := &Client{Organizations: orgs}
-	rlc := NewRateLimitClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-cache-key")
+	c := &Services{Organizations: orgs}
+	client := NewClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-cache-key")
 
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
 
 	q := globalPool.snapshot("app-cache-key")
 	if q.Remaining != 4321 {
@@ -114,7 +114,7 @@ func TestRateLimitClient_RecordsToPoolOnSuccess(t *testing.T) {
 
 // Pool wiring must work even when metrics is nil (e.g. in controller
 // unit tests). Telemetry being optional should not skip pool updates.
-func TestRateLimitClient_NilMetricsIsSafe(t *testing.T) {
+func TestClient_NilMetricsIsSafe(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -127,10 +127,10 @@ func TestRateLimitClient_NilMetricsIsSafe(t *testing.T) {
 		},
 	}
 
-	c := &Client{Organizations: orgs}
-	rlc := NewRateLimitClient(c, nil).WithRateLimitTracking("acme", "app", "install", "k")
+	c := &Services{Organizations: orgs}
+	client := NewClient(c, nil).WithRateLimitTracking("acme", "app", "install", "k")
 
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
 
 	if globalPool.snapshot("k").Remaining != 100 {
 		t.Errorf("expected pool to record despite nil metrics")
@@ -140,7 +140,7 @@ func TestRateLimitClient_NilMetricsIsSafe(t *testing.T) {
 // Exercises a non-Organizations service path (Repositories) to confirm
 // cacheKey propagates through every wrapper, not just the Orgs one. The
 // empty-key check guards against the field being silently dropped.
-func TestRateLimitClient_RecordsToPool_Repositories(t *testing.T) {
+func TestClient_RecordsToPool_Repositories(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -153,10 +153,10 @@ func TestRateLimitClient_RecordsToPool_Repositories(t *testing.T) {
 		},
 	}
 
-	c := &Client{Repositories: repos}
-	rlc := NewRateLimitClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-repos-key")
+	c := &Services{Repositories: repos}
+	client := NewClient(c, nil).WithRateLimitTracking("acme", "app", "install", "app-repos-key")
 
-	_, _, _ = rlc.Repositories.Get(context.Background(), "acme", "my-repo")
+	_, _, _ = client.Repositories.Get(context.Background(), "acme", "my-repo")
 
 	if got := globalPool.snapshot("app-repos-key").Remaining; got != 1234 {
 		t.Errorf("Repositories.Get did not propagate cacheKey: pool.Remaining = %d, want 1234", got)
@@ -170,7 +170,7 @@ func TestRateLimitClient_RecordsToPool_Repositories(t *testing.T) {
 // the supplied (org, app_id, app_installation_id, method) labels —
 // regardless of HTTP outcome. Verifies the method-name plumbing from
 // each wrapper through recordResponse to telemetry.
-func TestRateLimitClient_IncrementsAPICallsCounter(t *testing.T) {
+func TestClient_IncrementsAPICallsCounter(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 
 	metrics := telemetryNewForTest(t)
@@ -184,11 +184,11 @@ func TestRateLimitClient_IncrementsAPICallsCounter(t *testing.T) {
 			}, nil
 		},
 	}
-	c := &Client{Organizations: orgs}
-	rlc := NewRateLimitClient(c, metrics).WithRateLimitTracking("acme", "12345", "67890", "k")
+	c := &Services{Organizations: orgs}
+	client := NewClient(c, metrics).WithRateLimitTracking("acme", "12345", "67890", "k")
 
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
 
 	if calls["Get"] != 2 {
 		t.Fatalf("setup: underlying Get called %d times, want 2", calls["Get"])
@@ -201,7 +201,7 @@ func TestRateLimitClient_IncrementsAPICallsCounter(t *testing.T) {
 // A wrapped call returning (nil, nil, err) — the ghinstallation token-mint
 // failure shape — must mark the credential unhealthy in the pool so the
 // picker steers away on the next pick.
-func TestRateLimitClient_AuthFailure_RecordsUnhealthy(t *testing.T) {
+func TestClient_AuthFailure_RecordsUnhealthy(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	swapGlobalPool(t, newQuotaPool(func() time.Time { return now }))
 
@@ -211,10 +211,10 @@ func TestRateLimitClient_AuthFailure_RecordsUnhealthy(t *testing.T) {
 		},
 	}
 
-	c := &Client{Organizations: orgs}
-	rlc := NewRateLimitClient(c, nil).WithRateLimitTracking("acme", "12345", "67890", "broken-key")
+	c := &Services{Organizations: orgs}
+	client := NewClient(c, nil).WithRateLimitTracking("acme", "12345", "67890", "broken-key")
 
-	_, _, _ = rlc.Organizations.Get(context.Background(), "acme")
+	_, _, _ = client.Organizations.Get(context.Background(), "acme")
 
 	q := globalPool.snapshot("broken-key")
 	want := now.Add(unhealthyCooldownBase)

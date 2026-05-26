@@ -119,16 +119,16 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	rlc, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
+	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: rlc}, nil
+	return &external{github: gh}, nil
 }
 
 type external struct {
-	github *ghclient.RateLimitClient
+	github *ghclient.Client
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -190,7 +190,7 @@ func getUserPermissionMapFromCr(users []v1alpha1.TeamMemberUser) map[string]stri
 	return crMToPermission
 }
 
-func getMembersWithPermissions(ctx context.Context, gh *ghclient.RateLimitClient, org, slug string) (map[string]string, error) {
+func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, slug string) (map[string]string, error) {
 	mToPermission := make(map[string]string)
 	roles := []string{"member", "maintainer"}
 
@@ -256,7 +256,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalCreation{}, nil
 }
 
-func updateTeamUsers(ctx context.Context, cr *v1alpha1.Team, gh *ghclient.RateLimitClient, teamSlug string) error {
+func updateTeamUsers(ctx context.Context, cr *v1alpha1.Team, gh *ghclient.Client, teamSlug string) error {
 	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Members)
 	ghMToPermission, err := getMembersWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, teamSlug)
 	if err != nil {

@@ -54,12 +54,12 @@ import (
 type repositoryCache struct {
 	mu    sync.RWMutex
 	cache map[string]int64 // repo name -> repo ID
-	gh    *ghclient.RateLimitClient
+	gh    *ghclient.Client
 	org   string
 }
 
 // newRepositoryCache creates a new repository cache for the given organization
-func newRepositoryCache(gh *ghclient.RateLimitClient, org string) *repositoryCache {
+func newRepositoryCache(gh *ghclient.Client, org string) *repositoryCache {
 	return &repositoryCache{
 		cache: make(map[string]int64),
 		gh:    gh,
@@ -200,18 +200,18 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	rlc, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, meta.GetExternalName(cr))
+	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, meta.GetExternalName(cr))
 	if err != nil {
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{github: rlc}, nil
+	return &external{github: gh}, nil
 }
 
 type external struct {
 	// A 'client' used to connect to the external resource API. In practice this
 	// would be something like an AWS SDK client.
-	github *ghclient.RateLimitClient
+	github *ghclient.Client
 }
 
 //nolint:gocyclo
@@ -332,13 +332,13 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	secrets := cr.Spec.ForProvider.Secrets
 	if secrets != nil {
 		if secrets.ActionsSecrets != nil {
-			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.ActionsSecrets, &ActionsSecretSetter{client: gh})
+			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.ActionsSecrets, &ActionsSecretSetter{gh: gh})
 			if err != nil {
 				return managed.ExternalUpdate{}, err
 			}
 		}
 		if secrets.DependabotSecrets != nil {
-			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.DependabotSecrets, &DependabotSecretSetter{client: gh})
+			err = updateOrgSecrets(ctx, gh, name, cr.Spec.ForProvider.Secrets.DependabotSecrets, &DependabotSecretSetter{gh: gh})
 			if err != nil {
 				return managed.ExternalUpdate{}, err
 			}
@@ -382,7 +382,7 @@ func getSortedRepoNames(repos []*github.Repository) []string {
 // result to one page, which produces a phantom diff against the CR's
 // enabled-repos list and triggers idempotent re-adds on every reconcile
 // when the org has more than 100 enabled repos.
-func listEnabledReposInOrg(ctx context.Context, gh *ghclient.RateLimitClient, org string) ([]*github.Repository, error) {
+func listEnabledReposInOrg(ctx context.Context, gh *ghclient.Client, org string) ([]*github.Repository, error) {
 	opts := &github.ListOptions{PerPage: 100}
 	var all []*github.Repository
 	for {
@@ -404,7 +404,7 @@ func listEnabledReposInOrg(ctx context.Context, gh *ghclient.RateLimitClient, or
 // Add/Remove. To avoid an unnecessary write when the diff Observe saw is
 // unrelated to enabledRepos (e.g. only description or secrets drifted),
 // it first lists the current state and skips the Set when names match.
-func setEnabledReposForActions(ctx context.Context, gh *ghclient.RateLimitClient, name string, cr *v1alpha1.Organization) error {
+func setEnabledReposForActions(ctx context.Context, gh *ghclient.Client, name string, cr *v1alpha1.Organization) error {
 	crARepos := getSortedEnabledReposFromCr(cr.Spec.ForProvider.Actions.EnabledRepos)
 
 	// To use this function, the organization permission policy for enabled_repositories must be configured to selected, otherwise you get error 409 Conflict
@@ -431,7 +431,7 @@ func setEnabledReposForActions(ctx context.Context, gh *ghclient.RateLimitClient
 	return err
 }
 
-func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.RateLimitClient, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
+func getOrgSecretsMapFromCr(ctx context.Context, gh *ghclient.Client, org string, secrets []v1alpha1.OrgSecret) (map[string][]int64, error) {
 	crOrgSecretsToConfig := make(map[string][]int64, len(secrets))
 
 	// Create repository cache for this function to avoid repeated lookups
@@ -521,15 +521,15 @@ type OrgSecretSetter interface {
 }
 
 type ActionsSecretSetter struct {
-	client *ghclient.RateLimitClient
+	gh *ghclient.Client
 }
 
 type DependabotSecretSetter struct {
-	client *ghclient.RateLimitClient
+	gh *ghclient.Client
 }
 
 func (a *ActionsSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error {
-	_, err := a.client.Actions.SetSelectedReposForOrgSecret(ctx, org, name, ids)
+	_, err := a.gh.Actions.SetSelectedReposForOrgSecret(ctx, org, name, ids)
 	if err != nil {
 		return err
 	}
@@ -537,14 +537,14 @@ func (a *ActionsSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, 
 }
 
 func (d *DependabotSecretSetter) SetSelectedReposForOrgSecret(ctx context.Context, org string, name string, ids []int64) error {
-	_, err := d.client.Dependabot.SetSelectedReposForOrgSecret(ctx, org, name, ids)
+	_, err := d.gh.Dependabot.SetSelectedReposForOrgSecret(ctx, org, name, ids)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func updateOrgSecrets(ctx context.Context, gh *ghclient.RateLimitClient, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
+func updateOrgSecrets(ctx context.Context, gh *ghclient.Client, owner string, secrets []v1alpha1.OrgSecret, setter OrgSecretSetter) error {
 	for _, secret := range secrets {
 		repoIds := make([]int64, 0, len(secret.RepositoryAccessList))
 		for _, repo := range secret.RepositoryAccessList {

@@ -66,10 +66,10 @@ The Prometheus output reflects this differently though: gauge and counter series
 - **IsRateLimitExceeded()**: Checks if response indicates rate limit exceeded
 - **GetRateLimitUsagePercentage()**: Calculates percentage of rate limit used
 
-### Rate Limit Client (`internal/clients/rate_limit_client.go`)
+### Client (`internal/clients/client.go`)
 
-- **RateLimitClient**: Wraps the standard GitHub client with rate limit tracking
-- **NewRateLimitClient()**: Creates a new rate limit tracking client
+- **Client**: Wraps the standard GitHub client with rate limit tracking
+- **NewClient()**: Creates a new rate limit tracking client
 - **WithRateLimitTracking()**: Returns a client configured for a specific organization
 
 All GitHub API calls automatically record rate limit information from response headers.
@@ -208,9 +208,9 @@ groups:
 
 ### Core Files
 - `internal/telemetry/rate_limit.go` - Rate limit metrics and utilities
-- `internal/clients/rate_limit_client.go` - Rate limit tracking client wrapper
+- `internal/clients/client.go` - Rate limit tracking client wrapper
 
 ### Integration
-- All controllers updated to use `RateLimitClient` instead of `TelemetryClient`
+- All controllers updated to use `Client` instead of `TelemetryClient`
 - Main application initializes rate limit metrics
 - Metrics exposed on `/metrics` endpoint

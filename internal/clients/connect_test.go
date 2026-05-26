@@ -76,7 +76,7 @@ func TestResolveAndConnect_RecordsPickerPick(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 	metrics := telemetryNewForTest(t)
 
-	// NewCachedClient will fail because the PEM body is fake, but the
+	// NewCachedServices will fail because the PEM body is fake, but the
 	// picker still ran successfully — we only care that the pick was
 	// recorded with the correct labels and reason.
 	_, _ = ResolveAndConnect(context.Background(), kube, pc, metrics, "acme")
@@ -86,13 +86,13 @@ func TestResolveAndConnect_RecordsPickerPick(t *testing.T) {
 	}
 }
 
-// Construction failures inside NewCachedClient (non-numeric IDs,
+// Construction failures inside NewCachedServices (non-numeric IDs,
 // malformed PEM) happen before any wrapped GitHub call. ResolveAndConnect
 // must still record the failure on the pool and bump the unhealthy
 // counter so the picker can avoid the broken credential on next pick.
 func TestResolveAndConnect_NewClientFailure_RecordsToPool(t *testing.T) {
 	// Three comma-separated fields (passes ExtractAppIDs) but the second
-	// field isn't a valid integer, so strconv.Atoi inside NewCachedClient
+	// field isn't a valid integer, so strconv.Atoi inside NewCachedServices
 	// will fail before any HTTP call.
 	badCreds := []byte("12345,not-a-number,-----BEGIN RSA PRIVATE KEY-----\nbody\n-----END RSA PRIVATE KEY-----")
 
@@ -106,7 +106,7 @@ func TestResolveAndConnect_NewClientFailure_RecordsToPool(t *testing.T) {
 
 	_, err := ResolveAndConnect(context.Background(), kube, pc, nil, "acme")
 	if err == nil {
-		t.Fatal("expected error from NewCachedClient on bad creds")
+		t.Fatal("expected error from NewCachedServices on bad creds")
 	}
 
 	// Pool should reflect the failure so the picker steers away next time.

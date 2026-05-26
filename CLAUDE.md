@@ -71,7 +71,7 @@ Then register the new API in `apis/github.go` (or the appropriate group aggregat
 
 ### Entry point and wiring
 
-- `cmd/provider/main.go` — kingpin CLI; constructs the controller-runtime manager, wires feature flags (external secret stores, management policies), starts a *second* HTTP server on `:8081` for custom Prometheus metrics (`/metrics`), and starts a 15-minute ticker that calls `ghclient.CleanupExpiredClients()` to evict expired GitHub App tokens. Two setup paths: `Setup` (no per-reconcile timeout) vs `SetupWithTimeout` (uses `--reconcile-timeout`, default `1m`).
+- `cmd/provider/main.go` — kingpin CLI; constructs the controller-runtime manager, wires feature flags (external secret stores, management policies), starts a *second* HTTP server on `:8081` for custom Prometheus metrics (`/metrics`), and starts a 15-minute ticker that calls `ghclient.CleanupExpiredServices()` to evict expired GitHub App tokens. Two setup paths: `Setup` (no per-reconcile timeout) vs `SetupWithTimeout` (uses `--reconcile-timeout`, default `1m`).
 - `internal/controller/github.go` — registers each resource's `Setup`/`SetupWithTimeout` with the manager. **Adding a new controller requires editing this file.**
 
 ### API types (CRDs)
@@ -84,21 +84,22 @@ Then register the new API in `apis/github.go` (or the appropriate group aggregat
 
 Each managed resource lives in `internal/controller/<resource>/` with a `<resource>.go` and `<resource>_test.go`. They follow the standard `crossplane-runtime/pkg/reconciler/managed` pattern: a `connector` builds the GitHub client from `ProviderConfig` credentials and produces an `external` that implements `Observe`/`Create`/`Update`/`Delete`.
 
-Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube, pc, metrics, orgName)` to get a ready-to-use `*RateLimitClient`. That helper resolves every credential entry on the `ProviderConfig` (the primary `credentials` plus any `additionalCredentials`), consults the global per-app quota pool to pick the credential with the most remaining rate-limit headroom, builds a cached client via `NewCachedClient`, and wraps it with rate-limit tracking — so every controller automatically benefits from token caching, per-app quota selection, and 429-aware cooldowns. **Don't re-implement the inline secret extraction + client wrapping pattern in a new controller; call `ResolveAndConnect`.**
+Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube, pc, metrics, orgName)` to get a ready-to-use `*Client`. That helper resolves every credential entry on the `ProviderConfig` (the primary `credentials` plus any `additionalCredentials`), consults the global per-app quota pool to pick the credential with the most remaining rate-limit headroom, builds a cached client via `NewCachedServices`, and wraps it with rate-limit tracking — so every controller automatically benefits from token caching, per-app quota selection, and 429-aware cooldowns. **Don't re-implement the inline secret extraction + client wrapping pattern in a new controller; call `ResolveAndConnect`.**
 
 `config.Setup` (provider config controller) is set up unconditionally; resource controllers vary based on `--reconcile-timeout`.
 
 ### GitHub client layer (`internal/clients/`)
 
-- `client.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v62`. `Client` is a struct of these interfaces. `NewClient` parses creds in the format `appId,installationId,privateKeyPEM` and uses `bradleyfalzon/ghinstallation/v2` for App auth. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
-- `cached_client.go` — `NewCachedClient` keeps a process-wide map of `Client` instances keyed by `GenerateCacheKey(creds)` (8-byte SHA-256 prefix), with a 50-minute TTL (GitHub App tokens expire at 60). `CleanupExpiredClients` is the periodic eviction routine called from `main`.
-- `rate_limit_client.go` — wraps each per-service interface so every response is recorded both into `telemetry.RateLimitMetrics` (Prometheus) and into the per-app quota pool. `metrics` is nil-safe so unit tests can skip telemetry setup.
-- `pool.go` — process-wide `globalPool` of per-credential `AppQuota` snapshots. `recordResponse(cacheKey, resp, err)` handles three cases:
-    - Normal response (incl. 429): updates `remaining`/`limit`/`reset` from the rate-limit headers; on 429 sets `CooldownUntil` to `X-RateLimit-Reset` (30s floor when that header is missing or in the past); resets `ConsecutiveFailures` to zero.
+- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v62`. `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
+- `cached_services.go` — `NewCachedServices` parses creds in the format `appId,installationId,privateKeyPEM` (using `bradleyfalzon/ghinstallation/v2` for App auth) and keeps a process-wide map of `*Services` instances keyed by `GenerateCacheKey(creds)` (8-byte SHA-256 prefix), with a 50-minute TTL (GitHub App tokens expire at 60). `CleanupExpiredServices` is the periodic eviction routine called from `main`.
+- `client.go` — defines `Client`, the outer wrapper controllers use. Each per-service wrapper (`actionsClient`, `organizationsClient`, etc.) embeds the underlying service interface and records every response into `telemetry.RateLimitMetrics` (Prometheus) and the per-credential cooldown pool. `metrics` is nil-safe so unit tests can skip telemetry setup.
+- `pool.go` — process-wide `globalPool` of per-credential `AppQuota` snapshots (`Remaining` + `CooldownUntil` + `ConsecutiveFailures`). `recordResponse(cacheKey, resp, err)` handles three cases:
+    - Normal response (incl. 429): updates `Remaining` from the rate-limit headers; on 429 sets `CooldownUntil` to `X-RateLimit-Reset` (30s floor when that header is missing or in the past); resets `ConsecutiveFailures` to zero.
     - `(nil, err)` — typically a ghinstallation token-mint 401 or a network blip: bumps `ConsecutiveFailures` and extends cooldown with exponential backoff (60s → 120s → 240s … capped at 15min).
     - `(nil, nil)` — no-op.
   Cooldown updates use `max()` semantics so a transient blip can't shorten a longer 429 cooldown. `pick` chooses the credential with the most remaining quota among those not in cooldown; unseen creds sort to the top so they get tried first. Returns `(cacheKey, reason, error)` — `reason` is one of `"highest_remaining"`, `"random_tiebreak"`, `"only_candidate"`. When every credential is in cooldown, returns a `*CooldownError` wrapping `ErrAllAppsInCooldown` (use `errors.As` for the `RetryAt` hint, `errors.Is` for the kind).
-- `connect.go` — `ResolveAndConnect` is the single entry point controllers use (described above). `resolveAllCredentials` errors with `"credentials at index N: secret X/Y key Z is empty or missing"` when a referenced Secret key returns empty bytes — operators don't have to chase the failure deeper. If `NewCachedClient` fails to construct (non-numeric IDs, malformed PEM), the failure is also recorded into the pool + `github_app_unhealthy_total` before propagating, so the picker steers away on the next attempt.
+- `connect.go` — `ResolveAndConnect` is the single entry point controllers use (described above).
+- `resolve.go` — `resolveAllCredentials` errors with `"credentials at index N: secret X/Y key Z is empty or missing"` when a referenced Secret key returns empty bytes — operators don't have to chase the failure deeper. If `NewCachedServices` fails to construct (non-numeric IDs, malformed PEM), the failure is also recorded into the pool + `github_app_unhealthy_total` before propagating, so the picker steers away on the next attempt.
 - `fake/client.go` — mock implementations used by controller unit tests (each test wires only the methods it needs).
 
 ### Telemetry (`internal/telemetry/rate_limit.go`)
@@ -123,7 +124,7 @@ Owns six Prometheus metrics, all carrying `(organization, app_id, app_installati
 - Imports follow `goimports` with local prefix `github.com/my/project` (per `.golangci.yml` — yes, that prefix string is a quirk of the config).
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.
-- All new managed resources must obtain their GitHub client via `ghclient.ResolveAndConnect`, never by calling `NewCachedClient` / `NewRateLimitClient` directly — that's how they participate in the multi-app credential pool and quota-aware picking.
+- All new managed resources must obtain their GitHub client via `ghclient.ResolveAndConnect`, never by calling `NewCachedServices` / `NewClient` directly — that's how they participate in the multi-app credential pool and quota-aware picking.
 
 ## Where to find more
 

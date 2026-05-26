@@ -325,11 +325,11 @@ func TestDelete_404IsNotAnError(t *testing.T) {
 // needs. Other fake methods stay nil — invoking them would panic,
 // which surfaces accidental over-calling by the controller.
 func newExternalWithActions(actions *fake.MockActionsClient, repos *fake.MockRepositoriesClient) external {
-	c := &ghclient.Client{Actions: actions}
+	c := &ghclient.Services{Actions: actions}
 	if repos != nil {
 		c.Repositories = repos
 	}
-	return external{github: &ghclient.RateLimitClient{Client: c}}
+	return external{github: &ghclient.Client{Services: c}}
 }
 
 // Marker so the linter doesn't complain about an unused import when

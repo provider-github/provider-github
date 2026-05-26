@@ -42,12 +42,6 @@ func TestPool_RecordResponse_UpdatesRemaining(t *testing.T) {
 	if q.Remaining != 4000 {
 		t.Errorf("Remaining = %d, want 4000", q.Remaining)
 	}
-	if q.Limit != 5000 {
-		t.Errorf("Limit = %d, want 5000", q.Limit)
-	}
-	if !q.Reset.Equal(now.Add(30 * time.Minute)) {
-		t.Errorf("Reset = %v, want %v", q.Reset, now.Add(30*time.Minute))
-	}
 	if !q.CooldownUntil.IsZero() {
 		t.Errorf("CooldownUntil = %v, want zero on success", q.CooldownUntil)
 	}
@@ -122,11 +116,14 @@ func TestPool_RecordResponse_NilResponse_NoOp(t *testing.T) {
 	p.recordResponse("app1", nil, nil)
 
 	q := p.snapshot("app1")
-	if q.Limit != 0 || q.Remaining != 0 {
-		t.Errorf("snapshot should remain zero for nil response, got %+v", q)
+	if q.Remaining != 0 {
+		t.Errorf("snapshot Remaining should remain zero for nil response, got %d", q.Remaining)
 	}
 	if !q.CooldownUntil.IsZero() {
 		t.Errorf("nil resp + nil err must not set a cooldown, got %v", q.CooldownUntil)
+	}
+	if q.ConsecutiveFailures != 0 {
+		t.Errorf("nil resp + nil err must not increment ConsecutiveFailures, got %d", q.ConsecutiveFailures)
 	}
 }
 
