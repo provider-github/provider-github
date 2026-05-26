@@ -109,6 +109,19 @@ right after a large change to its Actions enabled-repos list, the
 timeout is the most likely cause; let the controller retry a couple
 of cycles before raising the flag.
 
+### Repository `description` is always managed
+
+The provider keeps a repository's GitHub description in sync with
+`spec.forProvider.description`, including when that field is empty.
+There is no "unmanaged" state — a `Repository` CR that omits or
+empties `description` resets the repository's description on GitHub
+**to empty**.
+
+Earlier releases enforced this only intermittently; it now applies
+on every reconcile. Before upgrading, make sure each `Repository`
+CR declares the description you want — otherwise the next reconcile
+will clear it.
+
 
 ## Developing
 
