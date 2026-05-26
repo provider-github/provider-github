@@ -66,7 +66,7 @@ The Prometheus output reflects this differently though: gauge and counter series
 - **IsRateLimitExceeded()**: Checks if response indicates rate limit exceeded
 - **GetRateLimitUsagePercentage()**: Calculates percentage of rate limit used
 
-### Rate Limit Client (`internal/clients/client.go`)
+### Client (`internal/clients/client.go`)
 
 - **Client**: Wraps the standard GitHub client with rate limit tracking
 - **NewClient()**: Creates a new rate limit tracking client
