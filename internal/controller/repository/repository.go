@@ -245,20 +245,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	if archivedCr != *repo.Archived {
+	if archivedCr != pointer.Deref(repo.Archived, false) {
 		return notUpToDate, nil
 	}
 
 	// repo visibility makes sense only when a repo is not a fork
-	if !*repo.Fork {
+	if !pointer.Deref(repo.Fork, false) {
 		privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
-		if privateCr != *repo.Private {
+		if privateCr != pointer.Deref(repo.Private, false) {
 			return notUpToDate, nil
 		}
 	}
 
 	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
-	if isTemplate != *repo.IsTemplate {
+	if isTemplate != pointer.Deref(repo.IsTemplate, false) {
 		return notUpToDate, nil
 	}
 
