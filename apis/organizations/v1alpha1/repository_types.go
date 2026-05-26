@@ -76,6 +76,77 @@ type RepositoryParameters struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=20
 	Topics []string `json:"topics,omitempty"`
+
+	// DefaultBranch is the name of the default branch.
+	// +optional
+	DefaultBranch *string `json:"defaultBranch,omitempty"`
+
+	// AllowMergeCommit allows merge commits on the repository.
+	// +optional
+	AllowMergeCommit *bool `json:"allowMergeCommit,omitempty"`
+
+	// AllowSquashMerge allows squash merging on the repository.
+	// +optional
+	AllowSquashMerge *bool `json:"allowSquashMerge,omitempty"`
+
+	// AllowRebaseMerge allows rebase merging on the repository.
+	// +optional
+	AllowRebaseMerge *bool `json:"allowRebaseMerge,omitempty"`
+
+	// AllowAutoMerge allows auto-merge on the repository.
+	// Requires GitHub Pro/Team/Enterprise or a public repository; on a free-tier
+	// org's private repo, GitHub silently rejects setting this to true, which
+	// causes a reconcile loop.
+	// +optional
+	AllowAutoMerge *bool `json:"allowAutoMerge,omitempty"`
+
+	// AllowUpdateBranch allows users to update pull request branches from the base branch.
+	// +optional
+	AllowUpdateBranch *bool `json:"allowUpdateBranch,omitempty"`
+
+	// DeleteBranchOnMerge deletes head branches automatically when pull requests merge.
+	// +optional
+	DeleteBranchOnMerge *bool `json:"deleteBranchOnMerge,omitempty"`
+
+	// HasIssues enables the Issues feature on the repository.
+	// +optional
+	HasIssues *bool `json:"hasIssues,omitempty"`
+
+	// HasProjects enables the Projects feature on the repository.
+	// +optional
+	HasProjects *bool `json:"hasProjects,omitempty"`
+
+	// HasWiki enables the Wiki feature on the repository.
+	// +optional
+	HasWiki *bool `json:"hasWiki,omitempty"`
+
+	// HasDiscussions enables the Discussions feature on the repository.
+	// +optional
+	HasDiscussions *bool `json:"hasDiscussions,omitempty"`
+
+	// MergeCommitTitle sets the default title format for merge commits.
+	// Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+	// +optional
+	// +kubebuilder:validation:Enum=PR_TITLE;MERGE_MESSAGE
+	MergeCommitTitle *string `json:"mergeCommitTitle,omitempty"`
+
+	// MergeCommitMessage sets the default body format for merge commits.
+	// Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+	// +optional
+	// +kubebuilder:validation:Enum=PR_BODY;PR_TITLE;BLANK
+	MergeCommitMessage *string `json:"mergeCommitMessage,omitempty"`
+
+	// SquashMergeCommitTitle sets the default title format for squash-merge commits.
+	// Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+	// +optional
+	// +kubebuilder:validation:Enum=PR_TITLE;COMMIT_OR_PR_TITLE
+	SquashMergeCommitTitle *string `json:"squashMergeCommitTitle,omitempty"`
+
+	// SquashMergeCommitMessage sets the default body format for squash-merge commits.
+	// Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+	// +optional
+	// +kubebuilder:validation:Enum=PR_BODY;COMMIT_MESSAGES;BLANK
+	SquashMergeCommitMessage *string `json:"squashMergeCommitMessage,omitempty"`
 }
 
 // RepositoryParameters are the configurable fields of a Repository.

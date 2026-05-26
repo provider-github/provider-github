@@ -74,6 +74,26 @@ spec:
                 description: RepositoryParameters are the configurable fields of a
                   Repository.
                 properties:
+                  allowAutoMerge:
+                    description: |-
+                      AllowAutoMerge allows auto-merge on the repository.
+                      Requires GitHub Pro/Team/Enterprise or a public repository; on a free-tier
+                      org's private repo, GitHub silently rejects setting this to true, which
+                      causes a reconcile loop.
+                    type: boolean
+                  allowMergeCommit:
+                    description: AllowMergeCommit allows merge commits on the repository.
+                    type: boolean
+                  allowRebaseMerge:
+                    description: AllowRebaseMerge allows rebase merging on the repository.
+                    type: boolean
+                  allowSquashMerge:
+                    description: AllowSquashMerge allows squash merging on the repository.
+                    type: boolean
+                  allowUpdateBranch:
+                    description: AllowUpdateBranch allows users to update pull request
+                      branches from the base branch.
+                    type: boolean
                   archived:
                     description: Archived sets if a repository should be archived
                       on delete
@@ -316,16 +336,53 @@ spec:
                     - owner
                     - repo
                     type: object
+                  defaultBranch:
+                    description: DefaultBranch is the name of the default branch.
+                    type: string
+                  deleteBranchOnMerge:
+                    description: DeleteBranchOnMerge deletes head branches automatically
+                      when pull requests merge.
+                    type: boolean
                   description:
                     type: string
                   forceDelete:
                     description: Safeguard for accidental deletion
+                    type: boolean
+                  hasDiscussions:
+                    description: HasDiscussions enables the Discussions feature on
+                      the repository.
+                    type: boolean
+                  hasIssues:
+                    description: HasIssues enables the Issues feature on the repository.
+                    type: boolean
+                  hasProjects:
+                    description: HasProjects enables the Projects feature on the repository.
+                    type: boolean
+                  hasWiki:
+                    description: HasWiki enables the Wiki feature on the repository.
                     type: boolean
                   isTemplate:
                     description: |-
                       Set to true to make this repo available as a template repository.
                       Default: false
                     type: boolean
+                  mergeCommitMessage:
+                    description: |-
+                      MergeCommitMessage sets the default body format for merge commits.
+                      Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_BODY
+                    - PR_TITLE
+                    - BLANK
+                    type: string
+                  mergeCommitTitle:
+                    description: |-
+                      MergeCommitTitle sets the default title format for merge commits.
+                      Requires AllowMergeCommit to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_TITLE
+                    - MERGE_MESSAGE
+                    type: string
                   org:
                     description: Org is the Organization for the Membership
                     type: string
@@ -745,6 +802,23 @@ spec:
                       - name
                       type: object
                     type: array
+                  squashMergeCommitMessage:
+                    description: |-
+                      SquashMergeCommitMessage sets the default body format for squash-merge commits.
+                      Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_BODY
+                    - COMMIT_MESSAGES
+                    - BLANK
+                    type: string
+                  squashMergeCommitTitle:
+                    description: |-
+                      SquashMergeCommitTitle sets the default title format for squash-merge commits.
+                      Requires AllowSquashMerge to be true; GitHub rejects the request otherwise.
+                    enum:
+                    - PR_TITLE
+                    - COMMIT_OR_PR_TITLE
+                    type: string
                   topics:
                     description: |-
                       Topics is the list of topics for the repository.

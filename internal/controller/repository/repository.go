@@ -245,20 +245,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	if archivedCr != *repo.Archived {
+	if archivedCr != pointer.Deref(repo.Archived, false) {
 		return notUpToDate, nil
 	}
 
 	// repo visibility makes sense only when a repo is not a fork
-	if !*repo.Fork {
+	if !pointer.Deref(repo.Fork, false) {
 		privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
-		if privateCr != *repo.Private {
+		if privateCr != pointer.Deref(repo.Private, false) {
 			return notUpToDate, nil
 		}
 	}
 
 	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
-	if isTemplate != *repo.IsTemplate {
+	if isTemplate != pointer.Deref(repo.IsTemplate, false) {
 		return notUpToDate, nil
 	}
 
@@ -270,6 +270,85 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if !reflect.DeepEqual(crTopics, ghTopics) {
 			return notUpToDate, nil
 		}
+	}
+
+	if cr.Spec.ForProvider.Description != pointer.Deref(repo.Description, "") {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.DefaultBranch != nil &&
+		*cr.Spec.ForProvider.DefaultBranch != pointer.Deref(repo.DefaultBranch, "") {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.AllowMergeCommit != nil &&
+		*cr.Spec.ForProvider.AllowMergeCommit != pointer.Deref(repo.AllowMergeCommit, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.AllowSquashMerge != nil &&
+		*cr.Spec.ForProvider.AllowSquashMerge != pointer.Deref(repo.AllowSquashMerge, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.AllowRebaseMerge != nil &&
+		*cr.Spec.ForProvider.AllowRebaseMerge != pointer.Deref(repo.AllowRebaseMerge, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.AllowAutoMerge != nil &&
+		*cr.Spec.ForProvider.AllowAutoMerge != pointer.Deref(repo.AllowAutoMerge, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.AllowUpdateBranch != nil &&
+		*cr.Spec.ForProvider.AllowUpdateBranch != pointer.Deref(repo.AllowUpdateBranch, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.DeleteBranchOnMerge != nil &&
+		*cr.Spec.ForProvider.DeleteBranchOnMerge != pointer.Deref(repo.DeleteBranchOnMerge, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.HasIssues != nil &&
+		*cr.Spec.ForProvider.HasIssues != pointer.Deref(repo.HasIssues, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.HasProjects != nil &&
+		*cr.Spec.ForProvider.HasProjects != pointer.Deref(repo.HasProjects, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.HasWiki != nil &&
+		*cr.Spec.ForProvider.HasWiki != pointer.Deref(repo.HasWiki, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.HasDiscussions != nil &&
+		*cr.Spec.ForProvider.HasDiscussions != pointer.Deref(repo.HasDiscussions, false) {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.MergeCommitTitle != nil &&
+		*cr.Spec.ForProvider.MergeCommitTitle != pointer.Deref(repo.MergeCommitTitle, "") {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.MergeCommitMessage != nil &&
+		*cr.Spec.ForProvider.MergeCommitMessage != pointer.Deref(repo.MergeCommitMessage, "") {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.SquashMergeCommitTitle != nil &&
+		*cr.Spec.ForProvider.SquashMergeCommitTitle != pointer.Deref(repo.SquashMergeCommitTitle, "") {
+		return notUpToDate, nil
+	}
+
+	if cr.Spec.ForProvider.SquashMergeCommitMessage != nil &&
+		*cr.Spec.ForProvider.SquashMergeCommitMessage != pointer.Deref(repo.SquashMergeCommitMessage, "") {
+		return notUpToDate, nil
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -921,6 +1000,56 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 	return bprToConfig, nil
 }
 
+// applyMainSettings copies the optional main-settings fields from spec into req when set.
+func applyMainSettings(req *github.Repository, cr *v1alpha1.Repository) {
+	fp := cr.Spec.ForProvider
+	if fp.DefaultBranch != nil {
+		req.DefaultBranch = fp.DefaultBranch
+	}
+	if fp.AllowMergeCommit != nil {
+		req.AllowMergeCommit = fp.AllowMergeCommit
+	}
+	if fp.AllowSquashMerge != nil {
+		req.AllowSquashMerge = fp.AllowSquashMerge
+	}
+	if fp.AllowRebaseMerge != nil {
+		req.AllowRebaseMerge = fp.AllowRebaseMerge
+	}
+	if fp.AllowAutoMerge != nil {
+		req.AllowAutoMerge = fp.AllowAutoMerge
+	}
+	if fp.AllowUpdateBranch != nil {
+		req.AllowUpdateBranch = fp.AllowUpdateBranch
+	}
+	if fp.DeleteBranchOnMerge != nil {
+		req.DeleteBranchOnMerge = fp.DeleteBranchOnMerge
+	}
+	if fp.HasIssues != nil {
+		req.HasIssues = fp.HasIssues
+	}
+	if fp.HasProjects != nil {
+		req.HasProjects = fp.HasProjects
+	}
+	if fp.HasWiki != nil {
+		req.HasWiki = fp.HasWiki
+	}
+	if fp.HasDiscussions != nil {
+		req.HasDiscussions = fp.HasDiscussions
+	}
+	if fp.MergeCommitTitle != nil {
+		req.MergeCommitTitle = fp.MergeCommitTitle
+	}
+	if fp.MergeCommitMessage != nil {
+		req.MergeCommitMessage = fp.MergeCommitMessage
+	}
+	if fp.SquashMergeCommitTitle != nil {
+		req.SquashMergeCommitTitle = fp.SquashMergeCommitTitle
+	}
+	if fp.SquashMergeCommitMessage != nil {
+		req.SquashMergeCommitMessage = fp.SquashMergeCommitMessage
+	}
+}
+
 //nolint:gocyclo
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
@@ -954,11 +1083,13 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 			Private:            &privateCr,
 		})
 	default:
-		_, _, err = c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, &github.Repository{
+		createReq := &github.Repository{
 			Name:        &name,
 			Description: &cr.Spec.ForProvider.Description,
 			Private:     &privateCr,
-		})
+		}
+		applyMainSettings(createReq, cr)
+		_, _, err = c.github.Repositories.Create(ctx, cr.Spec.ForProvider.Org, createReq)
 	}
 
 	if err != nil {
@@ -1827,13 +1958,16 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
 
-	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{
+	editReq := &github.Repository{
 		Name:        &name,
 		Description: &cr.Spec.ForProvider.Description,
 		Archived:    &archivedCr,
 		Private:     privateCr,
 		IsTemplate:  &isTemplate,
-	})
+	}
+	applyMainSettings(editReq, cr)
+
+	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, editReq)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
