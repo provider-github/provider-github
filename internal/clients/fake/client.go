@@ -184,6 +184,7 @@ type MockRepositoriesClient struct {
 	MockEdit                                func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
 	MockListTeams                           func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	MockListCollaborators                   func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
+	MockListInvitations                     func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error)
 	MockCreate                              func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
 	MockCreateFromTemplate                  func(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
 	MockCreateFork                          func(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
@@ -239,6 +240,10 @@ func (m *MockRepositoriesClient) Delete(ctx context.Context, owner, repo string)
 
 func (m *MockRepositoriesClient) ListCollaborators(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
 	return m.MockListCollaborators(ctx, owner, repo, opts)
+}
+
+func (m *MockRepositoriesClient) ListInvitations(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+	return m.MockListInvitations(ctx, owner, repo, opts)
 }
 
 func (m *MockRepositoriesClient) ListTeams(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {

@@ -180,14 +180,12 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	setArchivedCondition(cr, false, nil)
 
-	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
-	ghMToPermission, err := getRepoUsersWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, name)
-
+	collaborators, err := categorizeCollaborators(ctx, c.github, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Permissions.Users)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-
-	if !reflect.DeepEqual(util.SortByKey(ghMToPermission), util.SortByKey(crMToPermission)) {
+	setCollaboratorPartialCondition(cr, collaborators.pendingInvite)
+	if collaborators.hasDrift() {
 		return notUpToDate, nil
 	}
 
@@ -1276,32 +1274,143 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalCreation{}, nil
 }
 
-func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
-	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
-	ghUToPermission, err := getRepoUsersWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+// Condition surfaced when one or more declared collaborators can't be brought to
+// their declared state right now — currently because they have an outstanding
+// (unaccepted) repository invitation. Kept quiet like BranchProtectionPartial:
+// SetConditions only writes when (Status, Reason, Message) actually change.
+const (
+	typeCollaboratorPartial       xpv1.ConditionType   = "CollaboratorPartial"
+	reasonPendingInvitation       xpv1.ConditionReason = "PendingInvitation"
+	reasonAllCollaboratorsPresent xpv1.ConditionReason = "AllCollaboratorsPresent"
+)
 
+// setCollaboratorPartialCondition reports declared collaborators that have a pending
+// invitation, so the skipped re-invite is visible on the CR instead of looping silently.
+func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite []string) {
+	c := xpv1.Condition{Type: typeCollaboratorPartial, LastTransitionTime: metav1.Now()}
+	if len(pendingInvite) == 0 {
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonAllCollaboratorsPresent
+		cr.SetConditions(c)
+		return
+	}
+	sort.Strings(pendingInvite)
+	c.Status = corev1.ConditionTrue
+	c.Reason = reasonPendingInvitation
+	c.Message = "declared collaborators awaiting invitation acceptance: " + strings.Join(pendingInvite, ", ")
+	cr.SetConditions(c)
+}
+
+// collaboratorCategorization buckets the union of declared and actual direct collaborators.
+type collaboratorCategorization struct {
+	toRemove      map[string]string // direct collaborators absent from the CR
+	toUpsert      map[string]string // declared collaborators to add or change role
+	pendingInvite []string          // declared collaborators with an unaccepted invitation
+}
+
+func (cc *collaboratorCategorization) hasDrift() bool {
+	return len(cc.toRemove) > 0 || len(cc.toUpsert) > 0
+}
+
+// categorizeCollaborators classifies collaborators for Observe and Update.
+// ListCollaborators(direct) returns only accepted collaborators, so a declared user
+// with an outstanding invitation never appears there; recognizing the pending
+// invitation keeps the controller from re-inviting them on every reconcile.
+func categorizeCollaborators(ctx context.Context, gh *ghclient.Client, org, repo string, crUsers []v1alpha1.RepositoryUser) (*collaboratorCategorization, error) {
+	crM := getUserPermissionMapFromCr(crUsers)
+	ghM, err := getRepoUsersWithPermissions(ctx, gh, org, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	cc := &collaboratorCategorization{
+		toRemove: make(map[string]string),
+		toUpsert: make(map[string]string),
+	}
+
+	for user, ghRole := range ghM {
+		crRole, inCR := crM[user]
+		switch {
+		case !inCR:
+			cc.toRemove[user] = ghRole
+		case crRole != ghRole:
+			cc.toUpsert[user] = crRole
+		}
+	}
+
+	// Pending invitations only matter for declared users who aren't active
+	// collaborators; fetch them lazily so steady state costs no extra call.
+	var pending map[string]bool
+	for user, crRole := range crM {
+		if _, ok := ghM[user]; ok {
+			continue
+		}
+		if pending == nil {
+			logins, err := getPendingRepoInviteeLogins(ctx, gh, org, repo)
+			if err != nil {
+				return nil, err
+			}
+			pending = make(map[string]bool, len(logins))
+			for _, l := range logins {
+				pending[l] = true
+			}
+		}
+		if pending[user] {
+			cc.pendingInvite = append(cc.pendingInvite, user)
+			continue
+		}
+		cc.toUpsert[user] = crRole
+	}
+
+	return cc, nil
+}
+
+// getPendingRepoInviteeLogins returns the lowercased logins of users with an
+// outstanding (unaccepted) repository invitation. Email-only invitations are skipped.
+func getPendingRepoInviteeLogins(ctx context.Context, gh *ghclient.Client, org, repo string) ([]string, error) {
+	opt := &github.ListOptions{PerPage: 100}
+	var logins []string
+	for {
+		invitations, resp, err := gh.Repositories.ListInvitations(ctx, org, repo, opt)
+		if err != nil {
+			return nil, err
+		}
+		for _, inv := range invitations {
+			if inv == nil || inv.Invitee == nil || inv.Invitee.Login == nil {
+				continue
+			}
+			logins = append(logins, strings.ToLower(*inv.Invitee.Login))
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return logins, nil
+}
+
+func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	collaborators, err := categorizeCollaborators(ctx, gh, cr.Spec.ForProvider.Org, repoName, cr.Spec.ForProvider.Permissions.Users)
 	if err != nil {
 		return err
 	}
 
-	toDelete, toAdd, toUpdate := util.DiffPermissions(ghUToPermission, crMToPermission)
-
-	for userName := range toDelete {
-		_, err := gh.Repositories.RemoveCollaborator(ctx, cr.Spec.ForProvider.Org, repoName, userName)
-		if err != nil {
+	for userName := range collaborators.toRemove {
+		if _, err := gh.Repositories.RemoveCollaborator(ctx, cr.Spec.ForProvider.Org, repoName, userName); err != nil {
 			return err
 		}
 	}
 
-	for userName, role := range util.MergeMaps(toAdd, toUpdate) {
+	// Declared collaborators with an outstanding invitation are in flight and stay in
+	// pendingInvite, not toUpsert, so they are not re-invited every reconcile.
+	for userName, role := range collaborators.toUpsert {
 		opt := &github.RepositoryAddCollaboratorOptions{Permission: role}
-		_, _, err := gh.Repositories.AddCollaborator(ctx, cr.Spec.ForProvider.Org, repoName, userName, opt)
-		if err != nil {
+		if _, _, err := gh.Repositories.AddCollaborator(ctx, cr.Spec.ForProvider.Org, repoName, userName, opt); err != nil {
 			return err
 		}
 	}
 
-	return err
+	return nil
 }
 
 // removeArchivedRepoUsers removes collaborators absent from the CR. While archived,

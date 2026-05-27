@@ -304,6 +304,12 @@ func (c *repositoriesClient) ListCollaborators(ctx context.Context, owner, repo 
 	})
 }
 
+func (c *repositoriesClient) ListInvitations(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.ListInvitations", func() ([]*github.RepositoryInvitation, *github.Response, error) {
+		return c.RepositoriesClient.ListInvitations(ctx, owner, repo, opts)
+	})
+}
+
 func (c *repositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateFromTemplate", func() (*github.Repository, *github.Response, error) {
 		return c.RepositoriesClient.CreateFromTemplate(ctx, templateOwner, templateRepo, templateRepoReq)

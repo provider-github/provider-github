@@ -223,6 +223,12 @@ func withArchived(b bool) repositoryModifier {
 	}
 }
 
+func withExtraUser(login, role string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.Permissions.Users = append(r.Spec.ForProvider.Permissions.Users, v1alpha1.RepositoryUser{User: login, Role: role})
+	}
+}
+
 func repository(m ...repositoryModifier) *v1alpha1.Repository {
 	cr := &v1alpha1.Repository{}
 	cr.Spec.ForProvider.Permissions = v1alpha1.RepositoryPermissions{
@@ -732,6 +738,55 @@ func TestObserve(t *testing.T) {
 				err: nil,
 			},
 		},
+		// A declared collaborator with an outstanding (unaccepted) invitation does
+		// not register as drift: ListCollaborators(direct) omits them, but the
+		// pending invitation is recognized, so Observe stays up to date instead of
+		// re-inviting every reconcile.
+		"PendingInvitationUpToDate": {
+			fields: fields{github: &ghclient.Client{
+				Services: &ghclient.Services{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListInvitations: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+							return []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("pending-user")}}}, fake.GenerateEmptyResponse(), nil
+						},
+						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			}},
+			args: args{
+				mg: repository(withExtraUser("pending-user", "pull")),
+			},
+			want: want{
+				o: managed.ExternalObservation{
+					ResourceExists:   true,
+					ResourceUpToDate: true,
+				},
+				err: nil,
+			},
+		},
 		// An archived repo with matching teams, collaborators and topics is up to
 		// date. Branch protection, rulesets and webhooks are frozen while archived,
 		// so no mocks are wired for them — a call would be a nil-func panic, proving
@@ -915,6 +970,113 @@ func TestUpdate(t *testing.T) {
 			}
 			if replaceTopics != tc.want.replaceTopics {
 				t.Errorf("\n%s\nUpdate() ReplaceAllTopics calls = %d, want %d", tc.reason, replaceTopics, tc.want.replaceTopics)
+			}
+		})
+	}
+}
+
+func ghUserWithPerm(login, perm string) *github.User {
+	return &github.User{Login: github.String(login), Permissions: map[string]bool{perm: true}}
+}
+
+// TestCategorizeCollaborators pins the collaborator buckets. The key invariant is
+// that a declared collaborator with an outstanding invitation lands in pendingInvite
+// (in flight) rather than toUpsert, so the controller does not re-invite them on
+// every reconcile — the loop the prod repos were stuck in.
+func TestCategorizeCollaborators(t *testing.T) {
+	u := func(login, role string) v1alpha1.RepositoryUser { return v1alpha1.RepositoryUser{User: login, Role: role} }
+	type want struct {
+		toRemove map[string]string
+		toUpsert map[string]string
+		pending  []string
+	}
+	cases := map[string]struct {
+		reason  string
+		crUsers []v1alpha1.RepositoryUser
+		ghUsers []*github.User
+		invites []*github.RepositoryInvitation
+		want    want
+	}{
+		"AllPresentMatching": {
+			reason:  "Declared users all active at the declared role: no drift.",
+			crUsers: []v1alpha1.RepositoryUser{u("alice", "push")},
+			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
+			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{}},
+		},
+		"PendingInviteNotReAdded": {
+			reason:  "A declared user with an outstanding invitation is pending, not an add.",
+			crUsers: []v1alpha1.RepositoryUser{u("alice", "push"), u("bob", "pull")},
+			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
+			invites: []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("bob")}}},
+			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{}, pending: []string{"bob"}},
+		},
+		"GenuineAdd": {
+			reason:  "A declared user who is neither active nor invited is a real add.",
+			crUsers: []v1alpha1.RepositoryUser{u("alice", "push"), u("carol", "pull")},
+			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
+			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{"carol": "pull"}},
+		},
+		"RoleChange": {
+			reason:  "A declared user active at a different role is an upsert.",
+			crUsers: []v1alpha1.RepositoryUser{u("alice", "admin")},
+			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
+			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{"alice": "admin"}},
+		},
+		"Remove": {
+			reason:  "An active collaborator absent from the CR is removed.",
+			crUsers: nil,
+			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
+			want:    want{toRemove: map[string]string{"alice": "push"}, toUpsert: map[string]string{}},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gh := &ghclient.Client{Services: &ghclient.Services{Repositories: &fake.MockRepositoriesClient{
+				MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+					return tc.ghUsers, fake.GenerateEmptyResponse(), nil
+				},
+				MockListInvitations: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+					return tc.invites, fake.GenerateEmptyResponse(), nil
+				},
+			}}}
+			got, err := categorizeCollaborators(context.Background(), gh, "org", "repo", tc.crUsers)
+			if err != nil {
+				t.Fatalf("%s\nunexpected error: %v", tc.reason, err)
+			}
+			if diff := cmp.Diff(tc.want.toRemove, got.toRemove); diff != "" {
+				t.Errorf("%s\ntoRemove: -want, +got:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.toUpsert, got.toUpsert); diff != "" {
+				t.Errorf("%s\ntoUpsert: -want, +got:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.pending, got.pendingInvite); diff != "" {
+				t.Errorf("%s\npendingInvite: -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestSetCollaboratorPartialCondition checks the condition surfaces pending invitees
+// (True) and reports a clean state otherwise (False), so the skip is never silent.
+func TestSetCollaboratorPartialCondition(t *testing.T) {
+	cases := map[string]struct {
+		pending    []string
+		wantStatus corev1.ConditionStatus
+		wantReason xpv1.ConditionReason
+	}{
+		"None":    {pending: nil, wantStatus: corev1.ConditionFalse, wantReason: reasonAllCollaboratorsPresent},
+		"Pending": {pending: []string{"bob", "alice"}, wantStatus: corev1.ConditionTrue, wantReason: reasonPendingInvitation},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cr := &v1alpha1.Repository{}
+			setCollaboratorPartialCondition(cr, tc.pending)
+			got := cr.GetCondition(typeCollaboratorPartial)
+			if got.Status != tc.wantStatus {
+				t.Errorf("status = %v, want %v", got.Status, tc.wantStatus)
+			}
+			if got.Reason != tc.wantReason {
+				t.Errorf("reason = %v, want %v", got.Reason, tc.wantReason)
 			}
 		})
 	}
