@@ -184,7 +184,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	setCollaboratorPartialCondition(cr, collaborators.pendingInvite)
+	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	if collaborators.hasDrift() {
 		return notUpToDate, nil
 	}
@@ -1281,23 +1281,38 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 const (
 	typeCollaboratorPartial       xpv1.ConditionType   = "CollaboratorPartial"
 	reasonPendingInvitation       xpv1.ConditionReason = "PendingInvitation"
+	reasonRoleEnforcedByOrg       xpv1.ConditionReason = "RoleEnforcedByOrg"
 	reasonAllCollaboratorsPresent xpv1.ConditionReason = "AllCollaboratorsPresent"
 )
 
-// setCollaboratorPartialCondition reports declared collaborators that have a pending
-// invitation, so the skipped re-invite is visible on the CR instead of looping silently.
-func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite []string) {
+// setCollaboratorPartialCondition reports declared collaborators the controller can't
+// bring to their declared state: those awaiting invitation acceptance, and org owners
+// whose declared role GitHub overrides with admin. Keeps the skips visible on the CR
+// instead of looping silently.
+func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite, roleEnforced []string) {
 	c := xpv1.Condition{Type: typeCollaboratorPartial, LastTransitionTime: metav1.Now()}
-	if len(pendingInvite) == 0 {
+	if len(pendingInvite) == 0 && len(roleEnforced) == 0 {
 		c.Status = corev1.ConditionFalse
 		c.Reason = reasonAllCollaboratorsPresent
 		cr.SetConditions(c)
 		return
 	}
-	sort.Strings(pendingInvite)
 	c.Status = corev1.ConditionTrue
-	c.Reason = reasonPendingInvitation
-	c.Message = "declared collaborators awaiting invitation acceptance: " + strings.Join(pendingInvite, ", ")
+	if len(pendingInvite) > 0 {
+		c.Reason = reasonPendingInvitation
+	} else {
+		c.Reason = reasonRoleEnforcedByOrg
+	}
+	var parts []string
+	if len(pendingInvite) > 0 {
+		sort.Strings(pendingInvite)
+		parts = append(parts, "awaiting invitation acceptance: "+strings.Join(pendingInvite, ", "))
+	}
+	if len(roleEnforced) > 0 {
+		sort.Strings(roleEnforced)
+		parts = append(parts, "declared role overridden by GitHub org-admin enforcement: "+strings.Join(roleEnforced, ", "))
+	}
+	c.Message = strings.Join(parts, "; ")
 	cr.SetConditions(c)
 }
 
@@ -1306,6 +1321,7 @@ type collaboratorCategorization struct {
 	toRemove      map[string]string // direct collaborators absent from the CR
 	toUpsert      map[string]string // declared collaborators to add or change role
 	pendingInvite []string          // declared collaborators with an unaccepted invitation
+	roleEnforced  []string          // org owners whose declared (lower) role GitHub overrides with admin
 }
 
 func (cc *collaboratorCategorization) hasDrift() bool {
@@ -1330,12 +1346,27 @@ func categorizeCollaborators(ctx context.Context, gh *ghclient.Client, org, repo
 
 	for user, ghRole := range ghM {
 		crRole, inCR := crM[user]
-		switch {
-		case !inCR:
+		if !inCR {
 			cc.toRemove[user] = ghRole
-		case crRole != ghRole:
-			cc.toUpsert[user] = crRole
+			continue
 		}
+		if crRole == ghRole {
+			continue
+		}
+		// Role mismatch. GitHub force-keeps admin for org owners on every repo, so a
+		// lower declared role for one can't be applied; only (GH=admin, CR<admin) can
+		// be enforced, so the org-admin probe runs only in that shape.
+		if ghRole == orgRoleAdmin && crRole != orgRoleAdmin {
+			enforced, err := isOrgAdmin(ctx, gh, org, user)
+			if err != nil {
+				return nil, err
+			}
+			if enforced {
+				cc.roleEnforced = append(cc.roleEnforced, user)
+				continue
+			}
+		}
+		cc.toUpsert[user] = crRole
 	}
 
 	// Pending invitations only matter for declared users who aren't active
@@ -1363,6 +1394,25 @@ func categorizeCollaborators(ctx context.Context, gh *ghclient.Client, org, repo
 	}
 
 	return cc, nil
+}
+
+const orgRoleAdmin = "admin"
+
+// isOrgAdmin reports whether the user is an organization owner (org-level admin).
+// Org owners hold admin on every repo, so GitHub ignores a lower declared role.
+// 404 (not a member) and a missing/other role are treated as not-admin.
+func isOrgAdmin(ctx context.Context, gh *ghclient.Client, org, user string) (bool, error) {
+	membership, _, err := gh.Organizations.GetOrgMembership(ctx, user, org)
+	if ghclient.Is404(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if membership == nil || membership.Role == nil {
+		return false, nil
+	}
+	return *membership.Role == orgRoleAdmin, nil
 }
 
 // getPendingRepoInviteeLogins returns the lowercased logins of users with an

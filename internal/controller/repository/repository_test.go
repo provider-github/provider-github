@@ -986,16 +986,18 @@ func ghUserWithPerm(login, perm string) *github.User {
 func TestCategorizeCollaborators(t *testing.T) {
 	u := func(login, role string) v1alpha1.RepositoryUser { return v1alpha1.RepositoryUser{User: login, Role: role} }
 	type want struct {
-		toRemove map[string]string
-		toUpsert map[string]string
-		pending  []string
+		toRemove     map[string]string
+		toUpsert     map[string]string
+		pending      []string
+		roleEnforced []string
 	}
 	cases := map[string]struct {
-		reason  string
-		crUsers []v1alpha1.RepositoryUser
-		ghUsers []*github.User
-		invites []*github.RepositoryInvitation
-		want    want
+		reason    string
+		crUsers   []v1alpha1.RepositoryUser
+		ghUsers   []*github.User
+		invites   []*github.RepositoryInvitation
+		orgAdmins map[string]bool
+		want      want
 	}{
 		"AllPresentMatching": {
 			reason:  "Declared users all active at the declared role: no drift.",
@@ -1028,17 +1030,42 @@ func TestCategorizeCollaborators(t *testing.T) {
 			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
 			want:    want{toRemove: map[string]string{"alice": "push"}, toUpsert: map[string]string{}},
 		},
+		"OrgAdminRoleEnforced": {
+			reason:    "An org owner declared below admin shows as admin on GitHub and can't be downgraded: enforced, not an upsert.",
+			crUsers:   []v1alpha1.RepositoryUser{u("owner1", "push")},
+			ghUsers:   []*github.User{ghUserWithPerm("owner1", "admin")},
+			orgAdmins: map[string]bool{"owner1": true},
+			want:      want{toRemove: map[string]string{}, toUpsert: map[string]string{}, roleEnforced: []string{"owner1"}},
+		},
+		"NonOwnerGhAdminDowngradeIsUpsert": {
+			reason:    "A non-owner showing admin on GitHub but declared lower is a real role change, not enforced.",
+			crUsers:   []v1alpha1.RepositoryUser{u("dave", "push")},
+			ghUsers:   []*github.User{ghUserWithPerm("dave", "admin")},
+			orgAdmins: map[string]bool{}, // dave is not an org owner
+			want:      want{toRemove: map[string]string{}, toUpsert: map[string]string{"dave": "push"}},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			gh := &ghclient.Client{Services: &ghclient.Services{Repositories: &fake.MockRepositoriesClient{
-				MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
-					return tc.ghUsers, fake.GenerateEmptyResponse(), nil
+			gh := &ghclient.Client{Services: &ghclient.Services{
+				Repositories: &fake.MockRepositoriesClient{
+					MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+						return tc.ghUsers, fake.GenerateEmptyResponse(), nil
+					},
+					MockListInvitations: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+						return tc.invites, fake.GenerateEmptyResponse(), nil
+					},
 				},
-				MockListInvitations: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
-					return tc.invites, fake.GenerateEmptyResponse(), nil
+				Organizations: &fake.MockOrganizationsClient{
+					MockGetOrgMembership: func(ctx context.Context, user, org string) (*github.Membership, *github.Response, error) {
+						role := "member"
+						if tc.orgAdmins[user] {
+							role = "admin"
+						}
+						return &github.Membership{Role: github.String(role)}, fake.GenerateEmptyResponse(), nil
+					},
 				},
-			}}}
+			}}
 			got, err := categorizeCollaborators(context.Background(), gh, "org", "repo", tc.crUsers)
 			if err != nil {
 				t.Fatalf("%s\nunexpected error: %v", tc.reason, err)
@@ -1052,6 +1079,9 @@ func TestCategorizeCollaborators(t *testing.T) {
 			if diff := cmp.Diff(tc.want.pending, got.pendingInvite); diff != "" {
 				t.Errorf("%s\npendingInvite: -want, +got:\n%s", tc.reason, diff)
 			}
+			if diff := cmp.Diff(tc.want.roleEnforced, got.roleEnforced); diff != "" {
+				t.Errorf("%s\nroleEnforced: -want, +got:\n%s", tc.reason, diff)
+			}
 		})
 	}
 }
@@ -1060,17 +1090,19 @@ func TestCategorizeCollaborators(t *testing.T) {
 // (True) and reports a clean state otherwise (False), so the skip is never silent.
 func TestSetCollaboratorPartialCondition(t *testing.T) {
 	cases := map[string]struct {
-		pending    []string
-		wantStatus corev1.ConditionStatus
-		wantReason xpv1.ConditionReason
+		pending      []string
+		roleEnforced []string
+		wantStatus   corev1.ConditionStatus
+		wantReason   xpv1.ConditionReason
 	}{
-		"None":    {pending: nil, wantStatus: corev1.ConditionFalse, wantReason: reasonAllCollaboratorsPresent},
-		"Pending": {pending: []string{"bob", "alice"}, wantStatus: corev1.ConditionTrue, wantReason: reasonPendingInvitation},
+		"None":         {wantStatus: corev1.ConditionFalse, wantReason: reasonAllCollaboratorsPresent},
+		"Pending":      {pending: []string{"bob", "alice"}, wantStatus: corev1.ConditionTrue, wantReason: reasonPendingInvitation},
+		"RoleEnforced": {roleEnforced: []string{"owner1"}, wantStatus: corev1.ConditionTrue, wantReason: reasonRoleEnforcedByOrg},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cr := &v1alpha1.Repository{}
-			setCollaboratorPartialCondition(cr, tc.pending)
+			setCollaboratorPartialCondition(cr, tc.pending, tc.roleEnforced)
 			got := cr.GetCondition(typeCollaboratorPartial)
 			if got.Status != tc.wantStatus {
 				t.Errorf("status = %v, want %v", got.Status, tc.wantStatus)
