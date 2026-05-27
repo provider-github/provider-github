@@ -263,15 +263,17 @@ func (m *MockRepositoriesClient) ReplaceAllTopics(ctx context.Context, owner, re
 }
 
 type MockTeamsClient struct {
-	MockGetTeamBySlug              func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error)
-	MockListTeamMembersBySlug      func(ctx context.Context, org, slug string, opts *github.TeamListTeamMembersOptions) ([]*github.User, *github.Response, error)
-	MockCreateTeam                 func(ctx context.Context, org string, team github.NewTeam) (*github.Team, *github.Response, error)
-	MockAddTeamMembershipBySlug    func(ctx context.Context, org, slug, user string, opts *github.TeamAddTeamMembershipOptions) (*github.Membership, *github.Response, error)
-	MockRemoveTeamMembershipBySlug func(ctx context.Context, org, slug, user string) (*github.Response, error)
-	MockEditTeamBySlug             func(ctx context.Context, org, slug string, team github.NewTeam, removeParent bool) (*github.Team, *github.Response, error)
-	MockDeleteTeamBySlug           func(ctx context.Context, org, slug string) (*github.Response, error)
-	MockAddTeamRepoBySlug          func(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)
-	MockRemoveTeamRepoBySlug       func(ctx context.Context, org, slug, owner, repo string) (*github.Response, error)
+	MockGetTeamBySlug                    func(ctx context.Context, org, slug string) (*github.Team, *github.Response, error)
+	MockListTeamMembersBySlug            func(ctx context.Context, org, slug string, opts *github.TeamListTeamMembersOptions) ([]*github.User, *github.Response, error)
+	MockCreateTeam                       func(ctx context.Context, org string, team github.NewTeam) (*github.Team, *github.Response, error)
+	MockAddTeamMembershipBySlug          func(ctx context.Context, org, slug, user string, opts *github.TeamAddTeamMembershipOptions) (*github.Membership, *github.Response, error)
+	MockRemoveTeamMembershipBySlug       func(ctx context.Context, org, slug, user string) (*github.Response, error)
+	MockEditTeamBySlug                   func(ctx context.Context, org, slug string, team github.NewTeam, removeParent bool) (*github.Team, *github.Response, error)
+	MockDeleteTeamBySlug                 func(ctx context.Context, org, slug string) (*github.Response, error)
+	MockAddTeamRepoBySlug                func(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)
+	MockRemoveTeamRepoBySlug             func(ctx context.Context, org, slug, owner, repo string) (*github.Response, error)
+	MockListPendingTeamInvitationsBySlug func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error)
+	MockListChildTeamsByParentSlug       func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 }
 
 func (m *MockTeamsClient) RemoveTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Response, error) {
@@ -308,6 +310,14 @@ func (m *MockTeamsClient) AddTeamMembershipBySlug(ctx context.Context, org, slug
 
 func (m *MockTeamsClient) AddTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
 	return m.MockAddTeamRepoBySlug(ctx, org, slug, owner, repo, opts)
+}
+
+func (m *MockTeamsClient) ListPendingTeamInvitationsBySlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error) {
+	return m.MockListPendingTeamInvitationsBySlug(ctx, org, slug, opts)
+}
+
+func (m *MockTeamsClient) ListChildTeamsByParentSlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+	return m.MockListChildTeamsByParentSlug(ctx, org, slug, opts)
 }
 
 func Generate404Response() *github.ErrorResponse {

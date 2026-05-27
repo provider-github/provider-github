@@ -71,6 +71,8 @@ type TeamsClient interface {
 	CreateTeam(ctx context.Context, org string, team github.NewTeam) (*github.Team, *github.Response, error)
 	AddTeamMembershipBySlug(ctx context.Context, org, slug, user string, opts *github.TeamAddTeamMembershipOptions) (*github.Membership, *github.Response, error)
 	RemoveTeamMembershipBySlug(ctx context.Context, org, slug, user string) (*github.Response, error)
+	ListPendingTeamInvitationsBySlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error)
+	ListChildTeamsByParentSlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	EditTeamBySlug(ctx context.Context, org, slug string, team github.NewTeam, removeParent bool) (*github.Team, *github.Response, error)
 	DeleteTeamBySlug(ctx context.Context, org, slug string) (*github.Response, error)
 	AddTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)

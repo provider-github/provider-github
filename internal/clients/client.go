@@ -443,6 +443,18 @@ func (c *teamsClient) RemoveTeamMembershipBySlug(ctx context.Context, org, slug,
 	return resp, err
 }
 
+func (c *teamsClient) ListPendingTeamInvitationsBySlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.ListPendingTeamInvitationsBySlug", func() ([]*github.Invitation, *github.Response, error) {
+		return c.TeamsClient.ListPendingTeamInvitationsBySlug(ctx, org, slug, opts)
+	})
+}
+
+func (c *teamsClient) ListChildTeamsByParentSlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.ListChildTeamsByParentSlug", func() ([]*github.Team, *github.Response, error) {
+		return c.TeamsClient.ListChildTeamsByParentSlug(ctx, org, slug, opts)
+	})
+}
+
 func (c *teamsClient) AddTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
 	resp, err := c.TeamsClient.AddTeamRepoBySlug(ctx, org, slug, owner, repo, opts)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.AddTeamRepoBySlug", resp, err)

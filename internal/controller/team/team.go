@@ -18,11 +18,14 @@ package team
 
 import (
 	"context"
-	"reflect"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,7 +48,6 @@ import (
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
 	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
 )
 
 const (
@@ -131,6 +133,252 @@ type external struct {
 	github *ghclient.Client
 }
 
+const (
+	typeTeamMembershipPartial   xpv1.ConditionType   = "TeamMembershipPartial"
+	reasonPendingOrgMembership  xpv1.ConditionReason = "PendingOrgMembership"
+	reasonRoleEnforcedByOrg     xpv1.ConditionReason = "RoleEnforcedByOrg"
+	reasonPendingTeamInvitation xpv1.ConditionReason = "PendingTeamInvitation"
+	reasonAllMembersPresent     xpv1.ConditionReason = "AllMembersPresent"
+)
+
+// setTeamMembershipPartialCondition writes the CR-side condition reporting members the controller skipped.
+func setTeamMembershipPartialCondition(ctx context.Context, cr *v1alpha1.Team, pendingOrg, pendingTeam, roleEnforced []string) {
+	c := xpv1.Condition{
+		Type:               typeTeamMembershipPartial,
+		LastTransitionTime: metav1.Now(),
+	}
+	if len(pendingOrg) == 0 && len(pendingTeam) == 0 && len(roleEnforced) == 0 {
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonAllMembersPresent
+		cr.SetConditions(c)
+		return
+	}
+
+	c.Status = corev1.ConditionTrue
+	// Reason priority: most-actionable first.
+	switch {
+	case len(pendingOrg) > 0:
+		c.Reason = reasonPendingOrgMembership
+	case len(roleEnforced) > 0:
+		c.Reason = reasonRoleEnforcedByOrg
+	default:
+		c.Reason = reasonPendingTeamInvitation
+	}
+
+	var parts []string
+	if len(pendingOrg) > 0 {
+		sort.Strings(pendingOrg)
+		parts = append(parts, fmt.Sprintf("declared but not yet org members: %s", strings.Join(pendingOrg, ", ")))
+	}
+	if len(roleEnforced) > 0 {
+		sort.Strings(roleEnforced)
+		parts = append(parts, fmt.Sprintf("declared role overridden by GitHub org-admin enforcement: %s", strings.Join(roleEnforced, ", ")))
+	}
+	if len(pendingTeam) > 0 {
+		sort.Strings(pendingTeam)
+		parts = append(parts, fmt.Sprintf("residual pending team invitations: %s", strings.Join(pendingTeam, ", ")))
+	}
+	c.Message = strings.Join(parts, "; ")
+
+	ctrl.LoggerFrom(ctx).Info("team membership partial",
+		"team", meta.GetExternalName(cr),
+		"pendingOrg", pendingOrg,
+		"pendingTeam", pendingTeam,
+		"roleEnforced", roleEnforced)
+
+	cr.SetConditions(c)
+}
+
+// memberCategorization buckets CR and direct team members for Observe and Update.
+type memberCategorization struct {
+	// toRemove: users currently direct on the team but not in the CR.
+	toRemove map[string]string
+	// roleUpdate: users on the team in the CR but with a different role.
+	roleUpdate map[string]string
+	// inviteable: CR users who are active org members but not yet on the team.
+	inviteable map[string]string
+	// pendingOrg: CR users who are not active org members; skipped to avoid org-invite side effect.
+	pendingOrg []string
+	// pendingTeam: CR users with a residual unaccepted team invitation; treated as in flight.
+	pendingTeam []string
+	// roleEnforced: members whose role GitHub force-applies (org admins → maintainer).
+	roleEnforced []string
+}
+
+func (c *memberCategorization) hasMemberDrift() bool {
+	return len(c.toRemove) > 0 || len(c.roleUpdate) > 0 || len(c.inviteable) > 0
+}
+
+// categorizeMembers assigns the union of CR and direct team members to memberCategorization buckets.
+func categorizeMembers(ctx context.Context, gh *ghclient.Client, org, slug string, members []v1alpha1.TeamMemberUser) (*memberCategorization, error) {
+	crMToPermission := getUserPermissionMapFromCr(members)
+	rollup, err := getMembersWithPermissions(ctx, gh, org, slug)
+	if err != nil {
+		return nil, err
+	}
+	// Only members not yet on the team can have a pending invite; skip the fetch when there are none.
+	pendingSet := map[string]bool{}
+	for user := range crMToPermission {
+		if _, ok := rollup[user]; ok {
+			continue
+		}
+		pendingLogins, err := getPendingTeamInviteeLogins(ctx, gh, org, slug)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range pendingLogins {
+			pendingSet[l] = true
+		}
+		break
+	}
+	inheritedSet, err := collectChildMemberLogins(ctx, gh, org, slug)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &memberCategorization{
+		toRemove:   make(map[string]string),
+		roleUpdate: make(map[string]string),
+		inviteable: make(map[string]string),
+	}
+
+	for user, ghRole := range rollup {
+		crRole, inCR := crMToPermission[user]
+		verdict, err := classifyRollupUser(ctx, gh, org, user, ghRole, crRole, inCR, inheritedSet[user])
+		if err != nil {
+			return nil, err
+		}
+		switch verdict {
+		case verdictRemove:
+			out.toRemove[user] = ghRole
+		case verdictUpdateRole:
+			out.roleUpdate[user] = crRole
+		case verdictRoleEnforced:
+			out.roleEnforced = append(out.roleEnforced, user)
+		case verdictNone:
+			// In sync, or an inherited member the controller must not touch.
+		}
+	}
+
+	for user, crRole := range crMToPermission {
+		if _, ok := rollup[user]; ok {
+			continue
+		}
+		if pendingSet[user] {
+			out.pendingTeam = append(out.pendingTeam, user)
+			continue
+		}
+		active, err := isActiveOrgMember(ctx, gh, org, user)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
+			out.pendingOrg = append(out.pendingOrg, user)
+			continue
+		}
+		out.inviteable[user] = crRole
+	}
+
+	return out, nil
+}
+
+// rollupVerdict is the disposition of a single user from the team rollup,
+// decided by classifyRollupUser.
+type rollupVerdict int
+
+const (
+	// verdictNone: in sync, or an inherited member the controller must not touch.
+	verdictNone rollupVerdict = iota
+	// verdictRemove: a direct membership absent from the CR.
+	verdictRemove
+	// verdictUpdateRole: declared in the CR with a different, settable role.
+	verdictUpdateRole
+	// verdictRoleEnforced: declared role is overridden by GitHub org-admin enforcement.
+	verdictRoleEnforced
+)
+
+// classifyRollupUser decides what to do with one user from the team rollup, given
+// whether the CR declares them, their declared vs effective role, and whether they
+// are inherited from a child team. The org-admin probe runs only in the two cases
+// where a maintainer role could be GitHub-enforced rather than directly granted.
+func classifyRollupUser(ctx context.Context, gh *ghclient.Client, org, user, ghRole, crRole string, inCR, inherited bool) (rollupVerdict, error) {
+	if !inCR {
+		if !inherited {
+			// Direct membership, not inherited → removable.
+			return verdictRemove, nil
+		}
+		// Inherited from a child team. A member-role entry is purely inherited, so a
+		// parent-level DELETE no-ops — leave it. A maintainer-role entry is either a
+		// rogue direct grant layered on the inherited membership (DELETE demotes it to
+		// inherited member → converges) or an org admin (maintainer of every team;
+		// DELETE can't strip it → would loop). Remove only the former.
+		if ghRole != "maintainer" {
+			return verdictNone, nil
+		}
+		admin, err := isOrgAdmin(ctx, gh, org, user)
+		if err != nil {
+			return verdictNone, err
+		}
+		if admin {
+			return verdictNone, nil
+		}
+		return verdictRemove, nil
+	}
+	// Declared in the CR.
+	if crRole == ghRole {
+		return verdictNone, nil
+	}
+	// Role mismatch. Only (GH=maintainer, CR=else) can be GitHub-enforced: GitHub
+	// force-applies maintainer to org admins regardless of the declared role.
+	if ghRole == "maintainer" {
+		enforced, err := isOrgAdmin(ctx, gh, org, user)
+		if err != nil {
+			return verdictNone, err
+		}
+		if enforced {
+			return verdictRoleEnforced, nil
+		}
+	}
+	return verdictUpdateRole, nil
+}
+
+const (
+	orgRoleAdmin   = "admin"
+	orgStateActive = "active"
+)
+
+// isOrgAdmin returns true exactly when the user is an org-level admin. False for 404 / unknown.
+func isOrgAdmin(ctx context.Context, gh *ghclient.Client, org, user string) (bool, error) {
+	membership, _, err := gh.Organizations.GetOrgMembership(ctx, user, org)
+	if ghclient.Is404(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if membership == nil || membership.Role == nil {
+		return false, nil
+	}
+	return *membership.Role == orgRoleAdmin, nil
+}
+
+// isActiveOrgMember returns true exactly when the user has an active org membership.
+// Returns false for 404 (not a member) and for non-active states (pending
+// invite). Other errors propagate.
+func isActiveOrgMember(ctx context.Context, gh *ghclient.Client, org, user string) (bool, error) {
+	membership, _, err := gh.Organizations.GetOrgMembership(ctx, user, org)
+	if ghclient.Is404(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if membership == nil || membership.State == nil {
+		return false, nil
+	}
+	return *membership.State == orgStateActive, nil
+}
+
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mg.(*v1alpha1.Team)
 	if !ok {
@@ -148,8 +396,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Members)
-	ghMToPermission, err := getMembersWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, teamSlug)
+	categorized, err := categorizeMembers(ctx, c.github, cr.Spec.ForProvider.Org, teamSlug, cr.Spec.ForProvider.Members)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
@@ -160,11 +407,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghParentTeamSlug = *t.Parent.Slug
 	}
 
-	if crParentTeamSlug != ghParentTeamSlug ||
-		pointer.Deref(cr.Spec.ForProvider.Privacy, "secret") != *t.Privacy ||
-		cr.Spec.ForProvider.Description != *t.Description ||
-		!reflect.DeepEqual(util.SortByKey(ghMToPermission), util.SortByKey(crMToPermission)) {
+	structuralDrift := crParentTeamSlug != ghParentTeamSlug ||
+		pointer.Deref(cr.Spec.ForProvider.Privacy, "secret") != pointer.Deref(t.Privacy, "secret") ||
+		cr.Spec.ForProvider.Description != pointer.Deref(t.Description, "")
 
+	setTeamMembershipPartialCondition(ctx, cr, categorized.pendingOrg, categorized.pendingTeam, categorized.roleEnforced)
+
+	if structuralDrift || categorized.hasMemberDrift() {
 		return managed.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: false,
@@ -190,8 +439,32 @@ func getUserPermissionMapFromCr(users []v1alpha1.TeamMemberUser) map[string]stri
 	return crMToPermission
 }
 
+// getPendingTeamInviteeLogins returns lowercased logins with a pending team invitation. Email-only invitations are skipped.
+func getPendingTeamInviteeLogins(ctx context.Context, gh *ghclient.Client, org, slug string) ([]string, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var logins []string
+	for {
+		invitations, resp, err := gh.Teams.ListPendingTeamInvitationsBySlug(ctx, org, slug, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, inv := range invitations {
+			if inv == nil || inv.Login == nil {
+				continue
+			}
+			logins = append(logins, strings.ToLower(*inv.Login))
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return logins, nil
+}
+
 func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, slug string) (map[string]string, error) {
 	mToPermission := make(map[string]string)
+	// maintainer last: a user can be both an inherited member and a direct maintainer; querying maintainer last makes it win.
 	roles := []string{"member", "maintainer"}
 
 	for _, role := range roles {
@@ -207,11 +480,14 @@ func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, sl
 			}
 
 			for _, m := range members {
+				if m == nil || m.Login == nil {
+					continue
+				}
 				username := strings.ToLower(*m.Login)
 				mToPermission[username] = role
 			}
 
-			if resp.NextPage == 0 {
+			if resp == nil || resp.NextPage == 0 {
 				break
 			}
 			opt.Page = resp.NextPage
@@ -219,6 +495,48 @@ func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, sl
 	}
 
 	return mToPermission, nil
+}
+
+// collectChildMemberLogins returns the union of logins across all direct child
+// rollups. Used as an inheritance hint when categorizing parent rollup entries.
+func collectChildMemberLogins(ctx context.Context, gh *ghclient.Client, org, slug string) (map[string]bool, error) {
+	children, err := listChildTeamSlugs(ctx, gh, org, slug)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool)
+	for _, childSlug := range children {
+		childMembers, err := getMembersWithPermissions(ctx, gh, org, childSlug)
+		if err != nil {
+			return nil, err
+		}
+		for login := range childMembers {
+			out[login] = true
+		}
+	}
+	return out, nil
+}
+
+func listChildTeamSlugs(ctx context.Context, gh *ghclient.Client, org, parentSlug string) ([]string, error) {
+	opts := &github.ListOptions{PerPage: 100}
+	var slugs []string
+	for {
+		teams, resp, err := gh.Teams.ListChildTeamsByParentSlug(ctx, org, parentSlug, opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range teams {
+			if t == nil || t.Slug == nil {
+				continue
+			}
+			slugs = append(slugs, *t.Slug)
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return slugs, nil
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
@@ -241,44 +559,36 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalCreation{}, err
 	}
 
-	if cr.Spec.ForProvider.Members != nil {
-		for _, user := range cr.Spec.ForProvider.Members {
-			opt := &github.TeamAddTeamMembershipOptions{
-				Role: user.Role,
-			}
-			_, _, err = c.github.Teams.AddTeamMembershipBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug, user.User, opt)
-			if err != nil {
-				return managed.ExternalCreation{}, err
-			}
-		}
+	if err := updateTeamUsers(ctx, cr, c.github, teamSlug); err != nil {
+		return managed.ExternalCreation{}, err
 	}
 
 	return managed.ExternalCreation{}, nil
 }
 
 func updateTeamUsers(ctx context.Context, cr *v1alpha1.Team, gh *ghclient.Client, teamSlug string) error {
-	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Members)
-	ghMToPermission, err := getMembersWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, teamSlug)
+	categorized, err := categorizeMembers(ctx, gh, cr.Spec.ForProvider.Org, teamSlug, cr.Spec.ForProvider.Members)
 	if err != nil {
 		return err
 	}
 
-	toDelete, toInvite, toUpdate := util.DiffPermissions(ghMToPermission, crMToPermission)
-
-	for userName := range toDelete {
+	for userName := range categorized.toRemove {
 		_, err := gh.Teams.RemoveTeamMembershipBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug, userName)
 		if err != nil {
 			return err
 		}
 	}
 
-	for userName, role := range util.MergeMaps(toInvite, toUpdate) {
-		opt := &github.TeamAddTeamMembershipOptions{
-			Role: role,
+	// inviteable only: PUT for non-org-members would send an org-invite side effect.
+	for userName, role := range categorized.inviteable {
+		opt := &github.TeamAddTeamMembershipOptions{Role: role}
+		if _, _, err := gh.Teams.AddTeamMembershipBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug, userName, opt); err != nil {
+			return err
 		}
-
-		_, _, err = gh.Teams.AddTeamMembershipBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug, userName, opt)
-		if err != nil {
+	}
+	for userName, role := range categorized.roleUpdate {
+		opt := &github.TeamAddTeamMembershipOptions{Role: role}
+		if _, _, err := gh.Teams.AddTeamMembershipBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug, userName, opt); err != nil {
 			return err
 		}
 	}
