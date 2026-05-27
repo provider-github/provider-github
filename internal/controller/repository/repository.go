@@ -167,6 +167,19 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceUpToDate: false,
 	}
 
+	// Archived repos freeze settings, branch protection, rulesets and webhooks on
+	// GitHub; only team access, topics and collaborator removals stay writable. They
+	// reconcile on a separate path so frozen drift can't loop, and the freeze is
+	// surfaced on the CR rather than ignored silently.
+	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
+	if archivedCr != pointer.Deref(repo.Archived, false) {
+		return notUpToDate, nil
+	}
+	if archivedCr {
+		return c.observeArchived(ctx, cr, repo, name)
+	}
+	setArchivedCondition(cr, false, nil)
+
 	crMToPermission := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
 	ghMToPermission, err := getRepoUsersWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, name)
 
@@ -242,11 +255,6 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 			return notUpToDate, nil
 		}
-	}
-
-	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	if archivedCr != pointer.Deref(repo.Archived, false) {
-		return notUpToDate, nil
 	}
 
 	// repo visibility makes sense only when a repo is not a fork
@@ -357,6 +365,84 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ResourceExists:   true,
 		ResourceUpToDate: true,
 	}, nil
+}
+
+// Condition surfaced when a repo is archived. GitHub makes archived repos
+// read-only for settings, branch protection, rulesets, webhooks and collaborator
+// additions, so the controller cannot reconcile those; the condition states this
+// rather than letting the skipped reconciliation go unnoticed on the CR.
+const (
+	typeArchivedConfigFrozen xpv1.ConditionType   = "ArchivedConfigFrozen"
+	reasonRepositoryArchived xpv1.ConditionReason = "RepositoryArchived"
+	reasonNotArchived        xpv1.ConditionReason = "NotArchived"
+)
+
+// setArchivedCondition reports the frozen dimensions while archived, listing any
+// declared collaborators that can't be added because the repo is archived. When
+// not archived it clears a previously-set condition (no-op if never set).
+func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []string) {
+	if !archived {
+		if cr.GetCondition(typeArchivedConfigFrozen).Status == corev1.ConditionTrue {
+			cr.SetConditions(xpv1.Condition{
+				Type:               typeArchivedConfigFrozen,
+				Status:             corev1.ConditionFalse,
+				Reason:             reasonNotArchived,
+				LastTransitionTime: metav1.Now(),
+			})
+		}
+		return
+	}
+	msg := "repository is archived; settings, branch protection, rulesets and webhooks are not reconciled"
+	if len(skippedAdds) > 0 {
+		sort.Strings(skippedAdds)
+		msg += "; collaborators cannot be added while archived: " + strings.Join(skippedAdds, ", ")
+	}
+	cr.SetConditions(xpv1.Condition{
+		Type:               typeArchivedConfigFrozen,
+		Status:             corev1.ConditionTrue,
+		Reason:             reasonRepositoryArchived,
+		Message:            msg,
+		LastTransitionTime: metav1.Now(),
+	})
+}
+
+// observeArchived reports drift for an archived repo. Only team access, topics and
+// collaborator removals are reconcilable while archived; settings, branch protection,
+// rulesets, webhooks and collaborator additions are frozen and surfaced via a
+// condition. The frozen dimensions aren't even read here.
+func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string) (managed.ExternalObservation, error) {
+	org := cr.Spec.ForProvider.Org
+
+	crUsers := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
+	ghUsers, err := getRepoUsersWithPermissions(ctx, c.github, org, name)
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+	removable, toAdd, toUpdate := util.DiffPermissions(ghUsers, crUsers)
+	skippedAdds := make([]string, 0, len(toAdd)+len(toUpdate))
+	for u := range util.MergeMaps(toAdd, toUpdate) {
+		skippedAdds = append(skippedAdds, u)
+	}
+	setArchivedCondition(cr, true, skippedAdds)
+
+	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
+	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)
+	if err != nil {
+		return managed.ExternalObservation{}, err
+	}
+	teamsDrift := !reflect.DeepEqual(util.SortByKey(ghTeams), util.SortByKey(crTeams))
+
+	topicsDrift := false
+	if cr.Spec.ForProvider.Topics != nil {
+		topicsDrift = !reflect.DeepEqual(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
+	}
+
+	if len(removable) > 0 || teamsDrift || topicsDrift {
+		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+	}
+
+	cr.SetConditions(xpv1.Available())
+	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func getTeamPermissionMapFromCr(teams []v1alpha1.RepositoryTeam) map[string]string {
@@ -1218,6 +1304,25 @@ func updateRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 	return err
 }
 
+// removeArchivedRepoUsers removes collaborators absent from the CR. While archived,
+// GitHub permits collaborator removals but rejects additions and role changes with
+// 403, so only removals are applied; skipped additions are surfaced by Observe via
+// the ArchivedConfigFrozen condition.
+func removeArchivedRepoUsers(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
+	crUsers := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
+	ghUsers, err := getRepoUsersWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if err != nil {
+		return err
+	}
+	toDelete, _, _ := util.DiffPermissions(ghUsers, crUsers)
+	for userName := range toDelete {
+		if _, err := gh.Repositories.RemoveCollaborator(ctx, cr.Spec.ForProvider.Org, repoName, userName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTToPermission, err := getRepoTeamsWithPermissions(ctx, gh, cr.Spec.ForProvider.Org, repoName)
@@ -1951,6 +2056,37 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
+
+	// Archived repos freeze settings, branch protection, rulesets and webhooks (and
+	// collaborator additions). Reconcile only what GitHub still permits while archived:
+	// team access, topics and collaborator removals.
+	archivedGh := pointer.Deref(repo.Archived, false)
+	if archivedCr {
+		if !archivedGh {
+			if _, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{Archived: pointer.To(true)}); err != nil {
+				return managed.ExternalUpdate{}, err
+			}
+		}
+		if err = updateRepoTeams(ctx, cr, c.github, name); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+		if err = removeArchivedRepoUsers(ctx, cr, c.github, name); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+		if cr.Spec.ForProvider.Topics != nil {
+			if _, _, err = c.github.Repositories.ReplaceAllTopics(ctx, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Topics); err != nil {
+				return managed.ExternalUpdate{}, err
+			}
+		}
+		return managed.ExternalUpdate{}, nil
+	}
+	if archivedGh {
+		// Unarchive first so the setting writes below are accepted.
+		if _, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, &github.Repository{Archived: pointer.To(false)}); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
+	}
+
 	if repo.Fork != nil && !*repo.Fork {
 		val := pointer.Deref(cr.Spec.ForProvider.Private, true)
 		privateCr = &val

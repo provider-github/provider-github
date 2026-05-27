@@ -217,6 +217,12 @@ func withSquashMergeCommitMessage(s string) repositoryModifier {
 	}
 }
 
+func withArchived(b bool) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.Archived = &b
+	}
+}
+
 func repository(m ...repositoryModifier) *v1alpha1.Repository {
 	cr := &v1alpha1.Repository{}
 	cr.Spec.ForProvider.Permissions = v1alpha1.RepositoryPermissions{
@@ -726,6 +732,39 @@ func TestObserve(t *testing.T) {
 				err: nil,
 			},
 		},
+		// An archived repo with matching teams, collaborators and topics is up to
+		// date. Branch protection, rulesets and webhooks are frozen while archived,
+		// so no mocks are wired for them — a call would be a nil-func panic, proving
+		// Observe does not read the frozen dimensions.
+		"ArchivedUpToDate": {
+			fields: fields{github: &ghclient.Client{
+				Services: &ghclient.Services{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							r := githubRepository()
+							r.Archived = github.Bool(true)
+							return r, nil, nil
+						},
+						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			}},
+			args: args{
+				mg: repository(withArchived(true)),
+			},
+			want: want{
+				o: managed.ExternalObservation{
+					ResourceExists:   true,
+					ResourceUpToDate: true,
+				},
+				err: nil,
+			},
+		},
 	}
 
 	for name, tc := range cases {
@@ -737,6 +776,145 @@ func TestObserve(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.want.o, got); diff != "" {
 				t.Errorf("\n%s\ne.Observe(...): -want, +got:\n%s\n", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestUpdate pins archived-repo write partitioning. While archived GitHub permits
+// team access, topics and collaborator removals but rejects settings/Edit, branch
+// protection, rulesets, webhooks and collaborator additions with 403. Update must
+// reconcile the permitted dimensions and never issue the frozen ones (which would
+// loop). Archiving a live repo issues one Edit(archived=true); unarchiving issues
+// Edit(archived=false) before the normal reconcile.
+func TestUpdate(t *testing.T) {
+	bareRepo := func(archived bool) *v1alpha1.Repository {
+		cr := &v1alpha1.Repository{}
+		cr.Spec.ForProvider.Archived = &archived
+		meta.SetExternalName(cr, repo)
+		return cr
+	}
+	ghRepo := func(arch bool) *github.Repository {
+		return &github.Repository{Name: &repo, Archived: &arch, Fork: github.Bool(false), Topics: []string{topic1, topic2, topic3}}
+	}
+
+	type want struct {
+		editArchived  []bool // archived value of each Edit call, in order
+		frozenWrite   string // a frozen write reached while archived (empty = none)
+		addTeamRepo   int
+		removeCollab  int
+		replaceTopics int
+		err           error
+	}
+	cases := map[string]struct {
+		reason  string
+		gh      *github.Repository
+		cr      *v1alpha1.Repository
+		ghUsers []*github.User
+		ghTeams []*github.Team
+		want    want
+	}{
+		"AlreadyArchivedNoChanges": {
+			reason: "Desired archived, already archived, nothing to change: no Edit and no writes.",
+			gh:     ghRepo(true),
+			cr:     bareRepo(true),
+			want:   want{},
+		},
+		"TransitionToArchived": {
+			reason: "Desired archived, currently live: exactly one Edit(archived=true), no frozen writes.",
+			gh:     ghRepo(false),
+			cr:     bareRepo(true),
+			want:   want{editArchived: []bool{true}},
+		},
+		"UnarchiveThenReconcile": {
+			reason: "Desired live, currently archived: Edit(archived=false) to unarchive, then the normal reconcile Edit.",
+			gh:     ghRepo(true),
+			cr:     bareRepo(false),
+			want:   want{editArchived: []bool{false, false}},
+		},
+		"ArchivedReconcilesAllowedSkipsFrozen": {
+			reason:  "Archived repo with a full spec: teams and topics reconcile; settings, branch protection, rulesets, webhooks and collaborator additions are frozen.",
+			gh:      ghRepo(true),
+			cr:      repository(withArchived(true)),
+			ghUsers: githubCollaborators(), // matches CR users → no collaborator writes
+			ghTeams: []*github.Team{},       // CR teams absent → AddTeamRepoBySlug fires
+			want:    want{addTeamRepo: 2, replaceTopics: 1},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var editArchived []bool
+			frozenWrite := ""
+			addTeamRepo, removeCollab, replaceTopics := 0, 0, 0
+			repoClient := &fake.MockRepositoriesClient{
+				MockGet: func(ctx context.Context, owner, r string) (*github.Repository, *github.Response, error) {
+					return tc.gh, nil, nil
+				},
+				MockEdit: func(ctx context.Context, owner, r string, rr *github.Repository) (*github.Repository, *github.Response, error) {
+					editArchived = append(editArchived, rr.GetArchived())
+					return rr, nil, nil
+				},
+				MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+					return tc.ghUsers, fake.GenerateEmptyResponse(), nil
+				},
+				MockListTeams: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+					return tc.ghTeams, fake.GenerateEmptyResponse(), nil
+				},
+				MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+					replaceTopics++
+					return topics, fake.GenerateEmptyResponse(), nil
+				},
+				MockRemoveCollaborator: func(ctx context.Context, owner, r, user string) (*github.Response, error) {
+					removeCollab++
+					return fake.GenerateEmptyResponse(), nil
+				},
+				// Frozen-while-archived writes: must not be reached.
+				MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+					frozenWrite = "AddCollaborator"
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+				MockUpdateBranchProtection: func(ctx context.Context, owner, r, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error) {
+					frozenWrite = "UpdateBranchProtection"
+					return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+				},
+				MockCreateRuleset: func(ctx context.Context, owner, r string, rs *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+					frozenWrite = "CreateRuleset"
+					return rs, fake.GenerateEmptyResponse(), nil
+				},
+				MockCreateHook: func(ctx context.Context, owner, r string, hook *github.Hook) (*github.Hook, *github.Response, error) {
+					frozenWrite = "CreateHook"
+					return hook, fake.GenerateEmptyResponse(), nil
+				},
+			}
+			teamsClient := &fake.MockTeamsClient{
+				MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+					addTeamRepo++
+					return fake.GenerateEmptyResponse(), nil
+				},
+				MockRemoveTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+			}
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient, Teams: teamsClient}}}
+			_, err := e.Update(context.Background(), tc.cr)
+			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
+				t.Errorf("\n%s\nUpdate(): -want error, +got error:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.editArchived, editArchived); diff != "" {
+				t.Errorf("\n%s\nUpdate() Edit archived values: -want, +got:\n%s", tc.reason, diff)
+			}
+			if frozenWrite != tc.want.frozenWrite {
+				t.Errorf("\n%s\nUpdate() frozen write reached = %q, want %q", tc.reason, frozenWrite, tc.want.frozenWrite)
+			}
+			if addTeamRepo != tc.want.addTeamRepo {
+				t.Errorf("\n%s\nUpdate() AddTeamRepoBySlug calls = %d, want %d", tc.reason, addTeamRepo, tc.want.addTeamRepo)
+			}
+			if removeCollab != tc.want.removeCollab {
+				t.Errorf("\n%s\nUpdate() RemoveCollaborator calls = %d, want %d", tc.reason, removeCollab, tc.want.removeCollab)
+			}
+			if replaceTopics != tc.want.replaceTopics {
+				t.Errorf("\n%s\nUpdate() ReplaceAllTopics calls = %d, want %d", tc.reason, replaceTopics, tc.want.replaceTopics)
 			}
 		})
 	}
