@@ -11,7 +11,7 @@ spec:
     members:
     - userRef:
         name: pgh-sample-user
-      role: maintainer # Note: If the user is an ORG admin, make sure to set it to "maintainer". GitHub enforces that ORG admins can only be maintainers in teams
+      role: maintainer # GitHub forces ORG admins to maintainer regardless of declared role
     privacy: closed
 ---
 apiVersion: organizations.github.crossplane.io/v1alpha1
@@ -28,5 +28,5 @@ spec:
     members:
     - userRef:
         name: pgh-sample-user
-      role: maintainer # Note: If the user is an ORG admin, make sure to set it to "maintainer". GitHub enforces that ORG admins can only be maintainers in teams
+      role: maintainer # GitHub forces ORG admins to maintainer regardless of declared role
     privacy: closed
