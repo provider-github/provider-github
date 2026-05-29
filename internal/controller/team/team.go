@@ -404,7 +404,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	crParentTeamSlug := slug.Make(pointer.Deref(cr.Spec.ForProvider.Parent, ""))
 	ghParentTeamSlug := ""
 	if t.Parent != nil {
-		ghParentTeamSlug = *t.Parent.Slug
+		ghParentTeamSlug = pointer.Deref(t.Parent.Slug, "")
 	}
 
 	structuralDrift := crParentTeamSlug != ghParentTeamSlug ||
