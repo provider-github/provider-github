@@ -51,7 +51,7 @@ make generate            # Regenerate CRDs and zz_generated_*.go via controller-
 make lint                # golangci-lint (v2.4.0)
 ```
 
-If your system Go is 1.26+ (the project targets `go 1.24.0`), `make reviewable` / `make lint` will panic with `file requires newer Go version go1.26 (application built with go1.25)`. Set `GOTOOLCHAIN=go1.24.0` to work around it locally — CI is unaffected because it uses Go 1.24.
+If your system Go is 1.26+ (the project targets `go 1.25.0`), `make reviewable` / `make lint` will panic with `file requires newer Go version go1.26 (application built with go1.25)`. Set `GOTOOLCHAIN=go1.25.0` to work around it locally — CI is unaffected because it uses Go 1.25.
 
 Run a single test:
 
@@ -120,7 +120,7 @@ Owns six Prometheus metrics, all carrying `(organization, app_id, app_installati
 
 ## Code conventions
 
-- Go 1.23, modules. Module path: `github.com/crossplane/provider-github`.
+- Go 1.25, modules. Module path: `github.com/crossplane/provider-github`.
 - Imports follow `goimports` with local prefix `github.com/my/project` (per `.golangci.yml` — yes, that prefix string is a quirk of the config).
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.
