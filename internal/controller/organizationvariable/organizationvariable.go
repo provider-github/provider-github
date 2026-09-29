@@ -18,7 +18,7 @@ package organizationvariable
 
 import (
 	"context"
-	"reflect"
+	"slices"
 	"time"
 
 	"github.com/google/go-github/v62/github"
@@ -163,7 +163,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 		ghclient.SortInt64(crIDs)
 		ghclient.SortInt64(ghIDs)
-		if !reflect.DeepEqual(crIDs, ghIDs) {
+		if !slices.Equal(crIDs, ghIDs) {
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
 	}
