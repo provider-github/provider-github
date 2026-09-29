@@ -19,6 +19,12 @@ type MockActionsClient struct {
 	MockDeleteOrgVariable               func(ctx context.Context, org, name string) (*github.Response, error)
 	MockListSelectedReposForOrgVariable func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
 	MockSetSelectedReposForOrgVariable  func(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
+	MockListOrganizationRunnerGroups    func(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error)
+	MockCreateOrganizationRunnerGroup   func(ctx context.Context, org string, createReq github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
+	MockUpdateOrganizationRunnerGroup   func(ctx context.Context, org string, groupID int64, updateReq github.UpdateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
+	MockDeleteOrganizationRunnerGroup   func(ctx context.Context, org string, groupID int64) (*github.Response, error)
+	MockListRepositoryAccessRunnerGroup func(ctx context.Context, org string, groupID int64, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error)
+	MockSetRepositoryAccessRunnerGroup  func(ctx context.Context, org string, groupID int64, ids github.SetRepoAccessRunnerGroupRequest) (*github.Response, error)
 }
 
 func (m *MockActionsClient) ListEnabledReposInOrg(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
@@ -63,6 +69,30 @@ func (m *MockActionsClient) ListSelectedReposForOrgVariable(ctx context.Context,
 
 func (m *MockActionsClient) SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
 	return m.MockSetSelectedReposForOrgVariable(ctx, org, name, ids)
+}
+
+func (m *MockActionsClient) ListOrganizationRunnerGroups(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
+	return m.MockListOrganizationRunnerGroups(ctx, org, opts)
+}
+
+func (m *MockActionsClient) CreateOrganizationRunnerGroup(ctx context.Context, org string, createReq github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error) {
+	return m.MockCreateOrganizationRunnerGroup(ctx, org, createReq)
+}
+
+func (m *MockActionsClient) UpdateOrganizationRunnerGroup(ctx context.Context, org string, groupID int64, updateReq github.UpdateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error) {
+	return m.MockUpdateOrganizationRunnerGroup(ctx, org, groupID, updateReq)
+}
+
+func (m *MockActionsClient) DeleteOrganizationRunnerGroup(ctx context.Context, org string, groupID int64) (*github.Response, error) {
+	return m.MockDeleteOrganizationRunnerGroup(ctx, org, groupID)
+}
+
+func (m *MockActionsClient) ListRepositoryAccessRunnerGroup(ctx context.Context, org string, groupID int64, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
+	return m.MockListRepositoryAccessRunnerGroup(ctx, org, groupID, opts)
+}
+
+func (m *MockActionsClient) SetRepositoryAccessRunnerGroup(ctx context.Context, org string, groupID int64, ids github.SetRepoAccessRunnerGroupRequest) (*github.Response, error) {
+	return m.MockSetRepositoryAccessRunnerGroup(ctx, org, groupID, ids)
 }
 
 type MockDependabotClient struct {
