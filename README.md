@@ -15,6 +15,8 @@ implements the following resources with partial functionality:
   * value
   * visibility (`all`, `private`, `selected`)
   * selected repositories
+* **RunnerGroup** — Actions self-hosted runner groups at the organization level (runners themselves are not managed)
+  * visibility (`all`, `selected`, `private`), selected repositories, public repository access, workflow restrictions
 * **Repository**
   * description, visibility (private/public), topics, template flag
   * default branch

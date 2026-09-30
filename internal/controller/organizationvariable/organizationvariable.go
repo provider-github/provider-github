@@ -19,8 +19,6 @@ package organizationvariable
 import (
 	"context"
 	"reflect"
-	"sort"
-	"sync"
 	"time"
 
 	"github.com/google/go-github/v62/github"
@@ -154,8 +152,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if cr.Spec.ForProvider.Visibility == visibilitySelected {
-		cache := newRepoIDCache(c.github, org)
-		crIDs, err := cache.batchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
+		resolver := ghclient.NewRepoIDResolver(c.github, org)
+		crIDs, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
@@ -163,8 +161,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		sortInt64(crIDs)
-		sortInt64(ghIDs)
+		ghclient.SortInt64(crIDs)
+		ghclient.SortInt64(ghIDs)
 		if !reflect.DeepEqual(crIDs, ghIDs) {
 			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 		}
@@ -238,8 +236,8 @@ func buildActionsVariable(ctx context.Context, gh *ghclient.Client, cr *v1alpha1
 	}
 
 	if visibility == visibilitySelected {
-		cache := newRepoIDCache(gh, cr.Spec.ForProvider.Org)
-		ids, err := cache.batchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
+		resolver := ghclient.NewRepoIDResolver(gh, cr.Spec.ForProvider.Org)
+		ids, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
 		if err != nil {
 			return nil, err
 		}
@@ -277,54 +275,4 @@ func listSelectedRepoIDs(ctx context.Context, gh *ghclient.Client, org, name str
 		opts.Page = resp.NextPage
 	}
 	return ids, nil
-}
-
-func sortInt64(s []int64) {
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-}
-
-// repoIDCache resolves repository names to numeric IDs once per
-// reconcile. Avoids hitting Repositories.Get more than once for the
-// same name when both Observe and Update need IDs for the same
-// SelectedRepositories list.
-type repoIDCache struct {
-	mu    sync.Mutex
-	cache map[string]int64
-	gh    *ghclient.Client
-	org   string
-}
-
-func newRepoIDCache(gh *ghclient.Client, org string) *repoIDCache {
-	return &repoIDCache{cache: map[string]int64{}, gh: gh, org: org}
-}
-
-func (c *repoIDCache) batchGetIDs(ctx context.Context, names []string) ([]int64, error) {
-	if len(names) == 0 {
-		return []int64{}, nil
-	}
-	ids := make([]int64, 0, len(names))
-	for _, n := range names {
-		id, err := c.getID(ctx, n)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
-}
-
-func (c *repoIDCache) getID(ctx context.Context, name string) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if id, ok := c.cache[name]; ok {
-		return id, nil
-	}
-	r, _, err := c.gh.Repositories.Get(ctx, c.org, name)
-	if err != nil {
-		return 0, err
-	}
-	id := r.GetID()
-	c.cache[name] = id
-	return id, nil
 }

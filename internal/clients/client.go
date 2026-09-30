@@ -541,6 +541,42 @@ func (c *actionsClient) SetSelectedReposForOrgVariable(ctx context.Context, org,
 	return resp, err
 }
 
+func (c *actionsClient) ListOrganizationRunnerGroups(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.ListOrganizationRunnerGroups", func() (*github.RunnerGroups, *github.Response, error) {
+		return c.ActionsClient.ListOrganizationRunnerGroups(ctx, org, opts)
+	})
+}
+
+func (c *actionsClient) CreateOrganizationRunnerGroup(ctx context.Context, org string, createReq github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.CreateOrganizationRunnerGroup", func() (*github.RunnerGroup, *github.Response, error) {
+		return c.ActionsClient.CreateOrganizationRunnerGroup(ctx, org, createReq)
+	})
+}
+
+func (c *actionsClient) UpdateOrganizationRunnerGroup(ctx context.Context, org string, groupID int64, updateReq github.UpdateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.UpdateOrganizationRunnerGroup", func() (*github.RunnerGroup, *github.Response, error) {
+		return c.ActionsClient.UpdateOrganizationRunnerGroup(ctx, org, groupID, updateReq)
+	})
+}
+
+func (c *actionsClient) DeleteOrganizationRunnerGroup(ctx context.Context, org string, groupID int64) (*github.Response, error) {
+	resp, err := c.ActionsClient.DeleteOrganizationRunnerGroup(ctx, org, groupID)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.DeleteOrganizationRunnerGroup", resp, err)
+	return resp, err
+}
+
+func (c *actionsClient) ListRepositoryAccessRunnerGroup(ctx context.Context, org string, groupID int64, opts *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.ListRepositoryAccessRunnerGroup", func() (*github.ListRepositories, *github.Response, error) {
+		return c.ActionsClient.ListRepositoryAccessRunnerGroup(ctx, org, groupID, opts)
+	})
+}
+
+func (c *actionsClient) SetRepositoryAccessRunnerGroup(ctx context.Context, org string, groupID int64, ids github.SetRepoAccessRunnerGroupRequest) (*github.Response, error) {
+	resp, err := c.ActionsClient.SetRepositoryAccessRunnerGroup(ctx, org, groupID, ids)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.SetRepositoryAccessRunnerGroup", resp, err)
+	return resp, err
+}
+
 // dependabotClient methods
 func (c *dependabotClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Dependabot.GetOrgSecret", func() (*github.Secret, *github.Response, error) {
