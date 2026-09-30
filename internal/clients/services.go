@@ -65,6 +65,11 @@ type OrganizationsClient interface {
 	CreateOrgInvitation(ctx context.Context, org string, opts *github.CreateOrgInvitationOptions) (*github.Invitation, *github.Response, error)
 	EditOrgMembership(ctx context.Context, user, org string, membership *github.Membership) (*github.Membership, *github.Response, error)
 	RemoveOrgMembership(ctx context.Context, user, org string) (*github.Response, error)
+	ListHooks(ctx context.Context, org string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
+	GetHook(ctx context.Context, org string, id int64) (*github.Hook, *github.Response, error)
+	CreateHook(ctx context.Context, org string, hook *github.Hook) (*github.Hook, *github.Response, error)
+	EditHook(ctx context.Context, org string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
+	DeleteHook(ctx context.Context, org string, id int64) (*github.Response, error)
 }
 
 type UsersClient interface {

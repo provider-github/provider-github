@@ -237,6 +237,36 @@ func (c *organizationsClient) RemoveOrgMembership(ctx context.Context, user, org
 	return resp, err
 }
 
+func (c *organizationsClient) ListHooks(ctx context.Context, org string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Organizations.ListHooks", func() ([]*github.Hook, *github.Response, error) {
+		return c.OrganizationsClient.ListHooks(ctx, org, opts)
+	})
+}
+
+func (c *organizationsClient) GetHook(ctx context.Context, org string, id int64) (*github.Hook, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Organizations.GetHook", func() (*github.Hook, *github.Response, error) {
+		return c.OrganizationsClient.GetHook(ctx, org, id)
+	})
+}
+
+func (c *organizationsClient) CreateHook(ctx context.Context, org string, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Organizations.CreateHook", func() (*github.Hook, *github.Response, error) {
+		return c.OrganizationsClient.CreateHook(ctx, org, hook)
+	})
+}
+
+func (c *organizationsClient) EditHook(ctx context.Context, org string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Organizations.EditHook", func() (*github.Hook, *github.Response, error) {
+		return c.OrganizationsClient.EditHook(ctx, org, id, hook)
+	})
+}
+
+func (c *organizationsClient) DeleteHook(ctx context.Context, org string, id int64) (*github.Response, error) {
+	resp, err := c.OrganizationsClient.DeleteHook(ctx, org, id)
+	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Organizations.DeleteHook", resp, err)
+	return resp, err
+}
+
 // repositoriesClient methods
 func (c *repositoriesClient) Get(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.Get", func() (*github.Repository, *github.Response, error) {

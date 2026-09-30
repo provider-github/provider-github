@@ -120,6 +120,11 @@ type MockOrganizationsClient struct {
 	MockCreateOrgInvitation func(ctx context.Context, org string, opts *github.CreateOrgInvitationOptions) (*github.Invitation, *github.Response, error)
 	MockEditOrgMembership   func(ctx context.Context, user, org string, membership *github.Membership) (*github.Membership, *github.Response, error)
 	MockRemoveOrgMembership func(ctx context.Context, user, org string) (*github.Response, error)
+	MockListHooks           func(ctx context.Context, org string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error)
+	MockGetHook             func(ctx context.Context, org string, id int64) (*github.Hook, *github.Response, error)
+	MockCreateHook          func(ctx context.Context, org string, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockEditHook            func(ctx context.Context, org string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
+	MockDeleteHook          func(ctx context.Context, org string, id int64) (*github.Response, error)
 }
 
 func (m *MockOrganizationsClient) Get(ctx context.Context, org string) (*github.Organization, *github.Response, error) {
@@ -144,6 +149,26 @@ func (m *MockOrganizationsClient) EditOrgMembership(ctx context.Context, user, o
 
 func (m *MockOrganizationsClient) RemoveOrgMembership(ctx context.Context, user, org string) (*github.Response, error) {
 	return m.MockRemoveOrgMembership(ctx, user, org)
+}
+
+func (m *MockOrganizationsClient) ListHooks(ctx context.Context, org string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+	return m.MockListHooks(ctx, org, opts)
+}
+
+func (m *MockOrganizationsClient) GetHook(ctx context.Context, org string, id int64) (*github.Hook, *github.Response, error) {
+	return m.MockGetHook(ctx, org, id)
+}
+
+func (m *MockOrganizationsClient) CreateHook(ctx context.Context, org string, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return m.MockCreateHook(ctx, org, hook)
+}
+
+func (m *MockOrganizationsClient) EditHook(ctx context.Context, org string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error) {
+	return m.MockEditHook(ctx, org, id, hook)
+}
+
+func (m *MockOrganizationsClient) DeleteHook(ctx context.Context, org string, id int64) (*github.Response, error) {
+	return m.MockDeleteHook(ctx, org, id)
 }
 
 type MockUsersClient struct {

@@ -21,6 +21,7 @@ following permissions:
 | Members              | Read and write | `Membership` CR, `Team` CR (team CRUD + team membership)     |
 | Actions variables    | Read and write | `OrganizationVariable` CR                                    |
 | Self-hosted runners  | Read and write | `RunnerGroup` CR                                             |
+| Webhooks             | Read and write | `OrganizationWebhook` CR                                     |
 | Secrets              | Read and write | `secrets.actionsSecrets` on the `Organization` CR (repo-access selection) |
 | Dependabot secrets   | Read and write | `secrets.dependabotSecrets` on the `Organization` CR (repo-access selection) |
 
@@ -40,6 +41,7 @@ provider picks an App per reconcile based on rate-limit headroom.
 | ---------------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
 | `Organization`         | Metadata (R)                                          | Administration (R/W), Secrets (R/W), Dependabot secrets (R/W)  |
 | `OrganizationVariable` | Metadata (R)                                          | Actions variables (R/W)                                        |
+| `OrganizationWebhook`  | Metadata (R)                                          | Webhooks (R/W)                                                 |
 | `RunnerGroup`          | Metadata (R)                                          | Self-hosted runners (R/W)                                      |
 | `Repository`           | Metadata (R), Contents (R), Administration (R/W), Webhooks (R/W) | Members (R) — for team-to-repo associations          |
 | `Team`                 | Administration (R/W) — for team-to-repo associations  | Members (R/W)                                                  |

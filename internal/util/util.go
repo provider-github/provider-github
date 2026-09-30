@@ -17,6 +17,7 @@
 package util
 
 import (
+	"slices"
 	// nolint:gosec
 	"crypto/sha1"
 	"encoding/hex"
@@ -278,4 +279,13 @@ func ToLowerSlice(input []string) []string {
 		input[i] = strings.ToLower(v)
 	}
 	return input
+}
+
+// EqualUnordered reports whether a and b hold the same strings,
+// ignoring order. nil and empty are equal.
+func EqualUnordered(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	sort.Strings(a)
+	sort.Strings(b)
+	return slices.Equal(a, b)
 }

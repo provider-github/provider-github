@@ -19,7 +19,6 @@ package runnergroup
 import (
 	"context"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +42,7 @@ import (
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/features"
 	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/crossplane/provider-github/internal/util"
 )
 
 const (
@@ -151,7 +151,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if g.GetVisibility() != p.Visibility ||
 		g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories ||
 		g.GetRestrictedToWorkflows() != (len(want) > 0) ||
-		!equalUnordered(g.SelectedWorkflows, want) {
+		!util.EqualUnordered(g.SelectedWorkflows, want) {
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
@@ -312,7 +312,7 @@ func repoAccessUpToDate(ctx context.Context, gh *ghclient.Client, org string, sp
 	for _, n := range specNames {
 		lowered = append(lowered, strings.ToLower(n))
 	}
-	if equalUnordered(lowered, ghNames) {
+	if util.EqualUnordered(lowered, ghNames) {
 		return true, nil
 	}
 
@@ -340,13 +340,4 @@ func workflowStrings(wfs []v1alpha1.WorkflowRef) []string {
 		out = append(out, string(w))
 	}
 	return out
-}
-
-// equalUnordered reports whether a and b hold the same strings,
-// ignoring order. nil and empty are equal.
-func equalUnordered(a, b []string) bool {
-	a, b = slices.Clone(a), slices.Clone(b)
-	sort.Strings(a)
-	sort.Strings(b)
-	return slices.Equal(a, b)
 }

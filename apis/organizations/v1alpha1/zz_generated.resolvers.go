@@ -168,6 +168,32 @@ func (mg *OrganizationVariable) ResolveReferences(ctx context.Context, c client.
 	return nil
 }
 
+// ResolveReferences of this OrganizationWebhook.
+func (mg *OrganizationWebhook) ResolveReferences(ctx context.Context, c client.Reader) error {
+	r := reference.NewAPIResolver(c, mg)
+
+	var rsp reference.ResolutionResponse
+	var err error
+
+	rsp, err = r.Resolve(ctx, reference.ResolutionRequest{
+		CurrentValue: mg.Spec.ForProvider.Org,
+		Extract:      reference.ExternalName(),
+		Reference:    mg.Spec.ForProvider.OrgRef,
+		Selector:     mg.Spec.ForProvider.OrgSelector,
+		To: reference.To{
+			List:    &OrganizationList{},
+			Managed: &Organization{},
+		},
+	})
+	if err != nil {
+		return errors.Wrap(err, "mg.Spec.ForProvider.Org")
+	}
+	mg.Spec.ForProvider.Org = rsp.ResolvedValue
+	mg.Spec.ForProvider.OrgRef = rsp.ResolvedReference
+
+	return nil
+}
+
 // ResolveReferences of this Repository.
 func (mg *Repository) ResolveReferences(ctx context.Context, c client.Reader) error {
 	r := reference.NewAPIResolver(c, mg)
