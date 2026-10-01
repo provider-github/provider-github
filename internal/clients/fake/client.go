@@ -337,8 +337,13 @@ type MockTeamsClient struct {
 	MockDeleteTeamBySlug                 func(ctx context.Context, org, slug string) (*github.Response, error)
 	MockAddTeamRepoBySlug                func(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)
 	MockRemoveTeamRepoBySlug             func(ctx context.Context, org, slug, owner, repo string) (*github.Response, error)
+	MockIsTeamRepoBySlug                 func(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error)
 	MockListPendingTeamInvitationsBySlug func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error)
 	MockListChildTeamsByParentSlug       func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
+}
+
+func (m *MockTeamsClient) IsTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error) {
+	return m.MockIsTeamRepoBySlug(ctx, org, slug, owner, repo)
 }
 
 func (m *MockTeamsClient) RemoveTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Response, error) {

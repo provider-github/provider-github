@@ -255,19 +255,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		cr.Status.AtProvider.UnappliedBranchProtection = records
 
 		unapplied := detectUnappliedBranchProtectionActors(crBPRToConfig, ghBPRToConfig)
-		enforced, err := enforcedBranchProtectionActors(ctx, c.github, cr.Spec.ForProvider.Org, name, unapplied, ghTToPermission)
+		enforced, err := enforcedBranchProtectionActors(ctx, c.github, cr.Spec.ForProvider.Org, name, unapplied)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		dropped := slices.Concat(enforced, rememberedApps(records, unapplied))
-		sortBranchProtectionActorRefs(dropped)
+		remembered := rememberedApps(records, unapplied)
 		setBranchProtectionPartialCondition(cr, branchProtectionReport{
 			missingBranches: skipped,
-			unappliedActors: dropped,
+			enforcedActors:  enforced,
+			rememberedApps:  remembered,
 			forcePushKept:   forcePushKept,
 		})
 		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 
+		dropped := slices.Concat(enforced, remembered)
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
 		if !cmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
@@ -897,7 +898,8 @@ const (
 // branchProtectionReport lists the declared branch protection GitHub did not apply.
 type branchProtectionReport struct {
 	missingBranches []string
-	unappliedActors []branchProtectionActorRef
+	enforcedActors  []branchProtectionActorRef
+	rememberedApps  []branchProtectionActorRef
 	forcePushKept   []string
 }
 
@@ -923,11 +925,14 @@ func setBranchProtectionPartialCondition(cr *v1alpha1.Repository, report branchP
 	if len(report.missingBranches) > 0 {
 		segments = append(segments, "branches do not exist in repo: "+strings.Join(report.missingBranches, ", "))
 	}
-	if len(report.unappliedActors) > 0 {
-		segments = append(segments, "actors not applied by GitHub: "+strings.Join(branchProtectionActorNames(report.unappliedActors), ", "))
+	if len(report.enforcedActors) > 0 {
+		segments = append(segments, "actors lack write access on the repo, so GitHub drops them from branch protection: "+strings.Join(branchProtectionActorNames(report.enforcedActors), ", "))
+	}
+	if len(report.rememberedApps) > 0 {
+		segments = append(segments, "actors GitHub did not store on the last push (apps need contents write): "+strings.Join(branchProtectionActorNames(report.rememberedApps), ", "))
 	}
 	if len(report.forcePushKept) > 0 {
-		segments = append(segments, "force pushes remain enabled: "+strings.Join(report.forcePushKept, ", "))
+		segments = append(segments, "force pushes stay enabled because a per-actor force-push allowance is set in the GitHub UI, which the REST API cannot change: "+strings.Join(report.forcePushKept, ", "))
 	}
 
 	c := xpv1.Condition{
@@ -975,13 +980,6 @@ type branchProtectionActorRef struct {
 	actor  string
 }
 
-func derefStringSlice(s *[]string) []string {
-	if s == nil {
-		return nil
-	}
-	return *s
-}
-
 // branchProtectionActorRefs flattens every bypass/dismissal/restriction actor in a BPR map.
 func branchProtectionActorRefs(m map[string]v1alpha1.BranchProtectionRule) map[branchProtectionActorRef]bool {
 	out := map[branchProtectionActorRef]bool{}
@@ -998,9 +996,9 @@ func branchProtectionActorRefs(m map[string]v1alpha1.BranchProtectionRule) map[b
 				add(branch, fieldBypassApps, bp.Apps)
 			}
 			if dr := rpr.DismissalRestrictions; dr != nil {
-				add(branch, fieldDismissalUsers, derefStringSlice(dr.Users))
-				add(branch, fieldDismissalTeams, derefStringSlice(dr.Teams))
-				add(branch, fieldDismissalApps, derefStringSlice(dr.Apps))
+				add(branch, fieldDismissalUsers, pointer.Deref(dr.Users, nil))
+				add(branch, fieldDismissalTeams, pointer.Deref(dr.Teams, nil))
+				add(branch, fieldDismissalApps, pointer.Deref(dr.Apps, nil))
 			}
 		}
 		if r := rule.BranchProtectionRestrictions; r != nil {
@@ -1042,8 +1040,9 @@ func sortBranchProtectionActorRefs(refs []branchProtectionActorRef) {
 }
 
 // Apps are never enforced: GitHub exposes no permission to probe.
-func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, owner, repo string, unapplied []branchProtectionActorRef, teamPermissions map[string]string) ([]branchProtectionActorRef, error) {
+func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, owner, repo string, unapplied []branchProtectionActorRef) ([]branchProtectionActorRef, error) {
 	userCanWrite := map[string]bool{}
+	teamCanWrite := map[string]bool{}
 	enforced := make([]branchProtectionActorRef, 0, len(unapplied))
 
 	for _, ref := range unapplied {
@@ -1060,7 +1059,14 @@ func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, ow
 				enforced = append(enforced, ref)
 			}
 		case fieldBypassTeams, fieldDismissalTeams, fieldRestrictionTeams:
-			if !teamHasWriteAccess(teamPermissions[ref.actor]) {
+			if _, probed := teamCanWrite[ref.actor]; !probed {
+				ok, err := teamHasWriteAccess(ctx, gh, owner, ref.actor, owner, repo)
+				if err != nil {
+					return nil, err
+				}
+				teamCanWrite[ref.actor] = ok
+			}
+			if !teamCanWrite[ref.actor] {
 				enforced = append(enforced, ref)
 			}
 		}
@@ -1083,9 +1089,17 @@ func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, u
 	return permission == repoPermissionAdmin || permission == "write", nil
 }
 
-// "" = team not on the repo.
-func teamHasWriteAccess(permission string) bool {
-	return permission == repoPermissionAdmin || permission == "maintain" || permission == "push"
+// Probed because a team inheriting access from its parent is absent from the repo team list.
+func teamHasWriteAccess(ctx context.Context, gh *ghclient.Client, org, slug, owner, repo string) (bool, error) {
+	teamRepo, _, err := gh.Teams.IsTeamRepoBySlug(ctx, org, slug, owner, repo)
+	if ghclient.Is404(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	permissions := teamRepo.GetPermissions()
+	return permissions["push"] || permissions["maintain"] || permissions[repoPermissionAdmin], nil
 }
 
 func withoutBranchProtectionActors(rules map[string]v1alpha1.BranchProtectionRule, drop []branchProtectionActorRef) map[string]v1alpha1.BranchProtectionRule {
@@ -1100,9 +1114,15 @@ func withoutBranchProtectionActors(rules map[string]v1alpha1.BranchProtectionRul
 
 		if rpr := r.RequiredPullRequestReviews; rpr != nil {
 			if bp := rpr.BypassPullRequestAllowances; bp != nil {
+				actorsBefore := len(bp.Users) + len(bp.Teams) + len(bp.Apps)
 				bp.Users = removeActors(bp.Users, branch, fieldBypassUsers, dropSet)
 				bp.Teams = removeActors(bp.Teams, branch, fieldBypassTeams, dropSet)
 				bp.Apps = removeActors(bp.Apps, branch, fieldBypassApps, dropSet)
+				actorsAfter := len(bp.Users) + len(bp.Teams) + len(bp.Apps)
+				// GitHub omits the bypass object entirely once it holds no actors.
+				if actorsBefore > 0 && actorsAfter == 0 {
+					rpr.BypassPullRequestAllowances = nil
+				}
 			}
 			if dr := rpr.DismissalRestrictions; dr != nil {
 				dr.Users = removeActorsPtr(dr.Users, branch, fieldDismissalUsers, dropSet)

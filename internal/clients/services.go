@@ -88,6 +88,7 @@ type TeamsClient interface {
 	DeleteTeamBySlug(ctx context.Context, org, slug string) (*github.Response, error)
 	AddTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)
 	RemoveTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Response, error)
+	IsTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error)
 }
 
 type RepositoriesClient interface {

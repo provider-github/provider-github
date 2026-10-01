@@ -497,6 +497,12 @@ func (c *teamsClient) ListChildTeamsByParentSlug(ctx context.Context, org, slug 
 	})
 }
 
+func (c *teamsClient) IsTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.IsTeamRepoBySlug", func() (*github.Repository, *github.Response, error) {
+		return c.TeamsClient.IsTeamRepoBySlug(ctx, org, slug, owner, repo)
+	})
+}
+
 func (c *teamsClient) AddTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
 	resp, err := c.TeamsClient.AddTeamRepoBySlug(ctx, org, slug, owner, repo, opts)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.AddTeamRepoBySlug", resp, err)
