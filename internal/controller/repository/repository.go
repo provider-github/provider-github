@@ -236,7 +236,17 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			return managed.ExternalObservation{}, err
 		}
 
-		if !cmp.Equal(crBPRToConfig, ghBPRToConfig) {
+		recordForcePushNotApplied(cr, crBPRToConfig, ghBPRToConfig)
+
+		unapplied := detectUnappliedBranchProtectionActors(crBPRToConfig, ghBPRToConfig)
+		enforced, err := enforcedBranchProtectionActors(ctx, c.github, cr.Spec.ForProvider.Org, name, unapplied, ghTToPermission)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		setBranchProtectionActorPartialCondition(cr, enforced)
+
+		crBPRWithoutEnforced := withoutBranchProtectionActors(crBPRToConfig, enforced)
+		if !cmp.Equal(crBPRWithoutEnforced, ghBPRToConfig) {
 			return notUpToDate, nil
 		}
 	}
@@ -843,6 +853,40 @@ const (
 	reasonAllBranchesPresent    xpv1.ConditionReason = "AllBranchesPresent"
 )
 
+// Condition for a branch protection field GitHub won't apply (currently
+// allow_force_pushes kept enabled by a per-actor allowance not settable via REST).
+const (
+	typeBranchProtectionNotApplied xpv1.ConditionType   = "BranchProtectionNotApplied"
+	reasonForcePushNotApplied      xpv1.ConditionReason = "ForcePushNotApplied"
+	reasonProtectionApplied        xpv1.ConditionReason = "ProtectionApplied"
+)
+
+// recordForcePushNotApplied surfaces branches where the CR disables force pushes but
+// GitHub keeps them enabled. Idempotent.
+func recordForcePushNotApplied(cr *v1alpha1.Repository, crBPR, ghBPR map[string]v1alpha1.BranchProtectionRule) {
+	var branches []string
+	for branch, want := range crBPR {
+		got, ok := ghBPR[branch]
+		if !ok {
+			continue
+		}
+		if !pointer.Deref(want.AllowForcePushes, false) && pointer.Deref(got.AllowForcePushes, false) {
+			branches = append(branches, branch)
+		}
+	}
+	cond := xpv1.Condition{Type: typeBranchProtectionNotApplied, LastTransitionTime: metav1.Now()}
+	if len(branches) == 0 {
+		cond.Status = corev1.ConditionFalse
+		cond.Reason = reasonProtectionApplied
+	} else {
+		sort.Strings(branches)
+		cond.Status = corev1.ConditionTrue
+		cond.Reason = reasonForcePushNotApplied
+		cond.Message = fmt.Sprintf("force pushes remain enabled (per-actor allowance not settable via REST): %s", strings.Join(branches, ", "))
+	}
+	cr.SetConditions(cond)
+}
+
 // setBranchProtectionPartialCondition reflects the current skipped set
 // on the CR's status. Idempotent — SetConditions ignores writes whose
 // (Status, Reason, Message) match the existing condition.
@@ -862,6 +906,246 @@ func setBranchProtectionPartialCondition(ctx context.Context, cr *v1alpha1.Repos
 			"repository", meta.GetExternalName(cr), "branches", skipped)
 	}
 	cr.SetConditions(c)
+}
+
+// GitHub drops actors lacking write access with a 200, so Observe treats their absence as enforced.
+
+// Field tokens for the "branch/field:actor" names the condition reports.
+const (
+	fieldBypassUsers      = "bypassUsers"
+	fieldBypassTeams      = "bypassTeams"
+	fieldBypassApps       = "bypassApps"
+	fieldDismissalUsers   = "dismissalUsers"
+	fieldDismissalTeams   = "dismissalTeams"
+	fieldDismissalApps    = "dismissalApps"
+	fieldRestrictionUsers = "restrictionUsers"
+	fieldRestrictionTeams = "restrictionTeams"
+	fieldRestrictionApps  = "restrictionApps"
+)
+
+// branchProtectionActorRef identifies one actor within a branch protection rule.
+type branchProtectionActorRef struct {
+	branch string
+	field  string
+	actor  string
+}
+
+func derefStringSlice(s *[]string) []string {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+// branchProtectionActorRefs flattens every bypass/dismissal/restriction actor in a BPR map.
+func branchProtectionActorRefs(m map[string]v1alpha1.BranchProtectionRule) map[branchProtectionActorRef]bool {
+	out := map[branchProtectionActorRef]bool{}
+	add := func(branch, field string, actors []string) {
+		for _, a := range actors {
+			out[branchProtectionActorRef{branch: branch, field: field, actor: a}] = true
+		}
+	}
+	for branch, rule := range m {
+		if rpr := rule.RequiredPullRequestReviews; rpr != nil {
+			if bp := rpr.BypassPullRequestAllowances; bp != nil {
+				add(branch, fieldBypassUsers, bp.Users)
+				add(branch, fieldBypassTeams, bp.Teams)
+				add(branch, fieldBypassApps, bp.Apps)
+			}
+			if dr := rpr.DismissalRestrictions; dr != nil {
+				add(branch, fieldDismissalUsers, derefStringSlice(dr.Users))
+				add(branch, fieldDismissalTeams, derefStringSlice(dr.Teams))
+				add(branch, fieldDismissalApps, derefStringSlice(dr.Apps))
+			}
+		}
+		if r := rule.BranchProtectionRestrictions; r != nil {
+			add(branch, fieldRestrictionUsers, r.Users)
+			add(branch, fieldRestrictionTeams, r.Teams)
+			add(branch, fieldRestrictionApps, r.Apps)
+		}
+	}
+	return out
+}
+
+// Sorted so the condition message is stable across reconciles.
+func detectUnappliedBranchProtectionActors(declared, stored map[string]v1alpha1.BranchProtectionRule) []branchProtectionActorRef {
+	declaredRefs := branchProtectionActorRefs(declared)
+	storedRefs := branchProtectionActorRefs(stored)
+
+	dropped := make([]branchProtectionActorRef, 0, len(declaredRefs))
+	for ref := range declaredRefs {
+		if storedRefs[ref] {
+			continue
+		}
+		dropped = append(dropped, ref)
+	}
+	sort.Slice(dropped, func(i, j int) bool {
+		a, b := dropped[i], dropped[j]
+		if a.branch != b.branch {
+			return a.branch < b.branch
+		}
+		if a.field != b.field {
+			return a.field < b.field
+		}
+		return a.actor < b.actor
+	})
+	return dropped
+}
+
+// Apps are never enforced: GitHub exposes no permission to probe.
+func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, owner, repo string, unapplied []branchProtectionActorRef, teamPermissions map[string]string) ([]branchProtectionActorRef, error) {
+	userCanWrite := map[string]bool{}
+	enforced := make([]branchProtectionActorRef, 0, len(unapplied))
+
+	for _, ref := range unapplied {
+		switch ref.field {
+		case fieldBypassUsers, fieldDismissalUsers, fieldRestrictionUsers:
+			if _, probed := userCanWrite[ref.actor]; !probed {
+				ok, err := userHasWriteAccess(ctx, gh, owner, repo, ref.actor)
+				if err != nil {
+					return nil, err
+				}
+				userCanWrite[ref.actor] = ok
+			}
+			if !userCanWrite[ref.actor] {
+				enforced = append(enforced, ref)
+			}
+		case fieldBypassTeams, fieldDismissalTeams, fieldRestrictionTeams:
+			if !teamHasWriteAccess(teamPermissions[ref.actor]) {
+				enforced = append(enforced, ref)
+			}
+		}
+	}
+	return enforced, nil
+}
+
+const repoPermissionAdmin = "admin"
+
+// 404 (not a collaborator) counts as no access.
+func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, user string) (bool, error) {
+	level, _, err := gh.Repositories.GetPermissionLevel(ctx, owner, repo, user)
+	if ghclient.Is404(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	permission := level.GetPermission()
+	return permission == repoPermissionAdmin || permission == "write", nil
+}
+
+// "" = team not on the repo.
+func teamHasWriteAccess(permission string) bool {
+	return permission == repoPermissionAdmin || permission == "maintain" || permission == "push"
+}
+
+func withoutBranchProtectionActors(rules map[string]v1alpha1.BranchProtectionRule, drop []branchProtectionActorRef) map[string]v1alpha1.BranchProtectionRule {
+	dropSet := make(map[branchProtectionActorRef]bool, len(drop))
+	for _, ref := range drop {
+		dropSet[ref] = true
+	}
+
+	out := make(map[string]v1alpha1.BranchProtectionRule, len(rules))
+	for branch, rule := range rules {
+		r := rule.DeepCopy()
+
+		if rpr := r.RequiredPullRequestReviews; rpr != nil {
+			if bp := rpr.BypassPullRequestAllowances; bp != nil {
+				bp.Users = removeActors(bp.Users, branch, fieldBypassUsers, dropSet)
+				bp.Teams = removeActors(bp.Teams, branch, fieldBypassTeams, dropSet)
+			}
+			if dr := rpr.DismissalRestrictions; dr != nil {
+				dr.Users = removeActorsPtr(dr.Users, branch, fieldDismissalUsers, dropSet)
+				dr.Teams = removeActorsPtr(dr.Teams, branch, fieldDismissalTeams, dropSet)
+			}
+		}
+
+		if restr := r.BranchProtectionRestrictions; restr != nil {
+			restr.Users = removeActors(restr.Users, branch, fieldRestrictionUsers, dropSet)
+			restr.Teams = removeActors(restr.Teams, branch, fieldRestrictionTeams, dropSet)
+		}
+
+		out[branch] = *r
+	}
+	return out
+}
+
+// An emptied list becomes nil because getBPRWithConfig reports no actors as nil.
+func removeActors(actors []string, branch, field string, dropSet map[branchProtectionActorRef]bool) []string {
+	kept := make([]string, 0, len(actors))
+	for _, a := range actors {
+		ref := branchProtectionActorRef{branch: branch, field: field, actor: a}
+		if !dropSet[ref] {
+			kept = append(kept, a)
+		}
+	}
+
+	// An untouched list keeps its shape (nil or empty), so steady-state comparison is unchanged.
+	if len(kept) == len(actors) {
+		return actors
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+func removeActorsPtr(actors *[]string, branch, field string, dropSet map[branchProtectionActorRef]bool) *[]string {
+	if actors == nil {
+		return nil
+	}
+	kept := removeActors(*actors, branch, field, dropSet)
+	if kept == nil {
+		return nil
+	}
+	return &kept
+}
+
+// actorKind reduces a field token (e.g. "dismissalUsers") to its kind.
+func actorKind(field string) string {
+	switch {
+	case strings.HasPrefix(field, "bypass"):
+		return "bypass"
+	case strings.HasPrefix(field, "dismissal"):
+		return "dismissal"
+	default:
+		return "restriction"
+	}
+}
+
+// Condition for declared bypass/dismissal/restriction actors GitHub did not store.
+// Distinct from BranchProtectionPartial and BranchProtectionNotApplied.
+const (
+	typeBranchProtectionActorPartial xpv1.ConditionType   = "BranchProtectionActorPartial"
+	reasonActorsNotApplied           xpv1.ConditionReason = "ActorsNotApplied"
+	reasonAllActorsApplied           xpv1.ConditionReason = "AllActorsApplied"
+)
+
+// Names only the actor kinds present; idempotent because SetConditions skips identical writes.
+func setBranchProtectionActorPartialCondition(cr *v1alpha1.Repository, dropped []branchProtectionActorRef) {
+	cond := xpv1.Condition{Type: typeBranchProtectionActorPartial, LastTransitionTime: metav1.Now()}
+	if len(dropped) == 0 {
+		cond.Status = corev1.ConditionFalse
+		cond.Reason = reasonAllActorsApplied
+		cr.SetConditions(cond)
+		return
+	}
+	seen := map[string]bool{}
+	names := make([]string, len(dropped))
+	for i, ref := range dropped {
+		seen[actorKind(ref.field)] = true
+		names[i] = fmt.Sprintf("%s/%s:%s", ref.branch, ref.field, ref.actor)
+	}
+	var kinds []string
+	for _, k := range []string{"bypass", "dismissal", "restriction"} {
+		if seen[k] {
+			kinds = append(kinds, k)
+		}
+	}
+	cond.Status = corev1.ConditionTrue
+	cond.Reason = reasonActorsNotApplied
+	cond.Message = fmt.Sprintf("%s actors not applied by GitHub: %s", strings.Join(kinds, "/"), strings.Join(names, ", "))
+	cr.SetConditions(cond)
 }
 
 // getBPRMapFromCr generates a map from a slice of BranchProtectionRules. Each rule is first processed:

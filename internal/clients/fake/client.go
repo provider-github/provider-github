@@ -190,6 +190,7 @@ type MockRepositoriesClient struct {
 	MockCreateFork                          func(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
 	MockAddCollaborator                     func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	MockRemoveCollaborator                  func(ctx context.Context, owner, repo, user string) (*github.Response, error)
+	MockGetPermissionLevel                  func(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error)
 	MockDelete                              func(ctx context.Context, owner, repo string) (*github.Response, error)
 	MockCreateHook                          func(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
 	MockEditHook                            func(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
@@ -252,6 +253,10 @@ func (m *MockRepositoriesClient) ListTeams(ctx context.Context, owner string, re
 
 func (m *MockRepositoriesClient) RemoveCollaborator(ctx context.Context, owner, repo, user string) (*github.Response, error) {
 	return m.MockRemoveCollaborator(ctx, owner, repo, user)
+}
+
+func (m *MockRepositoriesClient) GetPermissionLevel(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
+	return m.MockGetPermissionLevel(ctx, owner, repo, user)
 }
 
 func (m *MockRepositoriesClient) CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error) {

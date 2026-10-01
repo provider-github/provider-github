@@ -334,6 +334,12 @@ func (c *repositoriesClient) RemoveCollaborator(ctx context.Context, owner, repo
 	return resp, err
 }
 
+func (c *repositoriesClient) GetPermissionLevel(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetPermissionLevel", func() (*github.RepositoryPermissionLevel, *github.Response, error) {
+		return c.RepositoriesClient.GetPermissionLevel(ctx, owner, repo, user)
+	})
+}
+
 func (c *repositoriesClient) CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateHook", func() (*github.Hook, *github.Response, error) {
 		return c.RepositoriesClient.CreateHook(ctx, owner, repo, hook)
