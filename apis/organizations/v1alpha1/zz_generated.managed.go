@@ -19,6 +19,158 @@ package v1alpha1
 
 import xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 
+// GetCondition of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+	return mg.Status.GetCondition(ct)
+}
+
+// GetDeletionPolicy of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetDeletionPolicy() xpv1.DeletionPolicy {
+	return mg.Spec.DeletionPolicy
+}
+
+// GetManagementPolicies of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
+// GetProviderConfigReference of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetProviderConfigReference() *xpv1.Reference {
+	return mg.Spec.ProviderConfigReference
+}
+
+/*
+GetProviderReference of this ActionsSecretAccess.
+Deprecated: Use GetProviderConfigReference.
+*/
+func (mg *ActionsSecretAccess) GetProviderReference() *xpv1.Reference {
+	return mg.Spec.ProviderReference
+}
+
+// GetPublishConnectionDetailsTo of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
+	return mg.Spec.PublishConnectionDetailsTo
+}
+
+// GetWriteConnectionSecretToReference of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+	return mg.Spec.WriteConnectionSecretToReference
+}
+
+// SetConditions of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetConditions(c ...xpv1.Condition) {
+	mg.Status.SetConditions(c...)
+}
+
+// SetDeletionPolicy of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+	mg.Spec.DeletionPolicy = r
+}
+
+// SetManagementPolicies of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
+// SetProviderConfigReference of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetProviderConfigReference(r *xpv1.Reference) {
+	mg.Spec.ProviderConfigReference = r
+}
+
+/*
+SetProviderReference of this ActionsSecretAccess.
+Deprecated: Use SetProviderConfigReference.
+*/
+func (mg *ActionsSecretAccess) SetProviderReference(r *xpv1.Reference) {
+	mg.Spec.ProviderReference = r
+}
+
+// SetPublishConnectionDetailsTo of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
+	mg.Spec.PublishConnectionDetailsTo = r
+}
+
+// SetWriteConnectionSecretToReference of this ActionsSecretAccess.
+func (mg *ActionsSecretAccess) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+	mg.Spec.WriteConnectionSecretToReference = r
+}
+
+// GetCondition of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+	return mg.Status.GetCondition(ct)
+}
+
+// GetDeletionPolicy of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetDeletionPolicy() xpv1.DeletionPolicy {
+	return mg.Spec.DeletionPolicy
+}
+
+// GetManagementPolicies of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
+// GetProviderConfigReference of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetProviderConfigReference() *xpv1.Reference {
+	return mg.Spec.ProviderConfigReference
+}
+
+/*
+GetProviderReference of this DependabotSecretAccess.
+Deprecated: Use GetProviderConfigReference.
+*/
+func (mg *DependabotSecretAccess) GetProviderReference() *xpv1.Reference {
+	return mg.Spec.ProviderReference
+}
+
+// GetPublishConnectionDetailsTo of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
+	return mg.Spec.PublishConnectionDetailsTo
+}
+
+// GetWriteConnectionSecretToReference of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+	return mg.Spec.WriteConnectionSecretToReference
+}
+
+// SetConditions of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetConditions(c ...xpv1.Condition) {
+	mg.Status.SetConditions(c...)
+}
+
+// SetDeletionPolicy of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+	mg.Spec.DeletionPolicy = r
+}
+
+// SetManagementPolicies of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
+// SetProviderConfigReference of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetProviderConfigReference(r *xpv1.Reference) {
+	mg.Spec.ProviderConfigReference = r
+}
+
+/*
+SetProviderReference of this DependabotSecretAccess.
+Deprecated: Use SetProviderConfigReference.
+*/
+func (mg *DependabotSecretAccess) SetProviderReference(r *xpv1.Reference) {
+	mg.Spec.ProviderReference = r
+}
+
+// SetPublishConnectionDetailsTo of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
+	mg.Spec.PublishConnectionDetailsTo = r
+}
+
+// SetWriteConnectionSecretToReference of this DependabotSecretAccess.
+func (mg *DependabotSecretAccess) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+	mg.Spec.WriteConnectionSecretToReference = r
+}
+
 // GetCondition of this Membership.
 func (mg *Membership) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
 	return mg.Status.GetCondition(ct)

@@ -187,7 +187,11 @@ spec:
                     description: Configuration for Organization Secrets.
                     properties:
                       actionsSecrets:
-                        description: List of GitHub Actions secrets
+                        description: |-
+                          List of GitHub Actions secrets
+
+
+                          DEPRECATED, use ActionsSecretAccess instead.
                         items:
                           properties:
                             name:
@@ -283,7 +287,11 @@ spec:
                           type: object
                         type: array
                       dependabotSecrets:
-                        description: List of Dependabot secrets
+                        description: |-
+                          List of Dependabot secrets
+
+
+                          DEPRECATED, use DependabotSecretAccess instead.
                         items:
                           properties:
                             name:
