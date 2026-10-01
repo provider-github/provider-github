@@ -198,6 +198,28 @@ func TestObserve_Selected_UpToDateWhenRepoIDsMatch(t *testing.T) {
 	}
 }
 
+// A selected variable with no repositories must be up to date when
+// GitHub also lists none; an empty and a nil ID list are the same set.
+func TestObserve_Selected_NoRepos_UpToDate(t *testing.T) {
+	actions := &fake.MockActionsClient{
+		MockGetOrgVariable: func(_ context.Context, _, _ string) (*github.ActionsVariable, *github.Response, error) {
+			return ghVariable("bar", "selected"), fake.GenerateEmptyResponse(), nil
+		},
+		MockListSelectedReposForOrgVariable: func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
+			return &github.SelectedReposList{}, fake.GenerateEmptyResponse(), nil
+		},
+	}
+	e := newExternalWithActions(actions, nil)
+
+	got, err := e.Observe(context.Background(), newCR(withVisibility("selected")))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = false with no selected repos on either side, want true")
+	}
+}
+
 // When GH has different selected repos than CR (here: extra repo on
 // GH side), Observe reports NotUpToDate so Update can converge.
 func TestObserve_Selected_DriftReportsNotUpToDate(t *testing.T) {
