@@ -233,13 +233,16 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		setBranchProtectionPartialCondition(ctx, cr, skipped)
+		if len(skipped) > 0 {
+			ctrl.LoggerFrom(ctx).Info("skipping branch protection rules for missing branches",
+				"repository", name, "branches", skipped)
+		}
 		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 
-		recordForcePushNotApplied(cr, crBPRToConfig, ghBPRToConfig)
+		forcePushKept := forcePushKeptBranches(crBPRToConfig, ghBPRToConfig)
 
 		records := currentUnappliedBranchProtection(cr.Status.AtProvider.UnappliedBranchProtection, crBPRToConfig)
 		cr.Status.AtProvider.UnappliedBranchProtection = records
@@ -251,7 +254,11 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 		dropped := slices.Concat(enforced, rememberedApps(records, unapplied))
 		sortBranchProtectionActorRefs(dropped)
-		setBranchProtectionActorPartialCondition(cr, dropped)
+		setBranchProtectionPartialCondition(cr, branchProtectionReport{
+			missingBranches: skipped,
+			unappliedActors: dropped,
+			forcePushKept:   forcePushKept,
+		})
 
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
@@ -260,6 +267,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
+		setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 	}
 
 	if cr.Spec.ForProvider.RepositoryRules != nil {
@@ -852,29 +860,22 @@ func protectedBranchSet(branches []*github.Branch) map[string]bool {
 	return set
 }
 
-// Condition surfaced on the Repository CR when one or more declared
-// branch protection rules can't be applied because their target branch
-// doesn't exist in the repo. Conditions are quieter than Events:
-// Crossplane only writes a status update when the condition's
-// (Status, Reason, Message) actually changes, so steady-state and
-// controller restarts don't generate noise.
+// One condition for every declared branch protection item GitHub did not apply.
 const (
 	typeBranchProtectionPartial xpv1.ConditionType   = "BranchProtectionPartial"
-	reasonBranchesMissing       xpv1.ConditionReason = "BranchesMissing"
-	reasonAllBranchesPresent    xpv1.ConditionReason = "AllBranchesPresent"
+	reasonNotFullyApplied       xpv1.ConditionReason = "NotFullyApplied"
+	reasonFullyApplied          xpv1.ConditionReason = "FullyApplied"
 )
 
-// Condition for a branch protection field GitHub won't apply (currently
-// allow_force_pushes kept enabled by a per-actor allowance not settable via REST).
-const (
-	typeBranchProtectionNotApplied xpv1.ConditionType   = "BranchProtectionNotApplied"
-	reasonForcePushNotApplied      xpv1.ConditionReason = "ForcePushNotApplied"
-	reasonProtectionApplied        xpv1.ConditionReason = "ProtectionApplied"
-)
+// branchProtectionReport lists the declared branch protection GitHub did not apply.
+type branchProtectionReport struct {
+	missingBranches []string
+	unappliedActors []branchProtectionActorRef
+	forcePushKept   []string
+}
 
-// recordForcePushNotApplied surfaces branches where the CR disables force pushes but
-// GitHub keeps them enabled. Idempotent.
-func recordForcePushNotApplied(cr *v1alpha1.Repository, crBPR, ghBPR map[string]v1alpha1.BranchProtectionRule) {
+// Branches declared without force pushes that GitHub keeps enabled (per-actor allowance not settable via REST).
+func forcePushKeptBranches(crBPR, ghBPR map[string]v1alpha1.BranchProtectionRule) []string {
 	var branches []string
 	for branch, want := range crBPR {
 		got, ok := ghBPR[branch]
@@ -885,38 +886,44 @@ func recordForcePushNotApplied(cr *v1alpha1.Repository, crBPR, ghBPR map[string]
 			branches = append(branches, branch)
 		}
 	}
-	cond := xpv1.Condition{Type: typeBranchProtectionNotApplied, LastTransitionTime: metav1.Now()}
-	if len(branches) == 0 {
-		cond.Status = corev1.ConditionFalse
-		cond.Reason = reasonProtectionApplied
-	} else {
-		sort.Strings(branches)
-		cond.Status = corev1.ConditionTrue
-		cond.Reason = reasonForcePushNotApplied
-		cond.Message = fmt.Sprintf("force pushes remain enabled (per-actor allowance not settable via REST): %s", strings.Join(branches, ", "))
-	}
-	cr.SetConditions(cond)
+	sort.Strings(branches)
+	return branches
 }
 
-// setBranchProtectionPartialCondition reflects the current skipped set
-// on the CR's status. Idempotent — SetConditions ignores writes whose
-// (Status, Reason, Message) match the existing condition.
-func setBranchProtectionPartialCondition(ctx context.Context, cr *v1alpha1.Repository, skipped []string) {
+// Idempotent: SetConditions ignores writes whose (Status, Reason, Message) are unchanged.
+func setBranchProtectionPartialCondition(cr *v1alpha1.Repository, report branchProtectionReport) {
+	var segments []string
+	if len(report.missingBranches) > 0 {
+		segments = append(segments, "branches do not exist in repo: "+strings.Join(report.missingBranches, ", "))
+	}
+	if len(report.unappliedActors) > 0 {
+		segments = append(segments, "actors not applied by GitHub: "+strings.Join(branchProtectionActorNames(report.unappliedActors), ", "))
+	}
+	if len(report.forcePushKept) > 0 {
+		segments = append(segments, "force pushes remain enabled: "+strings.Join(report.forcePushKept, ", "))
+	}
+
 	c := xpv1.Condition{
 		Type:               typeBranchProtectionPartial,
 		LastTransitionTime: metav1.Now(),
 	}
-	if len(skipped) == 0 {
+	if len(segments) == 0 {
 		c.Status = corev1.ConditionFalse
-		c.Reason = reasonAllBranchesPresent
+		c.Reason = reasonFullyApplied
 	} else {
 		c.Status = corev1.ConditionTrue
-		c.Reason = reasonBranchesMissing
-		c.Message = fmt.Sprintf("branches do not exist in repo: %s", strings.Join(skipped, ", "))
-		ctrl.LoggerFrom(ctx).Info("skipping branch protection rules for missing branches",
-			"repository", meta.GetExternalName(cr), "branches", skipped)
+		c.Reason = reasonNotFullyApplied
+		c.Message = strings.Join(segments, "; ")
 	}
 	cr.SetConditions(c)
+}
+
+func branchProtectionActorNames(refs []branchProtectionActorRef) []string {
+	names := make([]string, len(refs))
+	for i, ref := range refs {
+		names[i] = fmt.Sprintf("%s/%s:%s", ref.branch, ref.field, ref.actor)
+	}
+	return names
 }
 
 // GitHub drops actors lacking write access with a 200, so Observe treats their absence as enforced.
@@ -1117,53 +1124,6 @@ func removeActorsPtr(actors *[]string, branch, field string, dropSet map[branchP
 		return nil
 	}
 	return &kept
-}
-
-// actorKind reduces a field token (e.g. "dismissalUsers") to its kind.
-func actorKind(field string) string {
-	switch {
-	case strings.HasPrefix(field, "bypass"):
-		return "bypass"
-	case strings.HasPrefix(field, "dismissal"):
-		return "dismissal"
-	default:
-		return "restriction"
-	}
-}
-
-// Condition for declared bypass/dismissal/restriction actors GitHub did not store.
-// Distinct from BranchProtectionPartial and BranchProtectionNotApplied.
-const (
-	typeBranchProtectionActorPartial xpv1.ConditionType   = "BranchProtectionActorPartial"
-	reasonActorsNotApplied           xpv1.ConditionReason = "ActorsNotApplied"
-	reasonAllActorsApplied           xpv1.ConditionReason = "AllActorsApplied"
-)
-
-// Names only the actor kinds present; idempotent because SetConditions skips identical writes.
-func setBranchProtectionActorPartialCondition(cr *v1alpha1.Repository, dropped []branchProtectionActorRef) {
-	cond := xpv1.Condition{Type: typeBranchProtectionActorPartial, LastTransitionTime: metav1.Now()}
-	if len(dropped) == 0 {
-		cond.Status = corev1.ConditionFalse
-		cond.Reason = reasonAllActorsApplied
-		cr.SetConditions(cond)
-		return
-	}
-	seen := map[string]bool{}
-	names := make([]string, len(dropped))
-	for i, ref := range dropped {
-		seen[actorKind(ref.field)] = true
-		names[i] = fmt.Sprintf("%s/%s:%s", ref.branch, ref.field, ref.actor)
-	}
-	var kinds []string
-	for _, k := range []string{"bypass", "dismissal", "restriction"} {
-		if seen[k] {
-			kinds = append(kinds, k)
-		}
-	}
-	cond.Status = corev1.ConditionTrue
-	cond.Reason = reasonActorsNotApplied
-	cond.Message = fmt.Sprintf("%s actors not applied by GitHub: %s", strings.Join(kinds, "/"), strings.Join(names, ", "))
-	cr.SetConditions(cond)
 }
 
 // Item token for a declared allow_force_pushes=false that GitHub kept enabled.
@@ -1648,11 +1608,10 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 		// getBPRMapFromCr() provides defaults for optional *bool fields
 		rulesMap := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
-		skipped, err := filterMissingBranchProtectionRules(ctx, c.github, cr.Spec.ForProvider.Org, name, rulesMap, protectedBranchSet(protectedBranches))
+		_, err = filterMissingBranchProtectionRules(ctx, c.github, cr.Spec.ForProvider.Org, name, rulesMap, protectedBranchSet(protectedBranches))
 		if err != nil {
 			return managed.ExternalCreation{}, err
 		}
-		setBranchProtectionPartialCondition(ctx, cr, skipped)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
@@ -2119,11 +2078,10 @@ func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *g
 		return err
 	}
 	crBPRToConfig := getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)
-	skipped, err := filterMissingBranchProtectionRules(ctx, gh, cr.Spec.ForProvider.Org, repoName, crBPRToConfig, protectedBranchSet(protectedBranches))
+	_, err = filterMissingBranchProtectionRules(ctx, gh, cr.Spec.ForProvider.Org, repoName, crBPRToConfig, protectedBranchSet(protectedBranches))
 	if err != nil {
 		return err
 	}
-	setBranchProtectionPartialCondition(ctx, cr, skipped)
 	ghBPRToConfig, err := getBPRWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, protectedBranches)
 	if err != nil {
 		return err

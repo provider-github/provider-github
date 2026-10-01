@@ -1372,67 +1372,83 @@ func TestFilterMissingBranchProtectionRules(t *testing.T) {
 	}
 }
 
-// setBranchProtectionPartialCondition is the operator-facing signal for
-// "some desired BPRs can't apply right now". Asserts: non-empty skipped →
-// status True with sorted branch names in the message; empty skipped →
-// status False (resource is fully converged on this dimension). Crossplane's
-// SetConditions dedupes identical writes, so steady-state reconciles don't
-// thrash the status — this test pins the (Status, Reason, Message) shape
-// that dedup depends on.
+// The single condition names every unapplied part in a fixed order, and is False with no message when nothing is unapplied.
 func TestSetBranchProtectionPartialCondition(t *testing.T) {
+	alice := branchProtectionActorRef{branch: "main", field: fieldBypassUsers, actor: "alice"}
+	someApp := branchProtectionActorRef{branch: "main", field: fieldBypassApps, actor: "some-app"}
+
 	cases := map[string]struct {
-		skipped     []string
+		report      branchProtectionReport
 		wantStatus  corev1.ConditionStatus
 		wantReason  xpv1.ConditionReason
-		wantInMsg   []string
-		wantMsgZero bool
+		wantMessage string
 	}{
-		"Empty_FalseAndAllBranchesPresentReason": {
-			skipped:     nil,
-			wantStatus:  corev1.ConditionFalse,
-			wantReason:  "AllBranchesPresent",
-			wantMsgZero: true,
+		"OnlyMissingBranches": {
+			report:      branchProtectionReport{missingBranches: []string{"develop", "release"}},
+			wantStatus:  corev1.ConditionTrue,
+			wantReason:  "NotFullyApplied",
+			wantMessage: "branches do not exist in repo: develop, release",
 		},
-		"NonEmpty_TrueAndNamesBranchesInMessage": {
-			skipped:    []string{"develop", "release"},
-			wantStatus: corev1.ConditionTrue,
-			wantReason: "BranchesMissing",
-			wantInMsg:  []string{"develop", "release"},
+		"OnlyUnappliedActors": {
+			report:      branchProtectionReport{unappliedActors: []branchProtectionActorRef{someApp, alice}},
+			wantStatus:  corev1.ConditionTrue,
+			wantReason:  "NotFullyApplied",
+			wantMessage: "actors not applied by GitHub: main/bypassApps:some-app, main/bypassUsers:alice",
+		},
+		"OnlyForcePushKept": {
+			report:      branchProtectionReport{forcePushKept: []string{"main", "release"}},
+			wantStatus:  corev1.ConditionTrue,
+			wantReason:  "NotFullyApplied",
+			wantMessage: "force pushes remain enabled: main, release",
+		},
+		"AllThree": {
+			report: branchProtectionReport{
+				missingBranches: []string{"develop"},
+				unappliedActors: []branchProtectionActorRef{alice},
+				forcePushKept:   []string{"main"},
+			},
+			wantStatus:  corev1.ConditionTrue,
+			wantReason:  "NotFullyApplied",
+			wantMessage: "branches do not exist in repo: develop; actors not applied by GitHub: main/bypassUsers:alice; force pushes remain enabled: main",
+		},
+		"NothingUnapplied": {
+			report:      branchProtectionReport{},
+			wantStatus:  corev1.ConditionFalse,
+			wantReason:  "FullyApplied",
+			wantMessage: "",
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cr := &v1alpha1.Repository{}
-			setBranchProtectionPartialCondition(context.Background(), cr, tc.skipped)
+			setBranchProtectionPartialCondition(cr, tc.report)
 
-			c := cr.GetCondition("BranchProtectionPartial")
+			if len(cr.Status.Conditions) != 1 {
+				t.Fatalf("conditions = %d, want 1", len(cr.Status.Conditions))
+			}
+			c := cr.Status.Conditions[0]
+			if c.Type != "BranchProtectionPartial" {
+				t.Errorf("Type = %q, want %q", c.Type, "BranchProtectionPartial")
+			}
 			if c.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", c.Status, tc.wantStatus)
 			}
 			if c.Reason != tc.wantReason {
 				t.Errorf("Reason = %q, want %q", c.Reason, tc.wantReason)
 			}
-			if tc.wantMsgZero && c.Message != "" {
-				t.Errorf("Message = %q, want empty", c.Message)
-			}
-			for _, want := range tc.wantInMsg {
-				if !strings.Contains(c.Message, want) {
-					t.Errorf("Message %q missing %q", c.Message, want)
-				}
+			if c.Message != tc.wantMessage {
+				t.Errorf("Message = %q, want %q", c.Message, tc.wantMessage)
 			}
 		})
 	}
 }
 
-// SetConditions on identical content is idempotent. Calling
-// setBranchProtectionPartialCondition twice with the same skipped set
-// must not append a duplicate to status.conditions — otherwise every
-// reconcile would grow the slice and produce K8s status writes.
+// An identical report must not append a duplicate, or every reconcile grows status.conditions.
 func TestSetBranchProtectionPartialCondition_Idempotent(t *testing.T) {
 	cr := &v1alpha1.Repository{}
-	setBranchProtectionPartialCondition(context.Background(), cr, []string{"develop"})
-	setBranchProtectionPartialCondition(context.Background(), cr, []string{"develop"})
+	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})
+	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})
 
 	count := 0
 	for _, c := range cr.Status.Conditions {
@@ -1445,60 +1461,58 @@ func TestSetBranchProtectionPartialCondition_Idempotent(t *testing.T) {
 	}
 }
 
-func TestRecordForcePushNotApplied(t *testing.T) {
+// Only a declared-off force push that GitHub stores on is reported, sorted for a stable message.
+func TestForcePushKeptBranches(t *testing.T) {
 	bpr := func(branch string, afp bool) v1alpha1.BranchProtectionRule {
 		return v1alpha1.BranchProtectionRule{Branch: branch, AllowForcePushes: &afp}
 	}
 
 	cases := map[string]struct {
-		reason     string
-		cr         map[string]v1alpha1.BranchProtectionRule
-		gh         map[string]v1alpha1.BranchProtectionRule
-		wantStatus corev1.ConditionStatus
-		wantReason xpv1.ConditionReason
+		reason string
+		cr     map[string]v1alpha1.BranchProtectionRule
+		gh     map[string]v1alpha1.BranchProtectionRule
+		want   []string
 	}{
-		"NotHonored": {
-			reason:     "CR wants force pushes off but GitHub keeps them on: condition True",
-			cr:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
-			gh:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
-			wantStatus: corev1.ConditionTrue,
-			wantReason: reasonForcePushNotApplied,
+		"DeclaredOffStoredOn": {
+			reason: "CR wants force pushes off but GitHub keeps them on: branch listed",
+			cr:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
+			gh:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
+			want:   []string{"main"},
 		},
-		"Honored": {
-			reason:     "GitHub stored what the CR wanted: condition False",
-			cr:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
-			gh:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
-			wantStatus: corev1.ConditionFalse,
-			wantReason: reasonProtectionApplied,
+		"DeclaredOn": {
+			reason: "CR explicitly wants force pushes on: not listed",
+			cr:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
+			gh:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
 		},
-		"CrWantsForcePushOn": {
-			reason:     "CR explicitly wants force pushes on and GitHub agrees: not a violation",
-			cr:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
-			gh:         map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", true)},
-			wantStatus: corev1.ConditionFalse,
-			wantReason: reasonProtectionApplied,
+		"DeclaredOffStoredOff": {
+			reason: "GitHub stored what the CR wanted: not listed",
+			cr:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
+			gh:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
+		},
+		"BranchAbsentFromStored": {
+			reason: "a branch GitHub has no protection for is not a kept force push: not listed",
+			cr:     map[string]v1alpha1.BranchProtectionRule{"main": bpr("main", false)},
+			gh:     map[string]v1alpha1.BranchProtectionRule{},
+		},
+		"SortedAcrossBranches": {
+			reason: "several kept branches are listed sorted",
+			cr:     map[string]v1alpha1.BranchProtectionRule{"release": bpr("release", false), "main": bpr("main", false)},
+			gh:     map[string]v1alpha1.BranchProtectionRule{"release": bpr("release", true), "main": bpr("main", true)},
+			want:   []string{"main", "release"},
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			cr := repository()
-			recordForcePushNotApplied(cr, tc.cr, tc.gh)
-
-			got := cr.GetCondition(typeBranchProtectionNotApplied)
-			if got.Status != tc.wantStatus {
-				t.Errorf("%s: status = %v, want %v", tc.reason, got.Status, tc.wantStatus)
-			}
-			if got.Reason != tc.wantReason {
-				t.Errorf("%s: reason = %v, want %v", tc.reason, got.Reason, tc.wantReason)
+			got := forcePushKeptBranches(tc.cr, tc.gh)
+			if diff := cmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s: -want, +got:\n%s", tc.reason, diff)
 			}
 		})
 	}
 }
 
-// Declared actors absent from GitHub's stored rule are reported as "branch/field:actor",
-// and the message prefix names only the kinds actually dropped. Failure means an unapplied
-// actor goes unreported, a stored one is flagged, or the prefix misstates the kinds.
+// Every declared actor GitHub did not store is reported as "branch/field:actor", and no stored one is.
 func TestDetectUnappliedBranchProtectionActors(t *testing.T) {
 	rule := func(bypass, dismissal, restriction []string) map[string]v1alpha1.BranchProtectionRule {
 		return map[string]v1alpha1.BranchProtectionRule{
@@ -1522,27 +1536,27 @@ func TestDetectUnappliedBranchProtectionActors(t *testing.T) {
 		wantMessage string
 	}{
 		"DismissalOnly": {
-			reason:      "only a dismissal actor dropped: prefix names dismissal alone",
+			reason:      "only a dismissal actor dropped: it alone is named",
 			declared:    rule(nil, []string{"alice"}, nil),
 			stored:      rule(nil, nil, nil),
 			wantStatus:  corev1.ConditionTrue,
-			wantReason:  reasonActorsNotApplied,
-			wantMessage: "dismissal actors not applied by GitHub: main/dismissalUsers:alice",
+			wantReason:  reasonNotFullyApplied,
+			wantMessage: "actors not applied by GitHub: main/dismissalUsers:alice",
 		},
 		"BypassAndRestriction": {
-			reason:      "bypass + restriction dropped: prefix names both, omits dismissal; entries sorted",
+			reason:      "bypass + restriction dropped: both named, entries sorted",
 			declared:    rule([]string{"bob"}, nil, []string{"carol"}),
 			stored:      rule(nil, nil, nil),
 			wantStatus:  corev1.ConditionTrue,
-			wantReason:  reasonActorsNotApplied,
-			wantMessage: "bypass/restriction actors not applied by GitHub: main/bypassUsers:bob, main/restrictionUsers:carol",
+			wantReason:  reasonNotFullyApplied,
+			wantMessage: "actors not applied by GitHub: main/bypassUsers:bob, main/restrictionUsers:carol",
 		},
 		"AllApplied": {
 			reason:      "every declared actor stored: condition False, no message",
 			declared:    rule([]string{"bob"}, []string{"alice"}, nil),
 			stored:      rule([]string{"bob"}, []string{"alice"}, nil),
 			wantStatus:  corev1.ConditionFalse,
-			wantReason:  reasonAllActorsApplied,
+			wantReason:  reasonFullyApplied,
 			wantMessage: "",
 		},
 	}
@@ -1550,8 +1564,9 @@ func TestDetectUnappliedBranchProtectionActors(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cr := &v1alpha1.Repository{}
-			setBranchProtectionActorPartialCondition(cr, detectUnappliedBranchProtectionActors(tc.declared, tc.stored))
-			cond := cr.GetCondition(typeBranchProtectionActorPartial)
+			report := branchProtectionReport{unappliedActors: detectUnappliedBranchProtectionActors(tc.declared, tc.stored)}
+			setBranchProtectionPartialCondition(cr, report)
+			cond := cr.GetCondition(typeBranchProtectionPartial)
 			if cond.Status != tc.wantStatus || cond.Reason != tc.wantReason {
 				t.Errorf("%s: condition = (%v,%v), want (%v,%v)", tc.reason, cond.Status, cond.Reason, tc.wantStatus, tc.wantReason)
 			}
@@ -1626,7 +1641,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			permission:   "read",
 			wantUpToDate: true,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass actors not applied by GitHub: main/bypassUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice",
 			wantProbes:   1,
 		},
 		"UserWithWriteIsDrift": {
@@ -1643,7 +1658,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			probeErr:     fake.Generate404Response(),
 			wantUpToDate: true,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass actors not applied by GitHub: main/bypassUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice",
 			wantProbes:   1,
 		},
 		"UserProbeErrorPropagates": {
@@ -1659,7 +1674,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			permission:   "read",
 			wantUpToDate: true,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass/dismissal actors not applied by GitHub: main/bypassUsers:alice, main/dismissalUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice, main/dismissalUsers:alice",
 			wantProbes:   1,
 		},
 		"ReadAndWriteUserMissing": {
@@ -1668,7 +1683,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			userPerms:    map[string]string{"alice": "read", "bob": "write"},
 			wantUpToDate: false,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass actors not applied by GitHub: main/bypassUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice",
 			wantProbes:   2,
 		},
 		"EnforcedOnOneBranchDoesNotMaskOther": {
@@ -1678,7 +1693,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			userPerms:    map[string]string{"alice": "read", "bob": "write"},
 			wantUpToDate: false,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass actors not applied by GitHub: main/bypassUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice",
 			wantProbes:   2,
 		},
 		"TeamPullEnforced": {
@@ -1687,7 +1702,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			repoTeams:    []*github.Team{{Slug: github.String("some-team"), Permission: github.String("pull")}},
 			wantUpToDate: true,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "restriction actors not applied by GitHub: main/restrictionTeams:some-team",
+			wantMessage:  "actors not applied by GitHub: main/restrictionTeams:some-team",
 		},
 		"TeamPushIsDrift": {
 			reason:       "a restriction team with push would be stored: not up to date",
@@ -1702,7 +1717,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			permission:   "read",
 			wantUpToDate: false,
 			wantStatus:   corev1.ConditionTrue,
-			wantMessage:  "bypass actors not applied by GitHub: main/bypassUsers:alice",
+			wantMessage:  "actors not applied by GitHub: main/bypassUsers:alice",
 			wantProbes:   1,
 		},
 		"NoMissingActorsNoProbe": {
@@ -1776,7 +1791,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			if got.ResourceUpToDate != tc.wantUpToDate {
 				t.Errorf("%s: ResourceUpToDate = %v, want %v", tc.reason, got.ResourceUpToDate, tc.wantUpToDate)
 			}
-			cond := cr.GetCondition(typeBranchProtectionActorPartial)
+			cond := cr.GetCondition(typeBranchProtectionPartial)
 			if cond.Status != tc.wantStatus || cond.Message != tc.wantMessage {
 				t.Errorf("%s: condition = (%v, %q), want (%v, %q)", tc.reason, cond.Status, cond.Message, tc.wantStatus, tc.wantMessage)
 			}
@@ -1941,7 +1956,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			recordItems:    []string{"bypassApps:some-app"},
 			wantUpToDate:   true,
 			wantRecordKept: true,
-			wantMessage:    "bypass actors not applied by GitHub: main/bypassApps:some-app",
+			wantMessage:    "actors not applied by GitHub: main/bypassApps:some-app",
 		},
 		"StaleHashIsDrift": {
 			reason:       "a record for an older rule must not hide the missing app, and is dropped",
@@ -1971,6 +1986,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			storedForcePush: true,
 			wantUpToDate:    true,
 			wantRecordKept:  true,
+			wantMessage:     "force pushes remain enabled: main",
 		},
 		"RecordedAppNowStored": {
 			reason:          "a recorded app GitHub now stores is not stripped, or the rule would differ with nothing to push",
@@ -1998,7 +2014,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			storedForcePush: true,
 			wantUpToDate:    false,
 			wantRecordKept:  true,
-			wantMessage:     "bypass actors not applied by GitHub: main/bypassApps:some-app",
+			wantMessage:     "actors not applied by GitHub: main/bypassApps:some-app; force pushes remain enabled: main",
 		},
 		"RecordDoesNotMaskOtherDrift": {
 			reason:         "a current record must leave unrelated rule drift visible",
@@ -2007,7 +2023,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			recordItems:    []string{"bypassApps:some-app"},
 			wantUpToDate:   false,
 			wantRecordKept: true,
-			wantMessage:    "bypass actors not applied by GitHub: main/bypassApps:some-app",
+			wantMessage:    "actors not applied by GitHub: main/bypassApps:some-app",
 		},
 	}
 
@@ -2074,8 +2090,83 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			if diff := cmp.Diff(wantRecords, cr.Status.AtProvider.UnappliedBranchProtection, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("%s: status records: -want, +got:\n%s", tc.reason, diff)
 			}
-			if msg := cr.GetCondition(typeBranchProtectionActorPartial).Message; msg != tc.wantMessage {
+			if msg := cr.GetCondition(typeBranchProtectionPartial).Message; msg != tc.wantMessage {
 				t.Errorf("%s: condition message = %q, want %q", tc.reason, msg, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// A True condition must turn False once its cause is gone, or a stale report lingers.
+func TestObserveBranchProtectionPartialClears(t *testing.T) {
+	cases := map[string]struct {
+		reason      string
+		removeRules bool
+	}{
+		"ForcePushNowApplied": {
+			reason: "GitHub now stores force pushes off as declared",
+		},
+		"RulesNoLongerDeclared": {
+			reason:      "the CR no longer declares any branch protection",
+			removeRules: true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			stored := githubProtectedBranch()
+			gh := &ghclient.Client{
+				Services: &ghclient.Services{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return stored, fake.GenerateEmptyResponse(), nil
+						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			}
+			cr := repository()
+
+			stored.AllowForcePushes.Enabled = true
+			if _, err := (&external{github: gh}).Observe(context.Background(), cr); err != nil {
+				t.Fatalf("%s: first Observe(...): unexpected error: %v", tc.reason, err)
+			}
+			first := cr.GetCondition(typeBranchProtectionPartial)
+			if first.Status != corev1.ConditionTrue || first.Reason != reasonNotFullyApplied || first.Message != "force pushes remain enabled: main" {
+				t.Fatalf("%s: first Observe: condition = (%v, %v, %q), want (True, NotFullyApplied, force pushes message)", tc.reason, first.Status, first.Reason, first.Message)
+			}
+
+			if tc.removeRules {
+				cr.Spec.ForProvider.BranchProtectionRules = nil
+			} else {
+				stored.AllowForcePushes.Enabled = false
+			}
+			if _, err := (&external{github: gh}).Observe(context.Background(), cr); err != nil {
+				t.Fatalf("%s: second Observe(...): unexpected error: %v", tc.reason, err)
+			}
+			second := cr.GetCondition(typeBranchProtectionPartial)
+			if second.Status != corev1.ConditionFalse || second.Reason != reasonFullyApplied || second.Message != "" {
+				t.Errorf("%s: second Observe: condition = (%v, %v, %q), want (False, FullyApplied, empty)", tc.reason, second.Status, second.Reason, second.Message)
 			}
 		})
 	}
