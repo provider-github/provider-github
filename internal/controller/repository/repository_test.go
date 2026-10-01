@@ -2641,3 +2641,78 @@ func TestObserveMissingRepositoryForgetsUnreconcilable(t *testing.T) {
 		t.Errorf("series after a 404 = %d, want 0", got)
 	}
 }
+
+// fakeFinalizer stands in for the runtime's API finalizer and records whether RemoveFinalizer was called.
+type fakeFinalizer struct {
+	removeErr error
+	removed   bool
+}
+
+func (f *fakeFinalizer) AddFinalizer(ctx context.Context, obj resource.Object) error {
+	return nil
+}
+
+func (f *fakeFinalizer) RemoveFinalizer(ctx context.Context, obj resource.Object) error {
+	f.removed = true
+	return f.removeErr
+}
+
+func seededUnreconcilable() *telemetry.RateLimitMetrics {
+	metrics := telemetry.NewForTest()
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionCollaborators, true)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionBranchProtection, false)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionArchived, false)
+	return metrics
+}
+
+// Removing the finalizer forgets the repository's series, so an orphaned repository stops firing alerts.
+func TestForgettingFinalizerForgetsOnRemove(t *testing.T) {
+	metrics := seededUnreconcilable()
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+	f := &forgettingFinalizer{inner: &fakeFinalizer{}, metrics: metrics}
+
+	if err := f.RemoveFinalizer(context.Background(), cr); err != nil {
+		t.Fatalf("RemoveFinalizer: %v", err)
+	}
+
+	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 0 {
+		t.Errorf("series after RemoveFinalizer = %d, want 0", got)
+	}
+}
+
+// A failed finalizer removal keeps the series, because the resource is still managed.
+func TestForgettingFinalizerKeepsSeriesOnRemoveError(t *testing.T) {
+	metrics := seededUnreconcilable()
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+	removeErr := errors.New("conflict")
+	f := &forgettingFinalizer{inner: &fakeFinalizer{removeErr: removeErr}, metrics: metrics}
+
+	err := f.RemoveFinalizer(context.Background(), cr)
+
+	if !errors.Is(err, removeErr) {
+		t.Errorf("RemoveFinalizer error = %v, want %v", err, removeErr)
+	}
+	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 3 {
+		t.Errorf("series after failed RemoveFinalizer = %d, want 3", got)
+	}
+}
+
+// Objects other than a Repository are only delegated.
+func TestForgettingFinalizerDelegatesNonRepository(t *testing.T) {
+	metrics := seededUnreconcilable()
+	inner := &fakeFinalizer{}
+	f := &forgettingFinalizer{inner: inner, metrics: metrics}
+
+	if err := f.RemoveFinalizer(context.Background(), &v1alpha1.Team{}); err != nil {
+		t.Fatalf("RemoveFinalizer: %v", err)
+	}
+
+	if !inner.removed {
+		t.Errorf("inner RemoveFinalizer was not called")
+	}
+	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 3 {
+		t.Errorf("series after RemoveFinalizer on a Team = %d, want 3", got)
+	}
+}

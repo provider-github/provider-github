@@ -52,7 +52,7 @@ Together `(app_id, app_installation_id)` uniquely identifies a credential. With 
 
 - `github_repository_unreconcilable` (Gauge)
   - Labels: `organization`, `repository`, `dimension`
-  - Description: `1` while the repository has declared state GitHub will not apply, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply) or `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial` or `ArchivedConfigFrozen` condition. A repository's series are removed when the provider deletes the repository on GitHub or finds it gone; with `deletionPolicy: Orphan` they keep their last value until the provider restarts.
+  - Description: `1` while the repository has declared state GitHub will not apply, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply) or `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial` or `ArchivedConfigFrozen` condition. A repository's series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
 
 ### A note on shared credentials across ProviderConfigs
 

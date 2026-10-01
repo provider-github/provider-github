@@ -92,6 +92,10 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
 		managed.WithConnectionPublishers(cps...),
+		managed.WithFinalizer(&forgettingFinalizer{
+			inner:   resource.NewAPIFinalizer(mgr.GetClient(), managed.FinalizerName),
+			metrics: metrics,
+		}),
 	}
 
 	// Add timeout if specified
@@ -109,6 +113,30 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1alpha1.Repository{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
+}
+
+// forgettingFinalizer deletes a repository's gauge series once its finalizer is removed, since the Orphan policy never calls Delete.
+type forgettingFinalizer struct {
+	inner   resource.Finalizer
+	metrics *telemetry.RateLimitMetrics
+}
+
+func (f *forgettingFinalizer) AddFinalizer(ctx context.Context, obj resource.Object) error {
+	return f.inner.AddFinalizer(ctx, obj)
+}
+
+func (f *forgettingFinalizer) RemoveFinalizer(ctx context.Context, obj resource.Object) error {
+	if err := f.inner.RemoveFinalizer(ctx, obj); err != nil {
+		return err
+	}
+
+	cr, ok := obj.(*v1alpha1.Repository)
+	if !ok || f.metrics == nil {
+		return nil
+	}
+
+	f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	return nil
 }
 
 type connector struct {
