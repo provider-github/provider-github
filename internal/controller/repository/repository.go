@@ -18,10 +18,13 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -238,17 +241,25 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 		recordForcePushNotApplied(cr, crBPRToConfig, ghBPRToConfig)
 
+		records := currentUnappliedBranchProtection(cr.Status.AtProvider.UnappliedBranchProtection, crBPRToConfig)
+		cr.Status.AtProvider.UnappliedBranchProtection = records
+
 		unapplied := detectUnappliedBranchProtectionActors(crBPRToConfig, ghBPRToConfig)
 		enforced, err := enforcedBranchProtectionActors(ctx, c.github, cr.Spec.ForProvider.Org, name, unapplied, ghTToPermission)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		setBranchProtectionActorPartialCondition(cr, enforced)
+		dropped := slices.Concat(enforced, rememberedApps(records, unapplied))
+		sortBranchProtectionActorRefs(dropped)
+		setBranchProtectionActorPartialCondition(cr, dropped)
 
-		crBPRWithoutEnforced := withoutBranchProtectionActors(crBPRToConfig, enforced)
-		if !cmp.Equal(crBPRWithoutEnforced, ghBPRToConfig) {
+		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
+		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
+		if !cmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
 			return notUpToDate, nil
 		}
+	} else {
+		cr.Status.AtProvider.UnappliedBranchProtection = nil
 	}
 
 	if cr.Spec.ForProvider.RepositoryRules != nil {
@@ -979,8 +990,13 @@ func detectUnappliedBranchProtectionActors(declared, stored map[string]v1alpha1.
 		}
 		dropped = append(dropped, ref)
 	}
-	sort.Slice(dropped, func(i, j int) bool {
-		a, b := dropped[i], dropped[j]
+	sortBranchProtectionActorRefs(dropped)
+	return dropped
+}
+
+func sortBranchProtectionActorRefs(refs []branchProtectionActorRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		a, b := refs[i], refs[j]
 		if a.branch != b.branch {
 			return a.branch < b.branch
 		}
@@ -989,7 +1005,6 @@ func detectUnappliedBranchProtectionActors(declared, stored map[string]v1alpha1.
 		}
 		return a.actor < b.actor
 	})
-	return dropped
 }
 
 // Apps are never enforced: GitHub exposes no permission to probe.
@@ -1053,16 +1068,19 @@ func withoutBranchProtectionActors(rules map[string]v1alpha1.BranchProtectionRul
 			if bp := rpr.BypassPullRequestAllowances; bp != nil {
 				bp.Users = removeActors(bp.Users, branch, fieldBypassUsers, dropSet)
 				bp.Teams = removeActors(bp.Teams, branch, fieldBypassTeams, dropSet)
+				bp.Apps = removeActors(bp.Apps, branch, fieldBypassApps, dropSet)
 			}
 			if dr := rpr.DismissalRestrictions; dr != nil {
 				dr.Users = removeActorsPtr(dr.Users, branch, fieldDismissalUsers, dropSet)
 				dr.Teams = removeActorsPtr(dr.Teams, branch, fieldDismissalTeams, dropSet)
+				dr.Apps = removeActorsPtr(dr.Apps, branch, fieldDismissalApps, dropSet)
 			}
 		}
 
 		if restr := r.BranchProtectionRestrictions; restr != nil {
 			restr.Users = removeActors(restr.Users, branch, fieldRestrictionUsers, dropSet)
 			restr.Teams = removeActors(restr.Teams, branch, fieldRestrictionTeams, dropSet)
+			restr.Apps = removeActors(restr.Apps, branch, fieldRestrictionApps, dropSet)
 		}
 
 		out[branch] = *r
@@ -1146,6 +1164,113 @@ func setBranchProtectionActorPartialCondition(cr *v1alpha1.Repository, dropped [
 	cond.Reason = reasonActorsNotApplied
 	cond.Message = fmt.Sprintf("%s actors not applied by GitHub: %s", strings.Join(kinds, "/"), strings.Join(names, ", "))
 	cr.SetConditions(cond)
+}
+
+// Item token for a declared allow_force_pushes=false that GitHub kept enabled.
+const itemAllowForcePushes = "allowForcePushes"
+
+// ruleHash fingerprints a declared rule so a record only applies to the rule it was observed against.
+func ruleHash(rule v1alpha1.BranchProtectionRule) string {
+	encoded, _ := json.Marshal(rule) // a plain struct always encodes
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:8])
+}
+
+func isAppField(field string) bool {
+	return field == fieldBypassApps || field == fieldDismissalApps || field == fieldRestrictionApps
+}
+
+// unappliedItems lists the declared apps and force-push setting the echoed rule left out, sorted.
+func unappliedItems(declared, echoed v1alpha1.BranchProtectionRule) []string {
+	declaredRefs := branchProtectionActorRefs(map[string]v1alpha1.BranchProtectionRule{declared.Branch: declared})
+	echoedRefs := branchProtectionActorRefs(map[string]v1alpha1.BranchProtectionRule{declared.Branch: echoed})
+
+	items := make([]string, 0, len(declaredRefs)+1)
+	for ref := range declaredRefs {
+		if !isAppField(ref.field) || echoedRefs[ref] {
+			continue
+		}
+		items = append(items, ref.field+":"+ref.actor)
+	}
+	if !pointer.Deref(declared.AllowForcePushes, false) && pointer.Deref(echoed.AllowForcePushes, false) {
+		items = append(items, itemAllowForcePushes)
+	}
+	sort.Strings(items)
+	return items
+}
+
+// setUnappliedBranchProtection replaces the record for rule's branch; no items drops it.
+func setUnappliedBranchProtection(cr *v1alpha1.Repository, rule v1alpha1.BranchProtectionRule, items []string) {
+	var records []v1alpha1.UnappliedBranchProtection
+	for _, record := range cr.Status.AtProvider.UnappliedBranchProtection {
+		if record.Branch != rule.Branch {
+			records = append(records, record)
+		}
+	}
+	if len(items) > 0 {
+		records = append(records, v1alpha1.UnappliedBranchProtection{
+			Branch:   rule.Branch,
+			RuleHash: ruleHash(rule),
+			Items:    items,
+		})
+	}
+	// Sorted so the status is stable across reconciles.
+	sort.Slice(records, func(i, j int) bool { return records[i].Branch < records[j].Branch })
+	cr.Status.AtProvider.UnappliedBranchProtection = records
+}
+
+// currentUnappliedBranchProtection keeps the records whose branch is still declared with the same rule.
+func currentUnappliedBranchProtection(records []v1alpha1.UnappliedBranchProtection, declared map[string]v1alpha1.BranchProtectionRule) []v1alpha1.UnappliedBranchProtection {
+	current := make([]v1alpha1.UnappliedBranchProtection, 0, len(records))
+	for _, record := range records {
+		rule, ok := declared[record.Branch]
+		if !ok || record.RuleHash != ruleHash(rule) {
+			continue
+		}
+		current = append(current, record)
+	}
+	return current
+}
+
+// rememberedApps returns the unapplied app actors a current record accounts for.
+func rememberedApps(records []v1alpha1.UnappliedBranchProtection, unapplied []branchProtectionActorRef) []branchProtectionActorRef {
+	recorded := map[branchProtectionActorRef]bool{}
+	for _, record := range records {
+		for _, item := range record.Items {
+			field, actor, isActor := strings.Cut(item, ":")
+			if isActor {
+				recorded[branchProtectionActorRef{branch: record.Branch, field: field, actor: actor}] = true
+			}
+		}
+	}
+
+	var remembered []branchProtectionActorRef
+	for _, ref := range unapplied {
+		if isAppField(ref.field) && recorded[ref] {
+			remembered = append(remembered, ref)
+		}
+	}
+	return remembered
+}
+
+// applyRememberedForcePushes takes GitHub's force-push setting for branches whose record says it was not applied.
+func applyRememberedForcePushes(rules, stored map[string]v1alpha1.BranchProtectionRule, records []v1alpha1.UnappliedBranchProtection) {
+	for _, record := range records {
+		if !slices.Contains(record.Items, itemAllowForcePushes) {
+			continue
+		}
+		rule, declared := rules[record.Branch]
+		got, protected := stored[record.Branch]
+		if !declared || !protected {
+			continue
+		}
+		// The record only means "declared off, kept on"; any other pair is ordinary drift.
+		if pointer.Deref(rule.AllowForcePushes, false) || !pointer.Deref(got.AllowForcePushes, false) {
+			continue
+		}
+		rule.AllowForcePushes = got.AllowForcePushes
+		rules[record.Branch] = rule
+	}
 }
 
 // getBPRMapFromCr generates a map from a slice of BranchProtectionRules. Each rule is first processed:
@@ -1234,8 +1359,6 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 // It fetches each branch's protection settings from GitHub and maps them to BranchProtectionRule objects.
 // Any lists of users, teams, or apps in the rules are sorted.
 // It returns the BranchProtectionRules map, and any error encountered during the process.
-//
-//nolint:gocyclo
 func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
 	bprToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(branches))
 
@@ -1244,128 +1367,135 @@ func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo stri
 		if err != nil {
 			return nil, err
 		}
-		bpr := v1alpha1.BranchProtectionRule{
-			Branch:                         branch.GetName(),
-			EnforceAdmins:                  protection.GetEnforceAdmins().Enabled,
-			RequireLinearHistory:           &protection.GetRequireLinearHistory().Enabled,
-			AllowForcePushes:               &protection.GetAllowForcePushes().Enabled,
-			AllowDeletions:                 &protection.GetAllowDeletions().Enabled,
-			RequiredConversationResolution: &protection.GetRequiredConversationResolution().Enabled,
-			LockBranch:                     util.ToBoolPtr(protection.GetLockBranch().GetEnabled()),
-			AllowForkSyncing:               util.ToBoolPtr(protection.GetAllowForkSyncing().GetEnabled()),
-			RequireSignedCommits:           util.ToBoolPtr(protection.GetRequiredSignatures().GetEnabled()),
-		}
-
-		rChecks := protection.GetRequiredStatusChecks()
-		if rChecks != nil {
-			bpr.RequiredStatusChecks = &v1alpha1.RequiredStatusChecks{
-				Strict: rChecks.Strict,
-			}
-			if rChecks.Checks != nil && len(*rChecks.Checks) > 0 {
-				checks := make([]*v1alpha1.RequiredStatusCheck, len(*rChecks.Checks))
-				for i, check := range *rChecks.Checks {
-					checks[i] = &v1alpha1.RequiredStatusCheck{
-						Context: check.Context,
-						AppID:   check.AppID,
-					}
-				}
-				util.SortRequiredStatusChecks(checks)
-				bpr.RequiredStatusChecks.Checks = checks
-			}
-		}
-
-		rPRs := protection.GetRequiredPullRequestReviews()
-		if rPRs != nil {
-			bpr.RequiredPullRequestReviews = &v1alpha1.RequiredPullRequestReviews{
-				DismissStaleReviews:          rPRs.DismissStaleReviews,
-				RequireCodeOwnerReviews:      rPRs.RequireCodeOwnerReviews,
-				RequiredApprovingReviewCount: rPRs.RequiredApprovingReviewCount,
-				RequireLastPushApproval:      &rPRs.RequireLastPushApproval,
-			}
-
-			dismissal := rPRs.GetDismissalRestrictions()
-			if dismissal != nil {
-				bpr.RequiredPullRequestReviews.DismissalRestrictions = &v1alpha1.DismissalRestrictionsRequest{}
-				if len(dismissal.Users) > 0 {
-					users := make([]string, len(dismissal.Users))
-					for i, user := range dismissal.Users {
-						users[i] = user.GetLogin()
-					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(util.ToLowerSlice(users))
-				}
-				if len(dismissal.Teams) > 0 {
-					teams := make([]string, len(dismissal.Teams))
-					for i, team := range dismissal.Teams {
-						teams[i] = team.GetSlug()
-					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(util.ToLowerSlice(teams))
-				}
-				if len(dismissal.Apps) > 0 {
-					apps := make([]string, len(dismissal.Apps))
-					for i, app := range dismissal.Apps {
-						apps[i] = app.GetSlug()
-					}
-					bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(util.ToLowerSlice(apps))
-				}
-			}
-
-			allowances := rPRs.GetBypassPullRequestAllowances()
-			if allowances != nil {
-				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances = &v1alpha1.BypassPullRequestAllowancesRequest{}
-				if len(allowances.Users) > 0 {
-					users := make([]string, len(allowances.Users))
-					for i, user := range allowances.Users {
-						users[i] = user.GetLogin()
-					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(util.ToLowerSlice(users))
-				}
-				if len(allowances.Teams) > 0 {
-					teams := make([]string, len(allowances.Teams))
-					for i, team := range allowances.Teams {
-						teams[i] = team.GetSlug()
-					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
-				}
-				if len(allowances.Apps) > 0 {
-					apps := make([]string, len(allowances.Apps))
-					for i, app := range allowances.Apps {
-						apps[i] = app.GetSlug()
-					}
-					bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
-				}
-			}
-		}
-
-		restr := protection.GetRestrictions()
-		if restr != nil {
-			bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
-			bpr.BranchProtectionRestrictions.BlockCreations = util.ToBoolPtr(protection.GetBlockCreations().GetEnabled())
-			if len(restr.Users) > 0 {
-				users := make([]string, len(restr.Users))
-				for i, user := range restr.Users {
-					users[i] = user.GetLogin()
-				}
-				bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(util.ToLowerSlice(users))
-			}
-			if len(restr.Teams) > 0 {
-				teams := make([]string, len(restr.Teams))
-				for i, team := range restr.Teams {
-					teams[i] = team.GetSlug()
-				}
-				bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
-			}
-			if len(restr.Apps) > 0 {
-				apps := make([]string, len(restr.Apps))
-				for i, app := range restr.Apps {
-					apps[i] = app.GetSlug()
-				}
-				bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
-			}
-		}
-
-		bprToConfig[branch.GetName()] = bpr
+		bprToConfig[branch.GetName()] = protectionToRule(branch.GetName(), protection)
 	}
 	return bprToConfig, nil
+}
+
+// protectionToRule maps GitHub's protection of branch to a BranchProtectionRule, with actor lists sorted.
+//
+//nolint:gocyclo
+func protectionToRule(branch string, protection *github.Protection) v1alpha1.BranchProtectionRule {
+	bpr := v1alpha1.BranchProtectionRule{
+		Branch:                         branch,
+		EnforceAdmins:                  protection.GetEnforceAdmins().Enabled,
+		RequireLinearHistory:           &protection.GetRequireLinearHistory().Enabled,
+		AllowForcePushes:               &protection.GetAllowForcePushes().Enabled,
+		AllowDeletions:                 &protection.GetAllowDeletions().Enabled,
+		RequiredConversationResolution: &protection.GetRequiredConversationResolution().Enabled,
+		LockBranch:                     util.ToBoolPtr(protection.GetLockBranch().GetEnabled()),
+		AllowForkSyncing:               util.ToBoolPtr(protection.GetAllowForkSyncing().GetEnabled()),
+		RequireSignedCommits:           util.ToBoolPtr(protection.GetRequiredSignatures().GetEnabled()),
+	}
+
+	rChecks := protection.GetRequiredStatusChecks()
+	if rChecks != nil {
+		bpr.RequiredStatusChecks = &v1alpha1.RequiredStatusChecks{
+			Strict: rChecks.Strict,
+		}
+		if rChecks.Checks != nil && len(*rChecks.Checks) > 0 {
+			checks := make([]*v1alpha1.RequiredStatusCheck, len(*rChecks.Checks))
+			for i, check := range *rChecks.Checks {
+				checks[i] = &v1alpha1.RequiredStatusCheck{
+					Context: check.Context,
+					AppID:   check.AppID,
+				}
+			}
+			util.SortRequiredStatusChecks(checks)
+			bpr.RequiredStatusChecks.Checks = checks
+		}
+	}
+
+	rPRs := protection.GetRequiredPullRequestReviews()
+	if rPRs != nil {
+		bpr.RequiredPullRequestReviews = &v1alpha1.RequiredPullRequestReviews{
+			DismissStaleReviews:          rPRs.DismissStaleReviews,
+			RequireCodeOwnerReviews:      rPRs.RequireCodeOwnerReviews,
+			RequiredApprovingReviewCount: rPRs.RequiredApprovingReviewCount,
+			RequireLastPushApproval:      &rPRs.RequireLastPushApproval,
+		}
+
+		dismissal := rPRs.GetDismissalRestrictions()
+		if dismissal != nil {
+			bpr.RequiredPullRequestReviews.DismissalRestrictions = &v1alpha1.DismissalRestrictionsRequest{}
+			if len(dismissal.Users) > 0 {
+				users := make([]string, len(dismissal.Users))
+				for i, user := range dismissal.Users {
+					users[i] = user.GetLogin()
+				}
+				bpr.RequiredPullRequestReviews.DismissalRestrictions.Users = util.SortAndReturnPointer(util.ToLowerSlice(users))
+			}
+			if len(dismissal.Teams) > 0 {
+				teams := make([]string, len(dismissal.Teams))
+				for i, team := range dismissal.Teams {
+					teams[i] = team.GetSlug()
+				}
+				bpr.RequiredPullRequestReviews.DismissalRestrictions.Teams = util.SortAndReturnPointer(util.ToLowerSlice(teams))
+			}
+			if len(dismissal.Apps) > 0 {
+				apps := make([]string, len(dismissal.Apps))
+				for i, app := range dismissal.Apps {
+					apps[i] = app.GetSlug()
+				}
+				bpr.RequiredPullRequestReviews.DismissalRestrictions.Apps = util.SortAndReturnPointer(util.ToLowerSlice(apps))
+			}
+		}
+
+		allowances := rPRs.GetBypassPullRequestAllowances()
+		if allowances != nil {
+			bpr.RequiredPullRequestReviews.BypassPullRequestAllowances = &v1alpha1.BypassPullRequestAllowancesRequest{}
+			if len(allowances.Users) > 0 {
+				users := make([]string, len(allowances.Users))
+				for i, user := range allowances.Users {
+					users[i] = user.GetLogin()
+				}
+				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Users = util.SortAndReturn(util.ToLowerSlice(users))
+			}
+			if len(allowances.Teams) > 0 {
+				teams := make([]string, len(allowances.Teams))
+				for i, team := range allowances.Teams {
+					teams[i] = team.GetSlug()
+				}
+				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
+			}
+			if len(allowances.Apps) > 0 {
+				apps := make([]string, len(allowances.Apps))
+				for i, app := range allowances.Apps {
+					apps[i] = app.GetSlug()
+				}
+				bpr.RequiredPullRequestReviews.BypassPullRequestAllowances.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
+			}
+		}
+	}
+
+	restr := protection.GetRestrictions()
+	if restr != nil {
+		bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
+		bpr.BranchProtectionRestrictions.BlockCreations = util.ToBoolPtr(protection.GetBlockCreations().GetEnabled())
+		if len(restr.Users) > 0 {
+			users := make([]string, len(restr.Users))
+			for i, user := range restr.Users {
+				users[i] = user.GetLogin()
+			}
+			bpr.BranchProtectionRestrictions.Users = util.SortAndReturn(util.ToLowerSlice(users))
+		}
+		if len(restr.Teams) > 0 {
+			teams := make([]string, len(restr.Teams))
+			for i, team := range restr.Teams {
+				teams[i] = team.GetSlug()
+			}
+			bpr.BranchProtectionRestrictions.Teams = util.SortAndReturn(util.ToLowerSlice(teams))
+		}
+		if len(restr.Apps) > 0 {
+			apps := make([]string, len(restr.Apps))
+			for i, app := range restr.Apps {
+				apps[i] = app.GetSlug()
+			}
+			bpr.BranchProtectionRestrictions.Apps = util.SortAndReturn(util.ToLowerSlice(apps))
+		}
+	}
+
+	return bpr
 }
 
 // applyMainSettings copies the optional main-settings fields from spec into req when set.
@@ -1526,7 +1656,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
-			err = editProtectedBranch(ctx, &rule, c.github, cr.Spec.ForProvider.Org, name)
+			// Status set here is lost: the reconciler re-reads the CR after Create.
+			_, err = editProtectedBranch(ctx, &rule, c.github, cr.Spec.ForProvider.Org, name)
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -1895,10 +2026,11 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 }
 
 // editProtectedBranch updates the branch protection settings for a given GitHub repository
-// based on a provided BranchProtectionRule. It returns an error if the update operation fails.
+// based on a provided BranchProtectionRule. It returns the items GitHub's echo left out,
+// or an error if the update operation fails.
 //
 //nolint:gocyclo
-func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.Client, owner, repoName string) error {
+func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRule, gh *ghclient.Client, owner, repoName string) ([]string, error) {
 	protectionRequest := &github.ProtectionRequest{
 		EnforceAdmins:                  rule.EnforceAdmins,
 		RequireLinearHistory:           rule.RequireLinearHistory,
@@ -1964,17 +2096,17 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 		}
 	}
 
-	_, _, err := gh.Repositories.UpdateBranchProtection(ctx, owner, repoName, rule.Branch, protectionRequest)
+	protection, _, err := gh.Repositories.UpdateBranchProtection(ctx, owner, repoName, rule.Branch, protectionRequest)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = handleBranchProtectionSignature(ctx, gh, owner, repoName, rule)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return unappliedItems(*rule, protectionToRule(rule.Branch, protection)), nil
 }
 
 // updateProtectedBranches synchronizes the branch protection rules of a GitHub repository
@@ -2009,19 +2141,21 @@ func updateProtectedBranches(ctx context.Context, cr *v1alpha1.Repository, gh *g
 	for key := range toAdd {
 		// avoid "G601: Implicit memory aliasing in for loop"
 		config := toAdd[key]
-		err = editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
+		items, err := editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
 		if err != nil {
 			return err
 		}
+		setUnappliedBranchProtection(cr, config, items)
 	}
 
 	for key := range toUpdate {
 		// avoid "G601: Implicit memory aliasing in for loop"
 		config := toUpdate[key]
-		err = editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
+		items, err := editProtectedBranch(ctx, &config, gh, cr.Spec.ForProvider.Org, repoName)
 		if err != nil {
 			return err
 		}
+		setUnappliedBranchProtection(cr, config, items)
 	}
 
 	return nil

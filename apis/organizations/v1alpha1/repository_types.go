@@ -522,7 +522,17 @@ type RepoFork struct {
 
 // RepositoryObservation are the observable fields of a Repository.
 type RepositoryObservation struct {
-	ObservableField string `json:"observableField,omitempty"`
+	// Branch protection items GitHub did not apply on the last push, per declared rule.
+	UnappliedBranchProtection []UnappliedBranchProtection `json:"unappliedBranchProtection,omitempty"`
+}
+
+// UnappliedBranchProtection records the items GitHub left out when the provider pushed a branch protection rule.
+type UnappliedBranchProtection struct {
+	Branch string `json:"branch"`
+	// Hash of the declared rule the items were observed against.
+	RuleHash string `json:"ruleHash"`
+	// Items GitHub did not apply, e.g. "bypassApps:some-app" or "allowForcePushes".
+	Items []string `json:"items"`
 }
 
 // A RepositorySpec defines the desired state of a Repository.

@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
@@ -1821,5 +1822,393 @@ func TestWithoutBranchProtectionActors(t *testing.T) {
 	}
 	if diff := cmp.Diff(declared(), in); diff != "" {
 		t.Errorf("declared rules must not be mutated: -want, +got:\n%s", diff)
+	}
+}
+
+func withBypassApp(slug string) repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		a := r.Spec.ForProvider.BranchProtectionRules[0].RequiredPullRequestReviews.BypassPullRequestAllowances
+		a.Apps = append(a.Apps, slug)
+	}
+}
+
+func withoutBranchProtectionRules() repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		r.Spec.ForProvider.BranchProtectionRules = nil
+	}
+}
+
+// declaredRuleHash is the hash Update records for the CR's main rule.
+func declaredRuleHash(cr *v1alpha1.Repository) string {
+	return ruleHash(getBPRMapFromCr(cr.Spec.ForProvider.BranchProtectionRules)[bpr1branch])
+}
+
+// Only declared apps and a disabled force push missing from the push echo are recorded.
+func TestUnappliedItems(t *testing.T) {
+	rule := func(afp *bool, apps ...string) v1alpha1.BranchProtectionRule {
+		return v1alpha1.BranchProtectionRule{
+			Branch:           "main",
+			AllowForcePushes: afp,
+			RequiredPullRequestReviews: &v1alpha1.RequiredPullRequestReviews{
+				BypassPullRequestAllowances: &v1alpha1.BypassPullRequestAllowancesRequest{Apps: apps},
+			},
+		}
+	}
+	on, off := github.Bool(true), github.Bool(false)
+
+	cases := map[string]struct {
+		reason   string
+		declared v1alpha1.BranchProtectionRule
+		echoed   v1alpha1.BranchProtectionRule
+		want     []string
+	}{
+		"AppMissing": {
+			reason:   "a declared app absent from the echo was dropped by GitHub",
+			declared: rule(off, "some-app"),
+			echoed:   rule(off),
+			want:     []string{"bypassApps:some-app"},
+		},
+		"AppPresent": {
+			reason:   "a declared app in the echo was applied",
+			declared: rule(off, "some-app"),
+			echoed:   rule(off, "some-app"),
+		},
+		"ForcePushKeptOn": {
+			reason:   "force pushes declared off but echoed on were not applied",
+			declared: rule(off),
+			echoed:   rule(on),
+			want:     []string{itemAllowForcePushes},
+		},
+		"ForcePushWantedOn": {
+			reason:   "force pushes declared on and echoed on were applied",
+			declared: rule(on),
+			echoed:   rule(on),
+		},
+		"ForcePushUnsetKeptOn": {
+			reason:   "an unset force push is sent as off, so echoed on was not applied",
+			declared: rule(nil),
+			echoed:   rule(on),
+			want:     []string{itemAllowForcePushes},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := unappliedItems(tc.declared, tc.echoed)
+			if diff := cmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s: unappliedItems(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// A record must stop matching once its rule changes, or stale memory would mask drift.
+func TestRuleHash(t *testing.T) {
+	rule := v1alpha1.BranchProtectionRule{Branch: "main", AllowForcePushes: github.Bool(false)}
+	changed := rule
+	changed.AllowForcePushes = github.Bool(true)
+
+	if ruleHash(rule) != ruleHash(*rule.DeepCopy()) {
+		t.Errorf("equal rules must hash equally")
+	}
+	if ruleHash(rule) == ruleHash(changed) {
+		t.Errorf("a changed field must change the hash")
+	}
+	if got := ruleHash(rule); len(got) != 16 || strings.Trim(got, "0123456789abcdef") != "" {
+		t.Errorf("hash = %q, want 16 lowercase hex characters", got)
+	}
+}
+
+// A current record hides only what GitHub did not apply; stale or orphaned records are dropped.
+func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
+	cases := map[string]struct {
+		reason          string
+		mods            []repositoryModifier
+		recordBranch    string
+		recordItems     []string
+		staleHash       bool
+		storedForcePush bool
+		storedBypassApp string
+		userPermission  string
+		wantUpToDate    bool
+		wantRecordKept  bool
+		wantMessage     string
+	}{
+		"RememberedAppUpToDate": {
+			reason:         "an app recorded as dropped for the unchanged rule is not drift",
+			mods:           []repositoryModifier{withBypassApp("some-app")},
+			recordBranch:   bpr1branch,
+			recordItems:    []string{"bypassApps:some-app"},
+			wantUpToDate:   true,
+			wantRecordKept: true,
+			wantMessage:    "bypass actors not applied by GitHub: main/bypassApps:some-app",
+		},
+		"StaleHashIsDrift": {
+			reason:       "a record for an older rule must not hide the missing app, and is dropped",
+			mods:         []repositoryModifier{withBypassApp("some-app")},
+			recordBranch: bpr1branch,
+			recordItems:  []string{"bypassApps:some-app"},
+			staleHash:    true,
+			wantUpToDate: false,
+		},
+		"UndeclaredBranchDropped": {
+			reason:       "a record for a branch no longer declared is dropped",
+			recordBranch: "develop",
+			recordItems:  []string{"bypassApps:some-app"},
+			wantUpToDate: true,
+		},
+		"NoRulesDeclaredDropped": {
+			reason:       "records are dropped once no branch protection is declared",
+			mods:         []repositoryModifier{withoutBranchProtectionRules()},
+			recordBranch: bpr1branch,
+			recordItems:  []string{"bypassApps:some-app"},
+			wantUpToDate: true,
+		},
+		"RememberedForcePushUpToDate": {
+			reason:          "force pushes recorded as kept on for the unchanged rule are not drift",
+			recordBranch:    bpr1branch,
+			recordItems:     []string{itemAllowForcePushes},
+			storedForcePush: true,
+			wantUpToDate:    true,
+			wantRecordKept:  true,
+		},
+		"RecordedAppNowStored": {
+			reason:          "a recorded app GitHub now stores is not stripped, or the rule would differ with nothing to push",
+			mods:            []repositoryModifier{withBypassApp("some-app")},
+			recordBranch:    bpr1branch,
+			recordItems:     []string{"bypassApps:some-app"},
+			storedBypassApp: "some-app",
+			wantUpToDate:    true,
+			wantRecordKept:  true,
+		},
+		"RecordedUserIsStillDrift": {
+			reason:         "a record naming a user is ignored, so a with-write user missing from GitHub stays drift",
+			mods:           []repositoryModifier{withBypassUser("alice")},
+			recordBranch:   bpr1branch,
+			recordItems:    []string{"bypassUsers:alice"},
+			userPermission: "write",
+			wantUpToDate:   false,
+			wantRecordKept: true,
+		},
+		"AppRecordDoesNotMaskForcePush": {
+			reason:          "a record naming only an app leaves force pushes kept on visible as drift",
+			mods:            []repositoryModifier{withBypassApp("some-app")},
+			recordBranch:    bpr1branch,
+			recordItems:     []string{"bypassApps:some-app"},
+			storedForcePush: true,
+			wantUpToDate:    false,
+			wantRecordKept:  true,
+			wantMessage:     "bypass actors not applied by GitHub: main/bypassApps:some-app",
+		},
+		"RecordDoesNotMaskOtherDrift": {
+			reason:         "a current record must leave unrelated rule drift visible",
+			mods:           []repositoryModifier{withBypassApp("some-app"), withRequiredApprovingReviewCount(2)},
+			recordBranch:   bpr1branch,
+			recordItems:    []string{"bypassApps:some-app"},
+			wantUpToDate:   false,
+			wantRecordKept: true,
+			wantMessage:    "bypass actors not applied by GitHub: main/bypassApps:some-app",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			stored := githubProtectedBranch()
+			stored.AllowForcePushes.Enabled = tc.storedForcePush
+			if tc.storedBypassApp != "" {
+				allowances := stored.RequiredPullRequestReviews.BypassPullRequestAllowances
+				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.String(tc.storedBypassApp)})
+			}
+			gh := &ghclient.Client{
+				Services: &ghclient.Services{
+					Repositories: &fake.MockRepositoriesClient{
+						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+							return githubRepository(), nil, nil
+						},
+						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+							return githubTeams(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+						},
+						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return stored, fake.GenerateEmptyResponse(), nil
+						},
+						MockGetPermissionLevel: func(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
+							return &github.RepositoryPermissionLevel{Permission: github.String(tc.userPermission)}, fake.GenerateEmptyResponse(), nil
+						},
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+							return githubRuleset(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+						},
+					},
+				},
+			}
+
+			cr := repository(tc.mods...)
+			record := v1alpha1.UnappliedBranchProtection{Branch: tc.recordBranch, RuleHash: declaredRuleHash(cr), Items: tc.recordItems}
+			if tc.staleHash {
+				record.RuleHash = "0000000000000000"
+			}
+			cr.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{record}
+
+			got, err := (&external{github: gh}).Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("%s: Observe(...): unexpected error: %v", tc.reason, err)
+			}
+			if got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("%s: ResourceUpToDate = %v, want %v", tc.reason, got.ResourceUpToDate, tc.wantUpToDate)
+			}
+			var wantRecords []v1alpha1.UnappliedBranchProtection
+			if tc.wantRecordKept {
+				wantRecords = []v1alpha1.UnappliedBranchProtection{record}
+			}
+			if diff := cmp.Diff(wantRecords, cr.Status.AtProvider.UnappliedBranchProtection, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s: status records: -want, +got:\n%s", tc.reason, diff)
+			}
+			if msg := cr.GetCondition(typeBranchProtectionActorPartial).Message; msg != tc.wantMessage {
+				t.Errorf("%s: condition message = %q, want %q", tc.reason, msg, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// Update must record what the push echo left out, or Observe would see drift forever.
+func TestUpdateRecordsUnappliedBranchProtection(t *testing.T) {
+	cases := map[string]struct {
+		reason      string
+		echo        func() *github.Protection
+		wantItems   []string
+		wantRecords bool
+	}{
+		"AppDroppedForcePushKept": {
+			reason: "an echo without the app and with force pushes on is recorded",
+			echo: func() *github.Protection {
+				p := githubProtectedBranch()
+				p.AllowForcePushes.Enabled = true
+				return p
+			},
+			wantItems:   []string{itemAllowForcePushes, "bypassApps:some-app"},
+			wantRecords: true,
+		},
+		"AllApplied": {
+			reason: "an echo with everything applied leaves no record and drops the old one",
+			echo: func() *github.Protection {
+				p := githubProtectedBranch()
+				allowances := p.RequiredPullRequestReviews.BypassPullRequestAllowances
+				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.String("some-app")})
+				return p
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repoClient := &fake.MockRepositoriesClient{
+				MockGet: func(ctx context.Context, owner, r string) (*github.Repository, *github.Response, error) {
+					return githubRepository(), fake.GenerateEmptyResponse(), nil
+				},
+				MockEdit: func(ctx context.Context, owner, r string, rr *github.Repository) (*github.Repository, *github.Response, error) {
+					return rr, fake.GenerateEmptyResponse(), nil
+				},
+				MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+					return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+				},
+				MockListTeams: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+					return githubTeams(), fake.GenerateEmptyResponse(), nil
+				},
+				MockListBranches: func(ctx context.Context, owner, r string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+					return githubBranches(), fake.GenerateEmptyResponse(), nil
+				},
+				MockGetBranchProtection: func(ctx context.Context, owner, r, branch string) (*github.Protection, *github.Response, error) {
+					return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+				},
+				MockUpdateBranchProtection: func(ctx context.Context, owner, r, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error) {
+					return tc.echo(), fake.GenerateEmptyResponse(), nil
+				},
+				MockOptionalSignaturesOnProtectedBranch: func(ctx context.Context, owner, r, branch string) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+				MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+					return topics, fake.GenerateEmptyResponse(), nil
+				},
+			}
+
+			cr := repository(withBypassApp("some-app"))
+			cr.Spec.ForProvider.Webhooks = nil
+			cr.Spec.ForProvider.RepositoryRules = nil
+			cr.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{
+				{Branch: bpr1branch, RuleHash: "0000000000000000", Items: []string{"bypassApps:other-app"}},
+			}
+
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient}}}
+			if _, err := e.Update(context.Background(), cr); err != nil {
+				t.Fatalf("%s: Update(...): unexpected error: %v", tc.reason, err)
+			}
+
+			var want []v1alpha1.UnappliedBranchProtection
+			if tc.wantRecords {
+				want = []v1alpha1.UnappliedBranchProtection{{Branch: bpr1branch, RuleHash: declaredRuleHash(cr), Items: tc.wantItems}}
+			}
+			if diff := cmp.Diff(want, cr.Status.AtProvider.UnappliedBranchProtection, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s: status records: -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// Create must not record: the reconciler re-reads the CR after Create, so the record would be lost anyway.
+func TestCreateLeavesUnappliedBranchProtectionUnset(t *testing.T) {
+	pushes := 0
+	repoClient := &fake.MockRepositoriesClient{
+		MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+			return r, fake.GenerateEmptyResponse(), nil
+		},
+		MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+			return nil, fake.GenerateEmptyResponse(), nil
+		},
+		MockListBranches: func(ctx context.Context, owner, r string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+			return githubBranches(), fake.GenerateEmptyResponse(), nil
+		},
+		MockUpdateBranchProtection: func(ctx context.Context, owner, r, branch string, preq *github.ProtectionRequest) (*github.Protection, *github.Response, error) {
+			pushes++
+			echo := githubProtectedBranch()
+			echo.AllowForcePushes.Enabled = true
+			return echo, fake.GenerateEmptyResponse(), nil
+		},
+		MockOptionalSignaturesOnProtectedBranch: func(ctx context.Context, owner, r, branch string) (*github.Response, error) {
+			return fake.GenerateEmptyResponse(), nil
+		},
+		MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+			return topics, fake.GenerateEmptyResponse(), nil
+		},
+	}
+	teamsClient := &fake.MockTeamsClient{
+		MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+
+	cr := repository(withBypassApp("some-app"))
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.RepositoryRules = nil
+
+	e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient, Teams: teamsClient}}}
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create(...): unexpected error: %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("UpdateBranchProtection calls = %d, want 1", pushes)
+	}
+	if got := cr.Status.AtProvider.UnappliedBranchProtection; got != nil {
+		t.Errorf("status records = %v, want nil", got)
 	}
 }

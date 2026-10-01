@@ -1099,8 +1099,31 @@ spec:
                 description: RepositoryObservation are the observable fields of a
                   Repository.
                 properties:
-                  observableField:
-                    type: string
+                  unappliedBranchProtection:
+                    description: Branch protection items GitHub did not apply on the
+                      last push, per declared rule.
+                    items:
+                      description: UnappliedBranchProtection records the items GitHub
+                        left out when the provider pushed a branch protection rule.
+                      properties:
+                        branch:
+                          type: string
+                        items:
+                          description: Items GitHub did not apply, e.g. "bypassApps:some-app"
+                            or "allowForcePushes".
+                          items:
+                            type: string
+                          type: array
+                        ruleHash:
+                          description: Hash of the declared rule the items were observed
+                            against.
+                          type: string
+                      required:
+                      - branch
+                      - items
+                      - ruleHash
+                      type: object
+                    type: array
                 type: object
               conditions:
                 description: Conditions of the resource.
