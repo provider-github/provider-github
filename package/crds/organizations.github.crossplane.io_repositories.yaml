@@ -25,6 +25,15 @@ spec:
     - jsonPath: .status.conditions[?(@.type=='Synced')].status
       name: SYNCED
       type: string
+    - jsonPath: .status.conditions[?(@.type=='CollaboratorPartial')].status
+      name: COLLAB-PARTIAL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='BranchProtectionPartial')].status
+      name: BPR-PARTIAL
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='ArchivedConfigFrozen')].status
+      name: ARCHIVED
+      type: string
     - jsonPath: .metadata.annotations.crossplane\.io/external-name
       name: EXTERNAL-NAME
       type: string

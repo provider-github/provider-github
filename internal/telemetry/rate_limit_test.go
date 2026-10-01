@@ -135,3 +135,36 @@ func TestRecordAppUnhealthy_IncrementsCounter(t *testing.T) {
 		t.Errorf("unhealthy_total = %v, want 2", got)
 	}
 }
+
+// The gauge reads 1 while a dimension is unreconcilable and drops back to 0 once it is not.
+func TestSetRepositoryUnreconcilable_FollowsState(t *testing.T) {
+	m := newRateLimitMetrics()
+
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, true)
+	if got := testutil.ToFloat64(m.repositoryUnreconcilable.WithLabelValues("acme", "widgets", DimensionCollaborators)); got != 1 {
+		t.Errorf("unreconcilable{dimension=collaborators} = %v, want 1", got)
+	}
+
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, false)
+	if got := testutil.ToFloat64(m.repositoryUnreconcilable.WithLabelValues("acme", "widgets", DimensionCollaborators)); got != 0 {
+		t.Errorf("unreconcilable{dimension=collaborators} = %v, want 0", got)
+	}
+}
+
+// Forgetting a repository removes all of its series and leaves other repositories' series alone.
+func TestForgetRepository_RemovesOnlyThatRepository(t *testing.T) {
+	m := newRateLimitMetrics()
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, true)
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionBranchProtection, false)
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionArchived, false)
+	m.SetRepositoryUnreconcilable("acme", "gadgets", DimensionCollaborators, true)
+
+	m.ForgetRepository("acme", "widgets")
+
+	if got := testutil.CollectAndCount(m.repositoryUnreconcilable); got != 1 {
+		t.Errorf("series after forget = %d, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.repositoryUnreconcilable.WithLabelValues("acme", "gadgets", DimensionCollaborators)); got != 1 {
+		t.Errorf("unreconcilable{repository=gadgets} = %v, want 1", got)
+	}
+}

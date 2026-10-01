@@ -138,14 +138,16 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	}
 
 	return &external{
-		github: gh,
-		kube:   c.kube,
+		github:  gh,
+		kube:    c.kube,
+		metrics: c.metrics,
 	}, nil
 }
 
 type external struct {
-	kube   client.Client
-	github *ghclient.Client
+	kube    client.Client
+	github  *ghclient.Client
+	metrics *telemetry.RateLimitMetrics
 }
 
 //nolint:gocyclo
@@ -159,6 +161,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	repo, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
 	if ghclient.Is404(err) {
+		if c.metrics != nil {
+			c.metrics.ForgetRepository(cr.Spec.ForProvider.Org, name)
+		}
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	if err != nil {
@@ -182,12 +187,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return c.observeArchived(ctx, cr, repo, name)
 	}
 	setArchivedCondition(cr, false, nil)
+	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
 
 	collaborators, err := categorizeCollaborators(ctx, c.github, cr.Spec.ForProvider.Org, name, cr.Spec.ForProvider.Permissions.Users)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
+	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
 	if collaborators.hasDrift() {
 		return notUpToDate, nil
 	}
@@ -259,6 +266,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			unappliedActors: dropped,
 			forcePushKept:   forcePushKept,
 		})
+		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
@@ -268,6 +276,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
 		setBranchProtectionPartialCondition(cr, branchProtectionReport{})
+		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	}
 
 	if cr.Spec.ForProvider.RepositoryRules != nil {
@@ -433,6 +442,15 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 	})
 }
 
+// recordUnreconcilable publishes the dimension's gauge from its condition's current status.
+func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv1.ConditionType) {
+	if c.metrics == nil {
+		return
+	}
+	unreconcilable := cr.GetCondition(conditionType).Status == corev1.ConditionTrue
+	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
+}
+
 // observeArchived reports drift for an archived repo. Only team access, topics and
 // collaborator removals are reconcilable while archived; settings, branch protection,
 // rulesets, webhooks and collaborator additions are frozen and surfaced via a
@@ -450,7 +468,16 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	for u := range util.MergeMaps(toAdd, toUpdate) {
 		skippedAdds = append(skippedAdds, u)
 	}
+
+	// Neither is reconciled while archived; skipped adds are named in the archived condition.
+	setCollaboratorPartialCondition(cr, nil, nil)
+	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
+	cr.Status.AtProvider.UnappliedBranchProtection = nil
+	setBranchProtectionPartialCondition(cr, branchProtectionReport{})
+	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
+
 	setArchivedCondition(cr, true, skippedAdds)
+	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
 
 	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)
@@ -2701,6 +2728,10 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	_, err := c.github.Repositories.Delete(ctx, cr.Spec.ForProvider.Org, name)
 	if err != nil {
 		return err
+	}
+
+	if c.metrics != nil {
+		c.metrics.ForgetRepository(cr.Spec.ForProvider.Org, name)
 	}
 
 	return nil

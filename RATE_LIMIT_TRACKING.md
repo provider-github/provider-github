@@ -48,6 +48,12 @@ Together `(app_id, app_installation_id)` uniquely identifies a credential. With 
   - Labels: `organization`, `app_id`, `app_installation_id`, `reason`
   - Description: Total number of times the credential picker selected each `(org, app, installation)`. The `reason` label takes one of: `highest_remaining` (one strict winner among the available candidates), `random_tiebreak` (N ≥ 2 candidates were tied at the top), or `only_candidate` (every other credential was in cooldown).
 
+### Repository State Metrics
+
+- `github_repository_unreconcilable` (Gauge)
+  - Labels: `organization`, `repository`, `dimension`
+  - Description: `1` while the repository has declared state GitHub will not apply, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply) or `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial` or `ArchivedConfigFrozen` condition. A repository's series are removed when the provider deletes the repository on GitHub or finds it gone; with `deletionPolicy: Orphan` they keep their last value until the provider restarts.
+
 ### A note on shared credentials across ProviderConfigs
 
 The internal quota pool is process-wide and keyed by the credential bytes (not by `ProviderConfig`). If two `ProviderConfig`s reference the same credential (same `appId,installationId,privateKey` value), they share **one** pool entry — which is correct, because GitHub also enforces the rate limit at the installation level, not per-`ProviderConfig`. A 429 or auth failure observed via one `ProviderConfig` correctly steers the picker away from the credential when the other `ProviderConfig` reconciles next.
@@ -194,6 +200,22 @@ groups:
     annotations:
       summary: "Active GitHub App pool for {{ $labels.organization }} is degraded"
       description: "Only {{ $value }} credentials served traffic in the last 10m. Expected the full pool size — check for rotated-out or persistently-failing credentials."
+```
+
+### Repository state alert rule
+
+```yaml
+groups:
+- name: github-repository-state
+  rules:
+  - alert: GitHubRepositoryUnreconcilable
+    expr: github_repository_unreconcilable == 1
+    for: 1h
+    labels:
+      severity: warning
+    annotations:
+      summary: "GitHub will not apply declared state for {{ $labels.repository }}"
+      description: "Repository {{ $labels.repository }} in org {{ $labels.organization }} has had unapplied {{ $labels.dimension }} state for 1h. See the Repository's conditions for the details."
 ```
 
 ## Benefits

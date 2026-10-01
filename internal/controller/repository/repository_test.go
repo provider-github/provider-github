@@ -31,6 +31,7 @@ import (
 	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	ghclient "github.com/crossplane/provider-github/internal/clients"
 	"github.com/crossplane/provider-github/internal/clients/fake"
+	"github.com/crossplane/provider-github/internal/telemetry"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
@@ -38,6 +39,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-github/v62/github"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -2301,5 +2303,189 @@ func TestCreateLeavesUnappliedBranchProtectionUnset(t *testing.T) {
 	}
 	if got := cr.Status.AtProvider.UnappliedBranchProtection; got != nil {
 		t.Errorf("status records = %v, want nil", got)
+	}
+}
+
+// upToDateRepositories fakes GitHub holding the fixture repository in its declared state, plus the given open invitations.
+func upToDateRepositories(invitations []*github.RepositoryInvitation) *fake.MockRepositoriesClient {
+	return &fake.MockRepositoriesClient{
+		MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+			return githubRepository(), nil, nil
+		},
+		MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+			return githubCollaborators(), fake.GenerateEmptyResponse(), nil
+		},
+		MockListInvitations: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+			return invitations, fake.GenerateEmptyResponse(), nil
+		},
+		MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+			return githubTeams(), fake.GenerateEmptyResponse(), nil
+		},
+		MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
+			return githubWebhooks(), fake.GenerateEmptyResponse(), nil
+		},
+		MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
+			return githubBranches(), fake.GenerateEmptyResponse(), nil
+		},
+		MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+			return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
+		},
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+			return githubRuleset(), fake.GenerateEmptyResponse(), nil
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+			return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+		},
+	}
+}
+
+func clientFor(repos *fake.MockRepositoriesClient) *ghclient.Client {
+	return &ghclient.Client{Services: &ghclient.Services{Repositories: repos}}
+}
+
+// Observe publishes the collaborators gauge from the CollaboratorPartial condition: 1 while an invitee is pending, 0 once none is.
+func TestObservePublishesCollaboratorsUnreconcilable(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	gauge := metrics.RepositoryUnreconcilableForTest()
+
+	pending := repository(withExtraUser("pending-user", "pull"))
+	pending.Spec.ForProvider.Org = "acme"
+	invitations := []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("pending-user")}}}
+	e := external{github: clientFor(upToDateRepositories(invitations)), metrics: metrics}
+	if _, err := e.Observe(context.Background(), pending); err != nil {
+		t.Fatalf("Observe(pending): %v", err)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionCollaborators)); got != 1 {
+		t.Errorf("unreconcilable{dimension=collaborators} with a pending invitee = %v, want 1", got)
+	}
+
+	clean := repository()
+	clean.Spec.ForProvider.Org = "acme"
+	e = external{github: clientFor(upToDateRepositories(nil)), metrics: metrics}
+	if _, err := e.Observe(context.Background(), clean); err != nil {
+		t.Fatalf("Observe(clean): %v", err)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionCollaborators)); got != 0 {
+		t.Errorf("unreconcilable{dimension=collaborators} without a pending invitee = %v, want 0", got)
+	}
+}
+
+// A deleted repository's series disappear instead of sticking at their last value.
+func TestDeleteForgetsRepositoryUnreconcilable(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionCollaborators, true)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionBranchProtection, false)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionArchived, false)
+
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+	cr.Spec.ForProvider.ForceDelete = github.Bool(true)
+	gh := &ghclient.Client{
+		Services: &ghclient.Services{
+			Repositories: &fake.MockRepositoriesClient{
+				MockDelete: func(ctx context.Context, owner, repo string) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+			},
+		},
+	}
+	e := external{github: gh, metrics: metrics}
+	if err := e.Delete(context.Background(), cr); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 0 {
+		t.Errorf("series after Delete = %d, want 0", got)
+	}
+}
+
+// Observe publishes the branch_protection gauge from the BranchProtectionPartial condition.
+func TestObservePublishesBranchProtectionUnreconcilable(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	gauge := metrics.RepositoryUnreconcilableForTest()
+
+	stored := githubProtectedBranch()
+	stored.AllowForcePushes.Enabled = true
+	repos := upToDateRepositories(nil)
+	repos.MockGetBranchProtection = func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+		return stored, fake.GenerateEmptyResponse(), nil
+	}
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+
+	e := external{github: clientFor(repos), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionBranchProtection)); got != 1 {
+		t.Errorf("unreconcilable{dimension=branch_protection} with force pushes kept = %v, want 1", got)
+	}
+}
+
+// An archived repository publishes archived=1 and clears the collaborator and branch protection state it no longer reconciles.
+func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	gauge := metrics.RepositoryUnreconcilableForTest()
+
+	repos := upToDateRepositories(nil)
+	repos.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+		r := githubRepository()
+		r.Archived = github.Bool(true)
+		return r, nil, nil
+	}
+	cr := repository(withArchived(true))
+	cr.Spec.ForProvider.Org = "acme"
+	cr.SetConditions(xpv1.Condition{Type: typeCollaboratorPartial, Status: corev1.ConditionTrue, Reason: reasonPendingInvitation})
+	cr.SetConditions(xpv1.Condition{Type: typeBranchProtectionPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
+	cr.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{{Branch: "main", Items: []string{"allowForcePushes"}}}
+
+	e := external{github: clientFor(repos), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionArchived)); got != 1 {
+		t.Errorf("unreconcilable{dimension=archived} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionCollaborators)); got != 0 {
+		t.Errorf("unreconcilable{dimension=collaborators} = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionBranchProtection)); got != 0 {
+		t.Errorf("unreconcilable{dimension=branch_protection} = %v, want 0", got)
+	}
+	if got := cr.GetCondition(typeCollaboratorPartial).Status; got != corev1.ConditionFalse {
+		t.Errorf("CollaboratorPartial = %v, want False", got)
+	}
+	if got := cr.GetCondition(typeBranchProtectionPartial).Status; got != corev1.ConditionFalse {
+		t.Errorf("BranchProtectionPartial = %v, want False", got)
+	}
+	if cr.Status.AtProvider.UnappliedBranchProtection != nil {
+		t.Errorf("UnappliedBranchProtection = %v, want nil", cr.Status.AtProvider.UnappliedBranchProtection)
+	}
+}
+
+// A repository GitHub no longer has leaves no series behind.
+func TestObserveMissingRepositoryForgetsUnreconcilable(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionCollaborators, true)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionBranchProtection, false)
+	metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionArchived, false)
+
+	repos := &fake.MockRepositoriesClient{
+		MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+			return nil, nil, fake.Generate404Response()
+		},
+	}
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+
+	e := external{github: clientFor(repos), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 0 {
+		t.Errorf("series after a 404 = %d, want 0", got)
 	}
 }
