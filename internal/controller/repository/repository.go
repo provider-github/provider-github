@@ -324,23 +324,18 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
-	declared := declaredSettings(cr, repo)
-	cr.Status.AtProvider.UnappliedSettings = currentUnappliedSettings(remembered, declared)
+	settings := pushedSettings(editRequest(cr, repo, name), repo)
+	cr.Status.AtProvider.UnappliedSettings = currentUnappliedSettings(remembered, settings)
 	setSettingsPartialCondition(cr, cr.Status.AtProvider.UnappliedSettings)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
 
-	// repo visibility makes sense only when a repo is not a fork
-	if !pointer.Deref(repo.Fork, false) && !settingRemembered(remembered, settingPrivate, declared[settingPrivate]) {
-		privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
-		if privateCr != pointer.Deref(repo.Private, false) {
+	for _, setting := range settings {
+		if settingRemembered(remembered, setting.field, setting.requested) {
+			continue
+		}
+		if setting.requested != setting.echoed {
 			return notUpToDate, nil
 		}
-	}
-
-	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
-	if !settingRemembered(remembered, settingIsTemplate, declared[settingIsTemplate]) &&
-		isTemplate != pointer.Deref(repo.IsTemplate, false) {
-		return notUpToDate, nil
 	}
 
 	// Check topics
@@ -351,101 +346,6 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if !reflect.DeepEqual(crTopics, ghTopics) {
 			return notUpToDate, nil
 		}
-	}
-
-	if !settingRemembered(remembered, settingDescription, declared[settingDescription]) &&
-		cr.Spec.ForProvider.Description != pointer.Deref(repo.Description, "") {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.DefaultBranch != nil &&
-		!settingRemembered(remembered, settingDefaultBranch, declared[settingDefaultBranch]) &&
-		*cr.Spec.ForProvider.DefaultBranch != pointer.Deref(repo.DefaultBranch, "") {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.AllowMergeCommit != nil &&
-		!settingRemembered(remembered, settingAllowMergeCommit, declared[settingAllowMergeCommit]) &&
-		*cr.Spec.ForProvider.AllowMergeCommit != pointer.Deref(repo.AllowMergeCommit, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.AllowSquashMerge != nil &&
-		!settingRemembered(remembered, settingAllowSquashMerge, declared[settingAllowSquashMerge]) &&
-		*cr.Spec.ForProvider.AllowSquashMerge != pointer.Deref(repo.AllowSquashMerge, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.AllowRebaseMerge != nil &&
-		!settingRemembered(remembered, settingAllowRebaseMerge, declared[settingAllowRebaseMerge]) &&
-		*cr.Spec.ForProvider.AllowRebaseMerge != pointer.Deref(repo.AllowRebaseMerge, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.AllowAutoMerge != nil &&
-		!settingRemembered(remembered, settingAllowAutoMerge, declared[settingAllowAutoMerge]) &&
-		*cr.Spec.ForProvider.AllowAutoMerge != pointer.Deref(repo.AllowAutoMerge, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.AllowUpdateBranch != nil &&
-		!settingRemembered(remembered, settingAllowUpdateBranch, declared[settingAllowUpdateBranch]) &&
-		*cr.Spec.ForProvider.AllowUpdateBranch != pointer.Deref(repo.AllowUpdateBranch, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.DeleteBranchOnMerge != nil &&
-		!settingRemembered(remembered, settingDeleteBranchOnMerge, declared[settingDeleteBranchOnMerge]) &&
-		*cr.Spec.ForProvider.DeleteBranchOnMerge != pointer.Deref(repo.DeleteBranchOnMerge, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.HasIssues != nil &&
-		!settingRemembered(remembered, settingHasIssues, declared[settingHasIssues]) &&
-		*cr.Spec.ForProvider.HasIssues != pointer.Deref(repo.HasIssues, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.HasProjects != nil &&
-		!settingRemembered(remembered, settingHasProjects, declared[settingHasProjects]) &&
-		*cr.Spec.ForProvider.HasProjects != pointer.Deref(repo.HasProjects, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.HasWiki != nil &&
-		!settingRemembered(remembered, settingHasWiki, declared[settingHasWiki]) &&
-		*cr.Spec.ForProvider.HasWiki != pointer.Deref(repo.HasWiki, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.HasDiscussions != nil &&
-		!settingRemembered(remembered, settingHasDiscussions, declared[settingHasDiscussions]) &&
-		*cr.Spec.ForProvider.HasDiscussions != pointer.Deref(repo.HasDiscussions, false) {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.MergeCommitTitle != nil &&
-		!settingRemembered(remembered, settingMergeCommitTitle, declared[settingMergeCommitTitle]) &&
-		*cr.Spec.ForProvider.MergeCommitTitle != pointer.Deref(repo.MergeCommitTitle, "") {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.MergeCommitMessage != nil &&
-		!settingRemembered(remembered, settingMergeCommitMessage, declared[settingMergeCommitMessage]) &&
-		*cr.Spec.ForProvider.MergeCommitMessage != pointer.Deref(repo.MergeCommitMessage, "") {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.SquashMergeCommitTitle != nil &&
-		!settingRemembered(remembered, settingSquashMergeCommitTitle, declared[settingSquashMergeCommitTitle]) &&
-		*cr.Spec.ForProvider.SquashMergeCommitTitle != pointer.Deref(repo.SquashMergeCommitTitle, "") {
-		return notUpToDate, nil
-	}
-
-	if cr.Spec.ForProvider.SquashMergeCommitMessage != nil &&
-		!settingRemembered(remembered, settingSquashMergeCommitMessage, declared[settingSquashMergeCommitMessage]) &&
-		*cr.Spec.ForProvider.SquashMergeCommitMessage != pointer.Deref(repo.SquashMergeCommitMessage, "") {
-		return notUpToDate, nil
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -1635,6 +1535,25 @@ const (
 // Condition surfaced when GitHub answers a settings push with 200 but keeps other values (plan or repository type).
 const typeSettingsPartial xpv1.ConditionType = "SettingsPartial"
 
+// editRequest builds the settings Edit Update sends; Observe compares the same request against GitHub.
+func editRequest(cr *v1alpha1.Repository, repo *github.Repository, name string) *github.Repository {
+	archived := pointer.Deref(cr.Spec.ForProvider.Archived, false)
+	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
+	req := &github.Repository{
+		Name:        &name,
+		Description: &cr.Spec.ForProvider.Description,
+		Archived:    &archived,
+		IsTemplate:  &isTemplate,
+	}
+	// Visibility can't be changed on a fork.
+	if !pointer.Deref(repo.Fork, false) {
+		private := pointer.Deref(cr.Spec.ForProvider.Private, true)
+		req.Private = &private
+	}
+	applyMainSettings(req, cr)
+	return req
+}
+
 // pushedSetting is one setting Update sent, with the value GitHub echoed back.
 type pushedSetting struct {
 	field     string
@@ -1705,46 +1624,6 @@ func unappliedSettings(req, echoed *github.Repository) []v1alpha1.UnappliedSetti
 	return records
 }
 
-func addDeclaredBool(declared map[string]string, field string, value *bool) {
-	if value != nil {
-		declared[field] = strconv.FormatBool(*value)
-	}
-}
-
-func addDeclaredString(declared map[string]string, field string, value *string) {
-	if value != nil {
-		declared[field] = *value
-	}
-}
-
-// declaredSettings stringifies the declared value of each setting Observe compares; unmanaged ones are absent.
-func declaredSettings(cr *v1alpha1.Repository, repo *github.Repository) map[string]string {
-	fp := cr.Spec.ForProvider
-	declared := map[string]string{
-		settingDescription: fp.Description,
-		settingIsTemplate:  strconv.FormatBool(pointer.Deref(fp.IsTemplate, false)),
-	}
-	if !pointer.Deref(repo.Fork, false) {
-		declared[settingPrivate] = strconv.FormatBool(pointer.Deref(fp.Private, true))
-	}
-	addDeclaredString(declared, settingDefaultBranch, fp.DefaultBranch)
-	addDeclaredBool(declared, settingAllowMergeCommit, fp.AllowMergeCommit)
-	addDeclaredBool(declared, settingAllowSquashMerge, fp.AllowSquashMerge)
-	addDeclaredBool(declared, settingAllowRebaseMerge, fp.AllowRebaseMerge)
-	addDeclaredBool(declared, settingAllowAutoMerge, fp.AllowAutoMerge)
-	addDeclaredBool(declared, settingAllowUpdateBranch, fp.AllowUpdateBranch)
-	addDeclaredBool(declared, settingDeleteBranchOnMerge, fp.DeleteBranchOnMerge)
-	addDeclaredBool(declared, settingHasIssues, fp.HasIssues)
-	addDeclaredBool(declared, settingHasProjects, fp.HasProjects)
-	addDeclaredBool(declared, settingHasWiki, fp.HasWiki)
-	addDeclaredBool(declared, settingHasDiscussions, fp.HasDiscussions)
-	addDeclaredString(declared, settingMergeCommitTitle, fp.MergeCommitTitle)
-	addDeclaredString(declared, settingMergeCommitMessage, fp.MergeCommitMessage)
-	addDeclaredString(declared, settingSquashMergeCommitTitle, fp.SquashMergeCommitTitle)
-	addDeclaredString(declared, settingSquashMergeCommitMessage, fp.SquashMergeCommitMessage)
-	return declared
-}
-
 // rememberedSettings maps each recorded field to the declared value GitHub refused.
 func rememberedSettings(records []v1alpha1.UnappliedSetting) map[string]string {
 	remembered := make(map[string]string, len(records))
@@ -1761,11 +1640,11 @@ func settingRemembered(remembered map[string]string, field, currentDeclared stri
 }
 
 // currentUnappliedSettings keeps the records whose field is still declared with the refused value, sorted by field.
-func currentUnappliedSettings(remembered, declared map[string]string) []v1alpha1.UnappliedSetting {
+func currentUnappliedSettings(remembered map[string]string, settings []pushedSetting) []v1alpha1.UnappliedSetting {
 	var records []v1alpha1.UnappliedSetting
-	for field, value := range declared {
-		if settingRemembered(remembered, field, value) {
-			records = append(records, v1alpha1.UnappliedSetting{Field: field, Declared: value})
+	for _, setting := range settings {
+		if settingRemembered(remembered, setting.field, setting.requested) {
+			records = append(records, v1alpha1.UnappliedSetting{Field: setting.field, Declared: setting.requested})
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Field < records[j].Field })
@@ -2867,9 +2746,6 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
 
-	// repo visibility makes sense only when a repo is not a fork
-	var privateCr *bool
-
 	repo, _, err := c.github.Repositories.Get(ctx, cr.Spec.ForProvider.Org, name)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
@@ -2905,22 +2781,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 	}
 
-	if repo.Fork != nil && !*repo.Fork {
-		val := pointer.Deref(cr.Spec.ForProvider.Private, true)
-		privateCr = &val
-	}
-
-	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
-
-	editReq := &github.Repository{
-		Name:        &name,
-		Description: &cr.Spec.ForProvider.Description,
-		Archived:    &archivedCr,
-		Private:     privateCr,
-		IsTemplate:  &isTemplate,
-	}
-	applyMainSettings(editReq, cr)
-
+	editReq := editRequest(cr, repo, name)
 	echoed, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, editReq)
 	if err != nil {
 		return managed.ExternalUpdate{}, err

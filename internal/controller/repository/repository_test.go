@@ -2905,3 +2905,244 @@ func TestUpdateRecordsUnappliedSettings(t *testing.T) {
 		})
 	}
 }
+
+func flipped(b *bool) *bool {
+	value := !*b
+	return &value
+}
+
+func changed(s *string) *string {
+	value := *s + "-changed"
+	return &value
+}
+
+// settingChanges alters one pushed setting each, the way GitHub keeping its own value would.
+var settingChanges = []struct {
+	field  string
+	change func(r *github.Repository)
+}{
+	{"description", func(r *github.Repository) { r.Description = changed(r.Description) }},
+	{"private", func(r *github.Repository) { r.Private = flipped(r.Private) }},
+	{"isTemplate", func(r *github.Repository) { r.IsTemplate = flipped(r.IsTemplate) }},
+	{"defaultBranch", func(r *github.Repository) { r.DefaultBranch = changed(r.DefaultBranch) }},
+	{"allowMergeCommit", func(r *github.Repository) { r.AllowMergeCommit = flipped(r.AllowMergeCommit) }},
+	{"allowSquashMerge", func(r *github.Repository) { r.AllowSquashMerge = flipped(r.AllowSquashMerge) }},
+	{"allowRebaseMerge", func(r *github.Repository) { r.AllowRebaseMerge = flipped(r.AllowRebaseMerge) }},
+	{"allowAutoMerge", func(r *github.Repository) { r.AllowAutoMerge = flipped(r.AllowAutoMerge) }},
+	{"allowUpdateBranch", func(r *github.Repository) { r.AllowUpdateBranch = flipped(r.AllowUpdateBranch) }},
+	{"deleteBranchOnMerge", func(r *github.Repository) { r.DeleteBranchOnMerge = flipped(r.DeleteBranchOnMerge) }},
+	{"hasIssues", func(r *github.Repository) { r.HasIssues = flipped(r.HasIssues) }},
+	{"hasProjects", func(r *github.Repository) { r.HasProjects = flipped(r.HasProjects) }},
+	{"hasWiki", func(r *github.Repository) { r.HasWiki = flipped(r.HasWiki) }},
+	{"hasDiscussions", func(r *github.Repository) { r.HasDiscussions = flipped(r.HasDiscussions) }},
+	{"mergeCommitTitle", func(r *github.Repository) { r.MergeCommitTitle = changed(r.MergeCommitTitle) }},
+	{"mergeCommitMessage", func(r *github.Repository) { r.MergeCommitMessage = changed(r.MergeCommitMessage) }},
+	{"squashMergeCommitTitle", func(r *github.Repository) { r.SquashMergeCommitTitle = changed(r.SquashMergeCommitTitle) }},
+	{"squashMergeCommitMessage", func(r *github.Repository) { r.SquashMergeCommitMessage = changed(r.SquashMergeCommitMessage) }},
+}
+
+// withAllSettingsDeclared declares every pushed setting with a value the fixture GitHub repository does not hold.
+func withAllSettingsDeclared() repositoryModifier {
+	return func(r *v1alpha1.Repository) {
+		fp := &r.Spec.ForProvider
+		fp.Description = "widgets"
+		fp.Private = github.Bool(false)
+		fp.IsTemplate = github.Bool(true)
+		fp.DefaultBranch = github.String("trunk")
+		fp.AllowMergeCommit = github.Bool(true)
+		fp.AllowSquashMerge = github.Bool(true)
+		fp.AllowRebaseMerge = github.Bool(true)
+		fp.AllowAutoMerge = github.Bool(true)
+		fp.AllowUpdateBranch = github.Bool(true)
+		fp.DeleteBranchOnMerge = github.Bool(true)
+		fp.HasIssues = github.Bool(true)
+		fp.HasProjects = github.Bool(true)
+		fp.HasWiki = github.Bool(true)
+		fp.HasDiscussions = github.Bool(true)
+		fp.MergeCommitTitle = github.String("PR_TITLE")
+		fp.MergeCommitMessage = github.String("PR_BODY")
+		fp.SquashMergeCommitTitle = github.String("PR_TITLE")
+		fp.SquashMergeCommitMessage = github.String("COMMIT_MESSAGES")
+	}
+}
+
+// allSettingsRecords is what Update records when GitHub keeps every setting withAllSettingsDeclared pushes.
+func allSettingsRecords() []v1alpha1.UnappliedSetting {
+	return []v1alpha1.UnappliedSetting{
+		{Field: "allowAutoMerge", Declared: "true"},
+		{Field: "allowMergeCommit", Declared: "true"},
+		{Field: "allowRebaseMerge", Declared: "true"},
+		{Field: "allowSquashMerge", Declared: "true"},
+		{Field: "allowUpdateBranch", Declared: "true"},
+		{Field: "defaultBranch", Declared: "trunk"},
+		{Field: "deleteBranchOnMerge", Declared: "true"},
+		{Field: "description", Declared: "widgets"},
+		{Field: "hasDiscussions", Declared: "true"},
+		{Field: "hasIssues", Declared: "true"},
+		{Field: "hasProjects", Declared: "true"},
+		{Field: "hasWiki", Declared: "true"},
+		{Field: "isTemplate", Declared: "true"},
+		{Field: "mergeCommitMessage", Declared: "PR_BODY"},
+		{Field: "mergeCommitTitle", Declared: "PR_TITLE"},
+		{Field: "private", Declared: "false"},
+		{Field: "squashMergeCommitMessage", Declared: "COMMIT_MESSAGES"},
+		{Field: "squashMergeCommitTitle", Declared: "PR_TITLE"},
+	}
+}
+
+func withoutRecord(records []v1alpha1.UnappliedSetting, field string) []v1alpha1.UnappliedSetting {
+	var kept []v1alpha1.UnappliedSetting
+	for _, record := range records {
+		if record.Field != field {
+			kept = append(kept, record)
+		}
+	}
+	return kept
+}
+
+// settingsOnlyRepository declares every pushed setting and nothing Observe reads through other API calls.
+func settingsOnlyRepository() *v1alpha1.Repository {
+	cr := repository(withAllSettingsDeclared())
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+	cr.Spec.ForProvider.RepositoryRules = nil
+	return cr
+}
+
+// What Update records from a refusing echo is exactly what Observe then stops comparing, field by field.
+func TestSettingsRoundTrip(t *testing.T) {
+	var held *github.Repository
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		echoed := *req
+		for _, c := range settingChanges {
+			c.change(&echoed)
+		}
+		echoed.Topics = githubRepository().Topics
+		held = &echoed
+		return &echoed, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr := settingsOnlyRepository()
+	e := external{github: clientFor(repos)}
+
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if diff := cmp.Diff(allSettingsRecords(), cr.Status.AtProvider.UnappliedSettings); diff != "" {
+		t.Fatalf("records after Update: -want, +got:\n%s", diff)
+	}
+
+	repos.MockGet = func(ctx context.Context, owner, r string) (*github.Repository, *github.Response, error) {
+		return held, fake.GenerateEmptyResponse(), nil
+	}
+	got, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("Observe with every setting refused: ResourceUpToDate = false, want true")
+	}
+	if diff := cmp.Diff(allSettingsRecords(), cr.Status.AtProvider.UnappliedSettings); diff != "" {
+		t.Errorf("records after Observe: -want, +got:\n%s", diff)
+	}
+
+	// GitHub already holds the newly declared hasWiki, so only the record goes.
+	cr.Spec.ForProvider.HasWiki = flipped(cr.Spec.ForProvider.HasWiki)
+	got, err = e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe after hasWiki change: %v", err)
+	}
+	if !got.ResourceUpToDate {
+		t.Errorf("Observe after hasWiki change: ResourceUpToDate = false, want true")
+	}
+	wantRecords := withoutRecord(allSettingsRecords(), "hasWiki")
+	if diff := cmp.Diff(wantRecords, cr.Status.AtProvider.UnappliedSettings); diff != "" {
+		t.Errorf("records after hasWiki change: -want, +got:\n%s", diff)
+	}
+
+	cr.Spec.ForProvider.DefaultBranch = github.String("release")
+	got, err = e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe after defaultBranch change: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Errorf("Observe after defaultBranch change: ResourceUpToDate = true, want false")
+	}
+	wantRecords = withoutRecord(wantRecords, "defaultBranch")
+	if diff := cmp.Diff(wantRecords, cr.Status.AtProvider.UnappliedSettings); diff != "" {
+		t.Errorf("records after defaultBranch change: -want, +got:\n%s", diff)
+	}
+}
+
+// Each setting is compared against its own echoed field: refusing one records that one only.
+func TestUpdateRecordsOnlyTheRefusedSetting(t *testing.T) {
+	for _, c := range settingChanges {
+		t.Run(c.field, func(t *testing.T) {
+			repos := upToDateRepositories(nil)
+			repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+				echoed := *req
+				c.change(&echoed)
+				return &echoed, fake.GenerateEmptyResponse(), nil
+			}
+			repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+				return topics, fake.GenerateEmptyResponse(), nil
+			}
+			cr := settingsOnlyRepository()
+			e := external{github: clientFor(repos)}
+
+			if _, err := e.Update(context.Background(), cr); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+
+			var want []v1alpha1.UnappliedSetting
+			for _, record := range allSettingsRecords() {
+				if record.Field == c.field {
+					want = append(want, record)
+				}
+			}
+			if diff := cmp.Diff(want, cr.Status.AtProvider.UnappliedSettings); diff != "" {
+				t.Errorf("records: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// Unset settings are neither pushed nor compared; unset visibility means private, and a fork's visibility is left alone.
+func TestEditRequestSettings(t *testing.T) {
+	cases := map[string]struct {
+		fork bool
+		want []pushedSetting
+	}{
+		"NotFork": {
+			want: []pushedSetting{
+				{field: "description", requested: "", echoed: "desc"},
+				{field: "private", requested: "true", echoed: "true"},
+				{field: "isTemplate", requested: "false", echoed: "false"},
+			},
+		},
+		"Fork": {
+			fork: true,
+			want: []pushedSetting{
+				{field: "description", requested: "", echoed: "desc"},
+				{field: "isTemplate", requested: "false", echoed: "false"},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gh := githubRepository()
+			gh.Fork = github.Bool(tc.fork)
+			cr := &v1alpha1.Repository{}
+
+			got := pushedSettings(editRequest(cr, gh, repo), gh)
+
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(pushedSetting{})); diff != "" {
+				t.Errorf("pushedSettings(editRequest(...)): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
