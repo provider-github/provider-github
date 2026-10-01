@@ -524,6 +524,8 @@ type RepoFork struct {
 type RepositoryObservation struct {
 	// Branch protection items GitHub did not apply on the last push, per declared rule.
 	UnappliedBranchProtection []UnappliedBranchProtection `json:"unappliedBranchProtection,omitempty"`
+	// Repository settings GitHub did not apply on the last push, with the value that was declared.
+	UnappliedSettings []UnappliedSetting `json:"unappliedSettings,omitempty"`
 }
 
 // UnappliedBranchProtection records the items GitHub left out when the provider pushed a branch protection rule.
@@ -533,6 +535,14 @@ type UnappliedBranchProtection struct {
 	RuleHash string `json:"ruleHash"`
 	// Items GitHub did not apply, e.g. "bypassApps:some-app" or "allowForcePushes".
 	Items []string `json:"items"`
+}
+
+// UnappliedSetting records a repository setting GitHub left unchanged when the provider pushed it.
+type UnappliedSetting struct {
+	// Field name as in spec.forProvider, e.g. "hasWiki".
+	Field string `json:"field"`
+	// Declared value the refusal was observed against, e.g. "true".
+	Declared string `json:"declared"`
 }
 
 // A RepositorySpec defines the desired state of a Repository.
@@ -554,6 +564,7 @@ type RepositoryStatus struct {
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="COLLAB-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='CollaboratorPartial')].status"
 // +kubebuilder:printcolumn:name="BPR-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='BranchProtectionPartial')].status"
+// +kubebuilder:printcolumn:name="SETTINGS-PARTIAL",type="string",JSONPath=".status.conditions[?(@.type=='SettingsPartial')].status"
 // +kubebuilder:printcolumn:name="ARCHIVED",type="string",JSONPath=".status.conditions[?(@.type=='ArchivedConfigFrozen')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"

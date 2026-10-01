@@ -31,6 +31,9 @@ spec:
     - jsonPath: .status.conditions[?(@.type=='BranchProtectionPartial')].status
       name: BPR-PARTIAL
       type: string
+    - jsonPath: .status.conditions[?(@.type=='SettingsPartial')].status
+      name: SETTINGS-PARTIAL
+      type: string
     - jsonPath: .status.conditions[?(@.type=='ArchivedConfigFrozen')].status
       name: ARCHIVED
       type: string
@@ -1131,6 +1134,25 @@ spec:
                       - branch
                       - items
                       - ruleHash
+                      type: object
+                    type: array
+                  unappliedSettings:
+                    description: Repository settings GitHub did not apply on the last
+                      push, with the value that was declared.
+                    items:
+                      description: UnappliedSetting records a repository setting GitHub
+                        left unchanged when the provider pushed it.
+                      properties:
+                        declared:
+                          description: Declared value the refusal was observed against,
+                            e.g. "true".
+                          type: string
+                        field:
+                          description: Field name as in spec.forProvider, e.g. "hasWiki".
+                          type: string
+                      required:
+                      - declared
+                      - field
                       type: object
                     type: array
                 type: object

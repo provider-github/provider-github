@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -322,8 +323,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
+	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
+	declared := declaredSettings(cr, repo)
+	cr.Status.AtProvider.UnappliedSettings = currentUnappliedSettings(remembered, declared)
+	setSettingsPartialCondition(cr, cr.Status.AtProvider.UnappliedSettings)
+	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
+
 	// repo visibility makes sense only when a repo is not a fork
-	if !pointer.Deref(repo.Fork, false) {
+	if !pointer.Deref(repo.Fork, false) && !settingRemembered(remembered, settingPrivate, declared[settingPrivate]) {
 		privateCr := pointer.Deref(cr.Spec.ForProvider.Private, true)
 		if privateCr != pointer.Deref(repo.Private, false) {
 			return notUpToDate, nil
@@ -331,7 +338,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	isTemplate := pointer.Deref(cr.Spec.ForProvider.IsTemplate, false)
-	if isTemplate != pointer.Deref(repo.IsTemplate, false) {
+	if !settingRemembered(remembered, settingIsTemplate, declared[settingIsTemplate]) &&
+		isTemplate != pointer.Deref(repo.IsTemplate, false) {
 		return notUpToDate, nil
 	}
 
@@ -345,81 +353,97 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 	}
 
-	if cr.Spec.ForProvider.Description != pointer.Deref(repo.Description, "") {
+	if !settingRemembered(remembered, settingDescription, declared[settingDescription]) &&
+		cr.Spec.ForProvider.Description != pointer.Deref(repo.Description, "") {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.DefaultBranch != nil &&
+		!settingRemembered(remembered, settingDefaultBranch, declared[settingDefaultBranch]) &&
 		*cr.Spec.ForProvider.DefaultBranch != pointer.Deref(repo.DefaultBranch, "") {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.AllowMergeCommit != nil &&
+		!settingRemembered(remembered, settingAllowMergeCommit, declared[settingAllowMergeCommit]) &&
 		*cr.Spec.ForProvider.AllowMergeCommit != pointer.Deref(repo.AllowMergeCommit, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.AllowSquashMerge != nil &&
+		!settingRemembered(remembered, settingAllowSquashMerge, declared[settingAllowSquashMerge]) &&
 		*cr.Spec.ForProvider.AllowSquashMerge != pointer.Deref(repo.AllowSquashMerge, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.AllowRebaseMerge != nil &&
+		!settingRemembered(remembered, settingAllowRebaseMerge, declared[settingAllowRebaseMerge]) &&
 		*cr.Spec.ForProvider.AllowRebaseMerge != pointer.Deref(repo.AllowRebaseMerge, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.AllowAutoMerge != nil &&
+		!settingRemembered(remembered, settingAllowAutoMerge, declared[settingAllowAutoMerge]) &&
 		*cr.Spec.ForProvider.AllowAutoMerge != pointer.Deref(repo.AllowAutoMerge, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.AllowUpdateBranch != nil &&
+		!settingRemembered(remembered, settingAllowUpdateBranch, declared[settingAllowUpdateBranch]) &&
 		*cr.Spec.ForProvider.AllowUpdateBranch != pointer.Deref(repo.AllowUpdateBranch, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.DeleteBranchOnMerge != nil &&
+		!settingRemembered(remembered, settingDeleteBranchOnMerge, declared[settingDeleteBranchOnMerge]) &&
 		*cr.Spec.ForProvider.DeleteBranchOnMerge != pointer.Deref(repo.DeleteBranchOnMerge, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.HasIssues != nil &&
+		!settingRemembered(remembered, settingHasIssues, declared[settingHasIssues]) &&
 		*cr.Spec.ForProvider.HasIssues != pointer.Deref(repo.HasIssues, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.HasProjects != nil &&
+		!settingRemembered(remembered, settingHasProjects, declared[settingHasProjects]) &&
 		*cr.Spec.ForProvider.HasProjects != pointer.Deref(repo.HasProjects, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.HasWiki != nil &&
+		!settingRemembered(remembered, settingHasWiki, declared[settingHasWiki]) &&
 		*cr.Spec.ForProvider.HasWiki != pointer.Deref(repo.HasWiki, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.HasDiscussions != nil &&
+		!settingRemembered(remembered, settingHasDiscussions, declared[settingHasDiscussions]) &&
 		*cr.Spec.ForProvider.HasDiscussions != pointer.Deref(repo.HasDiscussions, false) {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.MergeCommitTitle != nil &&
+		!settingRemembered(remembered, settingMergeCommitTitle, declared[settingMergeCommitTitle]) &&
 		*cr.Spec.ForProvider.MergeCommitTitle != pointer.Deref(repo.MergeCommitTitle, "") {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.MergeCommitMessage != nil &&
+		!settingRemembered(remembered, settingMergeCommitMessage, declared[settingMergeCommitMessage]) &&
 		*cr.Spec.ForProvider.MergeCommitMessage != pointer.Deref(repo.MergeCommitMessage, "") {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.SquashMergeCommitTitle != nil &&
+		!settingRemembered(remembered, settingSquashMergeCommitTitle, declared[settingSquashMergeCommitTitle]) &&
 		*cr.Spec.ForProvider.SquashMergeCommitTitle != pointer.Deref(repo.SquashMergeCommitTitle, "") {
 		return notUpToDate, nil
 	}
 
 	if cr.Spec.ForProvider.SquashMergeCommitMessage != nil &&
+		!settingRemembered(remembered, settingSquashMergeCommitMessage, declared[settingSquashMergeCommitMessage]) &&
 		*cr.Spec.ForProvider.SquashMergeCommitMessage != pointer.Deref(repo.SquashMergeCommitMessage, "") {
 		return notUpToDate, nil
 	}
@@ -504,6 +528,9 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	cr.Status.AtProvider.UnappliedBranchProtection = nil
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
+	cr.Status.AtProvider.UnappliedSettings = nil
+	setSettingsPartialCondition(cr, nil)
+	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
@@ -1581,6 +1608,187 @@ func applyMainSettings(req *github.Repository, cr *v1alpha1.Repository) {
 	if fp.SquashMergeCommitMessage != nil {
 		req.SquashMergeCommitMessage = fp.SquashMergeCommitMessage
 	}
+}
+
+// Spec field names of the repository settings Update pushes through Repositories.Edit.
+const (
+	settingDescription              = "description"
+	settingPrivate                  = "private"
+	settingIsTemplate               = "isTemplate"
+	settingDefaultBranch            = "defaultBranch"
+	settingAllowMergeCommit         = "allowMergeCommit"
+	settingAllowSquashMerge         = "allowSquashMerge"
+	settingAllowRebaseMerge         = "allowRebaseMerge"
+	settingAllowAutoMerge           = "allowAutoMerge"
+	settingAllowUpdateBranch        = "allowUpdateBranch"
+	settingDeleteBranchOnMerge      = "deleteBranchOnMerge"
+	settingHasIssues                = "hasIssues"
+	settingHasProjects              = "hasProjects"
+	settingHasWiki                  = "hasWiki"
+	settingHasDiscussions           = "hasDiscussions"
+	settingMergeCommitTitle         = "mergeCommitTitle"
+	settingMergeCommitMessage       = "mergeCommitMessage"
+	settingSquashMergeCommitTitle   = "squashMergeCommitTitle"
+	settingSquashMergeCommitMessage = "squashMergeCommitMessage"
+)
+
+// Condition surfaced when GitHub answers a settings push with 200 but keeps other values (plan or repository type).
+const typeSettingsPartial xpv1.ConditionType = "SettingsPartial"
+
+// pushedSetting is one setting Update sent, with the value GitHub echoed back.
+type pushedSetting struct {
+	field     string
+	requested string
+	echoed    string
+}
+
+func appendPushedBool(settings []pushedSetting, field string, requested, echoed *bool) []pushedSetting {
+	if requested == nil {
+		return settings
+	}
+	return append(settings, pushedSetting{
+		field:     field,
+		requested: strconv.FormatBool(*requested),
+		echoed:    strconv.FormatBool(pointer.Deref(echoed, false)),
+	})
+}
+
+func appendPushedString(settings []pushedSetting, field string, requested, echoed *string) []pushedSetting {
+	if requested == nil {
+		return settings
+	}
+	return append(settings, pushedSetting{
+		field:     field,
+		requested: *requested,
+		echoed:    pointer.Deref(echoed, ""),
+	})
+}
+
+// pushedSettings lists the settings req set that Observe compares; name and archived are left out.
+func pushedSettings(req, echoed *github.Repository) []pushedSetting {
+	var settings []pushedSetting
+	settings = appendPushedString(settings, settingDescription, req.Description, echoed.Description)
+	settings = appendPushedBool(settings, settingPrivate, req.Private, echoed.Private)
+	settings = appendPushedBool(settings, settingIsTemplate, req.IsTemplate, echoed.IsTemplate)
+	settings = appendPushedString(settings, settingDefaultBranch, req.DefaultBranch, echoed.DefaultBranch)
+	settings = appendPushedBool(settings, settingAllowMergeCommit, req.AllowMergeCommit, echoed.AllowMergeCommit)
+	settings = appendPushedBool(settings, settingAllowSquashMerge, req.AllowSquashMerge, echoed.AllowSquashMerge)
+	settings = appendPushedBool(settings, settingAllowRebaseMerge, req.AllowRebaseMerge, echoed.AllowRebaseMerge)
+	settings = appendPushedBool(settings, settingAllowAutoMerge, req.AllowAutoMerge, echoed.AllowAutoMerge)
+	settings = appendPushedBool(settings, settingAllowUpdateBranch, req.AllowUpdateBranch, echoed.AllowUpdateBranch)
+	settings = appendPushedBool(settings, settingDeleteBranchOnMerge, req.DeleteBranchOnMerge, echoed.DeleteBranchOnMerge)
+	settings = appendPushedBool(settings, settingHasIssues, req.HasIssues, echoed.HasIssues)
+	settings = appendPushedBool(settings, settingHasProjects, req.HasProjects, echoed.HasProjects)
+	settings = appendPushedBool(settings, settingHasWiki, req.HasWiki, echoed.HasWiki)
+	settings = appendPushedBool(settings, settingHasDiscussions, req.HasDiscussions, echoed.HasDiscussions)
+	settings = appendPushedString(settings, settingMergeCommitTitle, req.MergeCommitTitle, echoed.MergeCommitTitle)
+	settings = appendPushedString(settings, settingMergeCommitMessage, req.MergeCommitMessage, echoed.MergeCommitMessage)
+	settings = appendPushedString(settings, settingSquashMergeCommitTitle, req.SquashMergeCommitTitle, echoed.SquashMergeCommitTitle)
+	settings = appendPushedString(settings, settingSquashMergeCommitMessage, req.SquashMergeCommitMessage, echoed.SquashMergeCommitMessage)
+	return settings
+}
+
+// unappliedSettings lists the pushed settings GitHub echoed back with another value, sorted by field.
+func unappliedSettings(req, echoed *github.Repository) []v1alpha1.UnappliedSetting {
+	pushed := pushedSettings(req, echoed)
+	records := make([]v1alpha1.UnappliedSetting, 0, len(pushed))
+	for _, setting := range pushed {
+		if setting.requested == setting.echoed {
+			continue
+		}
+		records = append(records, v1alpha1.UnappliedSetting{Field: setting.field, Declared: setting.requested})
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Field < records[j].Field })
+	return records
+}
+
+func addDeclaredBool(declared map[string]string, field string, value *bool) {
+	if value != nil {
+		declared[field] = strconv.FormatBool(*value)
+	}
+}
+
+func addDeclaredString(declared map[string]string, field string, value *string) {
+	if value != nil {
+		declared[field] = *value
+	}
+}
+
+// declaredSettings stringifies the declared value of each setting Observe compares; unmanaged ones are absent.
+func declaredSettings(cr *v1alpha1.Repository, repo *github.Repository) map[string]string {
+	fp := cr.Spec.ForProvider
+	declared := map[string]string{
+		settingDescription: fp.Description,
+		settingIsTemplate:  strconv.FormatBool(pointer.Deref(fp.IsTemplate, false)),
+	}
+	if !pointer.Deref(repo.Fork, false) {
+		declared[settingPrivate] = strconv.FormatBool(pointer.Deref(fp.Private, true))
+	}
+	addDeclaredString(declared, settingDefaultBranch, fp.DefaultBranch)
+	addDeclaredBool(declared, settingAllowMergeCommit, fp.AllowMergeCommit)
+	addDeclaredBool(declared, settingAllowSquashMerge, fp.AllowSquashMerge)
+	addDeclaredBool(declared, settingAllowRebaseMerge, fp.AllowRebaseMerge)
+	addDeclaredBool(declared, settingAllowAutoMerge, fp.AllowAutoMerge)
+	addDeclaredBool(declared, settingAllowUpdateBranch, fp.AllowUpdateBranch)
+	addDeclaredBool(declared, settingDeleteBranchOnMerge, fp.DeleteBranchOnMerge)
+	addDeclaredBool(declared, settingHasIssues, fp.HasIssues)
+	addDeclaredBool(declared, settingHasProjects, fp.HasProjects)
+	addDeclaredBool(declared, settingHasWiki, fp.HasWiki)
+	addDeclaredBool(declared, settingHasDiscussions, fp.HasDiscussions)
+	addDeclaredString(declared, settingMergeCommitTitle, fp.MergeCommitTitle)
+	addDeclaredString(declared, settingMergeCommitMessage, fp.MergeCommitMessage)
+	addDeclaredString(declared, settingSquashMergeCommitTitle, fp.SquashMergeCommitTitle)
+	addDeclaredString(declared, settingSquashMergeCommitMessage, fp.SquashMergeCommitMessage)
+	return declared
+}
+
+// rememberedSettings maps each recorded field to the declared value GitHub refused.
+func rememberedSettings(records []v1alpha1.UnappliedSetting) map[string]string {
+	remembered := make(map[string]string, len(records))
+	for _, record := range records {
+		remembered[record.Field] = record.Declared
+	}
+	return remembered
+}
+
+// settingRemembered reports whether the refusal was recorded against the field's current declared value.
+func settingRemembered(remembered map[string]string, field, currentDeclared string) bool {
+	declared, ok := remembered[field]
+	return ok && declared == currentDeclared
+}
+
+// currentUnappliedSettings keeps the records whose field is still declared with the refused value, sorted by field.
+func currentUnappliedSettings(remembered, declared map[string]string) []v1alpha1.UnappliedSetting {
+	var records []v1alpha1.UnappliedSetting
+	for field, value := range declared {
+		if settingRemembered(remembered, field, value) {
+			records = append(records, v1alpha1.UnappliedSetting{Field: field, Declared: value})
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Field < records[j].Field })
+	return records
+}
+
+// Idempotent: SetConditions ignores writes whose (Status, Reason, Message) are unchanged.
+func setSettingsPartialCondition(cr *v1alpha1.Repository, records []v1alpha1.UnappliedSetting) {
+	c := xpv1.Condition{Type: typeSettingsPartial, LastTransitionTime: metav1.Now()}
+	if len(records) == 0 {
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonFullyApplied
+		cr.SetConditions(c)
+		return
+	}
+	pairs := make([]string, len(records))
+	for i, record := range records {
+		pairs[i] = record.Field + "=" + record.Declared
+	}
+	c.Status = corev1.ConditionTrue
+	c.Reason = reasonNotFullyApplied
+	c.Message = "settings GitHub did not apply on the last push (not available on this plan or repository type): " + strings.Join(pairs, ", ")
+	cr.SetConditions(c)
 }
 
 //nolint:gocyclo
@@ -2713,10 +2921,11 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 	applyMainSettings(editReq, cr)
 
-	_, _, err = c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, editReq)
+	echoed, _, err := c.github.Repositories.Edit(ctx, cr.Spec.ForProvider.Org, name, editReq)
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
+	cr.Status.AtProvider.UnappliedSettings = unappliedSettings(editReq, echoed)
 
 	err = updateRepoUsers(ctx, cr, c.github, name)
 	if err != nil {

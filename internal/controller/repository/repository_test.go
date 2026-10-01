@@ -2575,7 +2575,7 @@ func TestObservePublishesBranchProtectionUnreconcilable(t *testing.T) {
 	}
 }
 
-// An archived repository publishes archived=1 and clears the collaborator and branch protection state it no longer reconciles.
+// An archived repository publishes archived=1 and clears the collaborator, branch protection and settings state it no longer reconciles.
 func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	metrics := telemetry.NewForTest()
 	gauge := metrics.RepositoryUnreconcilableForTest()
@@ -2591,6 +2591,8 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	cr.SetConditions(xpv1.Condition{Type: typeCollaboratorPartial, Status: corev1.ConditionTrue, Reason: reasonPendingInvitation})
 	cr.SetConditions(xpv1.Condition{Type: typeBranchProtectionPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
 	cr.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{{Branch: "main", Items: []string{"allowForcePushes"}}}
+	cr.SetConditions(xpv1.Condition{Type: typeSettingsPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
+	cr.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}}
 
 	e := external{github: clientFor(repos), metrics: metrics}
 	if _, err := e.Observe(context.Background(), cr); err != nil {
@@ -2606,6 +2608,9 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionBranchProtection)); got != 0 {
 		t.Errorf("unreconcilable{dimension=branch_protection} = %v, want 0", got)
 	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionSettings)); got != 0 {
+		t.Errorf("unreconcilable{dimension=settings} = %v, want 0", got)
+	}
 	if got := cr.GetCondition(typeCollaboratorPartial).Status; got != corev1.ConditionFalse {
 		t.Errorf("CollaboratorPartial = %v, want False", got)
 	}
@@ -2614,6 +2619,12 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	}
 	if cr.Status.AtProvider.UnappliedBranchProtection != nil {
 		t.Errorf("UnappliedBranchProtection = %v, want nil", cr.Status.AtProvider.UnappliedBranchProtection)
+	}
+	if got := cr.GetCondition(typeSettingsPartial).Status; got != corev1.ConditionFalse {
+		t.Errorf("SettingsPartial = %v, want False", got)
+	}
+	if cr.Status.AtProvider.UnappliedSettings != nil {
+		t.Errorf("UnappliedSettings = %v, want nil", cr.Status.AtProvider.UnappliedSettings)
 	}
 }
 
@@ -2714,5 +2725,183 @@ func TestForgettingFinalizerDelegatesNonRepository(t *testing.T) {
 	}
 	if got := testutil.CollectAndCount(metrics.RepositoryUnreconcilableForTest()); got != 3 {
 		t.Errorf("series after RemoveFinalizer on a Team = %d, want 3", got)
+	}
+}
+
+// A setting is recorded only when the push set it and GitHub echoed another value.
+func TestUnappliedSettings(t *testing.T) {
+	cases := map[string]struct {
+		req    *github.Repository
+		echoed *github.Repository
+		want   []v1alpha1.UnappliedSetting
+	}{
+		"WikiRefused": {
+			req:    &github.Repository{HasWiki: github.Bool(true)},
+			echoed: &github.Repository{HasWiki: github.Bool(false)},
+			want:   []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}},
+		},
+		"AllApplied": {
+			req:    &github.Repository{HasWiki: github.Bool(true), HasIssues: github.Bool(false), Description: github.String("widgets")},
+			echoed: &github.Repository{HasWiki: github.Bool(true), HasIssues: github.Bool(false), Description: github.String("widgets")},
+		},
+		"TwoRefusedSorted": {
+			req:    &github.Repository{HasWiki: github.Bool(true), HasProjects: github.Bool(true)},
+			echoed: &github.Repository{HasWiki: github.Bool(false), HasProjects: github.Bool(false)},
+			want: []v1alpha1.UnappliedSetting{
+				{Field: "hasProjects", Declared: "true"},
+				{Field: "hasWiki", Declared: "true"},
+			},
+		},
+		"UnsetNotRecorded": {
+			req:    &github.Repository{},
+			echoed: &github.Repository{HasWiki: github.Bool(true)},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := unappliedSettings(tc.req, tc.echoed)
+			if diff := cmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("unappliedSettings(...): -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// A recorded refusal masks only its own field, and only while the field is still declared with the refused value.
+func TestObserveRememberedUnappliedSettings(t *testing.T) {
+	refusedWiki := []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}}
+
+	cases := map[string]struct {
+		records       []v1alpha1.UnappliedSetting
+		mods          []repositoryModifier
+		wantUpToDate  bool
+		wantRecords   []v1alpha1.UnappliedSetting
+		wantCondition corev1.ConditionStatus
+		wantMessage   string
+		wantGauge     float64
+	}{
+		"RefusalRemembered": {
+			records:       refusedWiki,
+			mods:          []repositoryModifier{withHasWiki(true)},
+			wantUpToDate:  true,
+			wantRecords:   refusedWiki,
+			wantCondition: corev1.ConditionTrue,
+			wantMessage:   "settings GitHub did not apply on the last push (not available on this plan or repository type): hasWiki=true",
+			wantGauge:     1,
+		},
+		"SpecChanged": {
+			records:       refusedWiki,
+			mods:          []repositoryModifier{withHasWiki(false)},
+			wantUpToDate:  true,
+			wantCondition: corev1.ConditionFalse,
+		},
+		"OtherFieldDrifts": {
+			records:       refusedWiki,
+			mods:          []repositoryModifier{withHasWiki(true), withHasIssues(true)},
+			wantUpToDate:  false,
+			wantRecords:   refusedWiki,
+			wantCondition: corev1.ConditionTrue,
+			wantMessage:   "settings GitHub did not apply on the last push (not available on this plan or repository type): hasWiki=true",
+			wantGauge:     1,
+		},
+		"Unmanaged": {
+			records:       refusedWiki,
+			wantUpToDate:  true,
+			wantCondition: corev1.ConditionFalse,
+		},
+		"NoRecordDrift": {
+			mods:          []repositoryModifier{withHasWiki(true)},
+			wantUpToDate:  false,
+			wantCondition: corev1.ConditionFalse,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			cr := repository(tc.mods...)
+			cr.Spec.ForProvider.Org = "acme"
+			cr.Status.AtProvider.UnappliedSettings = tc.records
+
+			e := external{github: clientFor(upToDateRepositories(nil)), metrics: metrics}
+			got, err := e.Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+
+			if got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.wantUpToDate)
+			}
+			if diff := cmp.Diff(tc.wantRecords, cr.Status.AtProvider.UnappliedSettings, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("status records: -want, +got:\n%s", diff)
+			}
+			condition := cr.GetCondition(typeSettingsPartial)
+			if condition.Status != tc.wantCondition {
+				t.Errorf("SettingsPartial = %v, want %v", condition.Status, tc.wantCondition)
+			}
+			if condition.Message != tc.wantMessage {
+				t.Errorf("SettingsPartial message = %q, want %q", condition.Message, tc.wantMessage)
+			}
+			gauge := metrics.RepositoryUnreconcilableForTest()
+			if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionSettings)); got != tc.wantGauge {
+				t.Errorf("unreconcilable{dimension=settings} = %v, want %v", got, tc.wantGauge)
+			}
+		})
+	}
+}
+
+// Update replaces the settings record with what the Edit echo left out, so a refusal is remembered and a stale one dropped.
+func TestUpdateRecordsUnappliedSettings(t *testing.T) {
+	cases := map[string]struct {
+		echo func(req *github.Repository) *github.Repository
+		want []v1alpha1.UnappliedSetting
+	}{
+		"WikiRefused": {
+			echo: func(req *github.Repository) *github.Repository {
+				echoed := *req
+				echoed.HasWiki = github.Bool(false)
+				return &echoed
+			},
+			want: []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}},
+		},
+		"AllApplied": {
+			echo: func(req *github.Repository) *github.Repository {
+				return req
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repoClient := &fake.MockRepositoriesClient{
+				MockGet: func(ctx context.Context, owner, r string) (*github.Repository, *github.Response, error) {
+					return githubRepository(), fake.GenerateEmptyResponse(), nil
+				},
+				MockEdit: func(ctx context.Context, owner, r string, rr *github.Repository) (*github.Repository, *github.Response, error) {
+					return tc.echo(rr), fake.GenerateEmptyResponse(), nil
+				},
+				MockListCollaborators: func(ctx context.Context, owner, r string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+				MockListTeams: func(ctx context.Context, owner, r string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+			}
+
+			cr := &v1alpha1.Repository{}
+			meta.SetExternalName(cr, repo)
+			cr.Spec.ForProvider.HasWiki = github.Bool(true)
+			cr.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "hasProjects", Declared: "true"}}
+
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient}}}
+			if _, err := e.Update(context.Background(), cr); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.want, cr.Status.AtProvider.UnappliedSettings, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("status records: -want, +got:\n%s", diff)
+			}
+		})
 	}
 }
