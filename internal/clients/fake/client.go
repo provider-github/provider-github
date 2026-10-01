@@ -184,11 +184,13 @@ type MockRepositoriesClient struct {
 	MockEdit                                func(ctx context.Context, owner, repo string, repository *github.Repository) (*github.Repository, *github.Response, error)
 	MockListTeams                           func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
 	MockListCollaborators                   func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
+	MockListInvitations                     func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error)
 	MockCreate                              func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
 	MockCreateFromTemplate                  func(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
 	MockCreateFork                          func(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
 	MockAddCollaborator                     func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	MockRemoveCollaborator                  func(ctx context.Context, owner, repo, user string) (*github.Response, error)
+	MockGetPermissionLevel                  func(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error)
 	MockDelete                              func(ctx context.Context, owner, repo string) (*github.Response, error)
 	MockCreateHook                          func(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error)
 	MockEditHook                            func(ctx context.Context, owner, repo string, id int64, hook *github.Hook) (*github.Hook, *github.Response, error)
@@ -241,12 +243,20 @@ func (m *MockRepositoriesClient) ListCollaborators(ctx context.Context, owner, r
 	return m.MockListCollaborators(ctx, owner, repo, opts)
 }
 
+func (m *MockRepositoriesClient) ListInvitations(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+	return m.MockListInvitations(ctx, owner, repo, opts)
+}
+
 func (m *MockRepositoriesClient) ListTeams(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
 	return m.MockListTeams(ctx, owner, repo, opts)
 }
 
 func (m *MockRepositoriesClient) RemoveCollaborator(ctx context.Context, owner, repo, user string) (*github.Response, error) {
 	return m.MockRemoveCollaborator(ctx, owner, repo, user)
+}
+
+func (m *MockRepositoriesClient) GetPermissionLevel(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
+	return m.MockGetPermissionLevel(ctx, owner, repo, user)
 }
 
 func (m *MockRepositoriesClient) CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error) {
@@ -327,8 +337,13 @@ type MockTeamsClient struct {
 	MockDeleteTeamBySlug                 func(ctx context.Context, org, slug string) (*github.Response, error)
 	MockAddTeamRepoBySlug                func(ctx context.Context, org, slug, owner, repo string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error)
 	MockRemoveTeamRepoBySlug             func(ctx context.Context, org, slug, owner, repo string) (*github.Response, error)
+	MockIsTeamRepoBySlug                 func(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error)
 	MockListPendingTeamInvitationsBySlug func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Invitation, *github.Response, error)
 	MockListChildTeamsByParentSlug       func(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error)
+}
+
+func (m *MockTeamsClient) IsTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error) {
+	return m.MockIsTeamRepoBySlug(ctx, org, slug, owner, repo)
 }
 
 func (m *MockTeamsClient) RemoveTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Response, error) {

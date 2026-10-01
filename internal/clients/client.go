@@ -304,6 +304,12 @@ func (c *repositoriesClient) ListCollaborators(ctx context.Context, owner, repo 
 	})
 }
 
+func (c *repositoriesClient) ListInvitations(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.ListInvitations", func() ([]*github.RepositoryInvitation, *github.Response, error) {
+		return c.RepositoriesClient.ListInvitations(ctx, owner, repo, opts)
+	})
+}
+
 func (c *repositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateFromTemplate", func() (*github.Repository, *github.Response, error) {
 		return c.RepositoriesClient.CreateFromTemplate(ctx, templateOwner, templateRepo, templateRepoReq)
@@ -326,6 +332,12 @@ func (c *repositoriesClient) RemoveCollaborator(ctx context.Context, owner, repo
 	resp, err := c.RepositoriesClient.RemoveCollaborator(ctx, owner, repo, user)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.RemoveCollaborator", resp, err)
 	return resp, err
+}
+
+func (c *repositoriesClient) GetPermissionLevel(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetPermissionLevel", func() (*github.RepositoryPermissionLevel, *github.Response, error) {
+		return c.RepositoriesClient.GetPermissionLevel(ctx, owner, repo, user)
+	})
 }
 
 func (c *repositoriesClient) CreateHook(ctx context.Context, owner, repo string, hook *github.Hook) (*github.Hook, *github.Response, error) {
@@ -482,6 +494,12 @@ func (c *teamsClient) ListPendingTeamInvitationsBySlug(ctx context.Context, org,
 func (c *teamsClient) ListChildTeamsByParentSlug(ctx context.Context, org, slug string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.ListChildTeamsByParentSlug", func() ([]*github.Team, *github.Response, error) {
 		return c.TeamsClient.ListChildTeamsByParentSlug(ctx, org, slug, opts)
+	})
+}
+
+func (c *teamsClient) IsTeamRepoBySlug(ctx context.Context, org, slug, owner, repo string) (*github.Repository, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Teams.IsTeamRepoBySlug", func() (*github.Repository, *github.Response, error) {
+		return c.TeamsClient.IsTeamRepoBySlug(ctx, org, slug, owner, repo)
 	})
 }
 

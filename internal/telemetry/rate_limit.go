@@ -56,7 +56,18 @@ type RateLimitMetrics struct {
 	// random_tiebreak, only_candidate) so operators can see why each
 	// credential was chosen.
 	picksTotal *prometheus.CounterVec
+
+	// Repository-unreconcilable gauge, per (org, repository, dimension).
+	repositoryUnreconcilable *prometheus.GaugeVec
 }
+
+// Dimensions of declared repository state GitHub may refuse to apply.
+const (
+	DimensionCollaborators    = "collaborators"
+	DimensionBranchProtection = "branch_protection"
+	DimensionArchived         = "archived"
+	DimensionSettings         = "settings"
+)
 
 // labels carried by every rate-limit metric:
 //   - organization: the GitHub org the call targeted.
@@ -120,6 +131,13 @@ func newRateLimitMetrics() *RateLimitMetrics {
 			},
 			append(rateLimitLabels, "reason"),
 		),
+		repositoryUnreconcilable: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "github_repository_unreconcilable",
+				Help: "1 while the repository has declared state GitHub will not apply, per dimension (collaborators, branch_protection, archived)",
+			},
+			[]string{"organization", "repository", "dimension"},
+		),
 	}
 }
 
@@ -135,6 +153,7 @@ func NewRateLimitMetrics(_ ctrl.Manager) *RateLimitMetrics {
 	prometheus.MustRegister(m.appUnhealthyTotal)
 	prometheus.MustRegister(m.apiCallsTotal)
 	prometheus.MustRegister(m.picksTotal)
+	prometheus.MustRegister(m.repositoryUnreconcilable)
 
 	return m
 }
@@ -172,6 +191,11 @@ func (m *RateLimitMetrics) PicksCountForTest(org, appID, installationID, reason 
 	return counterValue(m.picksTotal.WithLabelValues(org, appID, installationID, reason))
 }
 
+// RepositoryUnreconcilableForTest exposes the gauge vec to cross-package tests.
+func (m *RateLimitMetrics) RepositoryUnreconcilableForTest() *prometheus.GaugeVec {
+	return m.repositoryUnreconcilable
+}
+
 func counterValue(c prometheus.Counter) float64 {
 	pb := &dto.Metric{}
 	if err := c.Write(pb); err != nil {
@@ -207,4 +231,18 @@ func (m *RateLimitMetrics) RecordRateLimitInfo(resp *github.Response, org, appID
 		m.rateLimitRemaining.WithLabelValues(org, appID, installationID).Set(float64(resp.Rate.Remaining))
 		m.rateLimitResetTime.WithLabelValues(org, appID, installationID).Set(float64(resp.Rate.Reset.Unix()))
 	}
+}
+
+// SetRepositoryUnreconcilable publishes 1 when GitHub won't apply the dimension's declared state, else 0.
+func (m *RateLimitMetrics) SetRepositoryUnreconcilable(org, repo, dimension string, unreconcilable bool) {
+	value := 0.0
+	if unreconcilable {
+		value = 1
+	}
+	m.repositoryUnreconcilable.WithLabelValues(org, repo, dimension).Set(value)
+}
+
+// ForgetRepository deletes every github_repository_unreconcilable series of the repository.
+func (m *RateLimitMetrics) ForgetRepository(org, repo string) {
+	m.repositoryUnreconcilable.DeletePartialMatch(prometheus.Labels{"organization": org, "repository": repo})
 }
