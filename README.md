@@ -17,6 +17,10 @@ implements the following resources with partial functionality:
   * selected repositories
 * **OrganizationWebhook** — organization-level webhooks
   * url, content type, events, active flag, SSL verification, secret (from a Kubernetes Secret)
+* **ActionsSecretAccess** — repository access to an existing Actions organization secret (the secret and its value are managed out-of-band)
+  * deleting the resource leaves the secret and its repository access unchanged on GitHub, whatever `deletionPolicy` is set to
+* **DependabotSecretAccess** — repository access to an existing Dependabot organization secret (the secret and its value are managed out-of-band)
+  * deleting the resource leaves the secret and its repository access unchanged on GitHub, whatever `deletionPolicy` is set to
 * **RunnerGroup** — Actions self-hosted runner groups at the organization level (runners themselves are not managed)
   * visibility (`all`, `selected`, `private`), selected repositories, public repository access, workflow restrictions
 * **Repository**
@@ -68,11 +72,11 @@ the list to exactly those repositories. See the field's CRD docstring
 (`kubectl explain organization.spec.forProvider.actions.enabledRepos`)
 for the full contract.
 
-The two timeout-sensitive scenarios below both involve reconciling
+The first two timeout-sensitive scenarios below involve reconciling
 that list.
 
 **Default: `1m`.** Suitable for steady-state reconciliation and small
-spec changes. The default is **not** enough for two operational
+spec changes. The default is **not** enough for three operational
 scenarios:
 
 1. **Cold bootstrap of an `Organization` CR with a large Actions
@@ -92,6 +96,16 @@ scenarios:
    `Repositories.Get` burst. Removals do not — repo IDs for
    already-enabled repos come back free from the paginated
    `ListEnabledReposInOrg` walk that the controller does anyway.
+
+3. **Adding many repositories at once to an `ActionsSecretAccess` or
+   `DependabotSecretAccess`.** Each repository in
+   `selectedRepositories` that the secret does not already have costs
+   one sequential `Repositories.Get`; repositories already selected
+   cost none. The list is written in a single call after all IDs are
+   resolved, so a reconcile that times out makes no progress and the
+   next one starts over. Adding more than roughly 100 new
+   repositories to one secret in a single change needs a larger
+   `--reconcile-timeout` (for example `--reconcile-timeout=3m`).
 
 Steady-state reconciles (no spec drift, or drift confined to
 description/secrets) cost a handful of API calls regardless of org

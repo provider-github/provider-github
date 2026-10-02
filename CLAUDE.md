@@ -77,7 +77,7 @@ Then register the new API in `apis/github.go` (or the appropriate group aggregat
 ### API types (CRDs)
 
 - `apis/v1alpha1/` — `ProviderConfig`, `ProviderConfigUsage`, `StoreConfig` (provider-level config).
-- `apis/organizations/v1alpha1/` — managed resources: `Organization`, `Team`, `Repository`, `Membership`. Hand-written `*_types.go` plus generated `zz_generated_*.go` (deepcopy, managed, managedlist, resolvers).
+- `apis/organizations/v1alpha1/` — managed resources: `Organization`, `Team`, `Repository`, `Membership`, `ActionsSecretAccess`, `DependabotSecretAccess`. Hand-written `*_types.go` plus generated `zz_generated_*.go` (deepcopy, managed, managedlist, resolvers).
 - `apis/generate.go` drives codegen with `controller-gen` (CRDs → `package/crds/`) and `angryjet` (crossplane-runtime methodsets). Always run `make generate` after editing `*_types.go`.
 
 ### Controllers

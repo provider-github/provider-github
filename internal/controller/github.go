@@ -22,7 +22,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/crossplane/provider-github/internal/controller/actionssecretaccess"
 	"github.com/crossplane/provider-github/internal/controller/config"
+	"github.com/crossplane/provider-github/internal/controller/dependabotsecretaccess"
 	"github.com/crossplane/provider-github/internal/controller/membership"
 	"github.com/crossplane/provider-github/internal/controller/organization"
 	"github.com/crossplane/provider-github/internal/controller/organizationvariable"
@@ -45,6 +47,8 @@ func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitM
 		organizationvariable.Setup,
 		runnergroup.Setup,
 		organizationwebhook.Setup,
+		actionssecretaccess.Setup,
+		dependabotsecretaccess.Setup,
 	} {
 		if err := setup(mgr, o, metrics); err != nil {
 			return err
@@ -64,6 +68,8 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		organizationvariable.SetupWithTimeout,
 		runnergroup.SetupWithTimeout,
 		organizationwebhook.SetupWithTimeout,
+		actionssecretaccess.SetupWithTimeout,
+		dependabotsecretaccess.SetupWithTimeout,
 	}
 
 	for _, setup := range setupFuncs {

@@ -85,10 +85,14 @@ type OrgSecret struct {
 
 type SecretConfiguration struct {
 	// List of GitHub Actions secrets
+	//
+	// DEPRECATED, use ActionsSecretAccess instead.
 	// +optional
 	ActionsSecrets []OrgSecret `json:"actionsSecrets,omitempty"`
 
 	// List of Dependabot secrets
+	//
+	// DEPRECATED, use DependabotSecretAccess instead.
 	// +optional
 	DependabotSecrets []OrgSecret `json:"dependabotSecrets,omitempty"`
 }
