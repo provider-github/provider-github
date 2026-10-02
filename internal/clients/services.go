@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 type Services struct {
@@ -37,13 +37,12 @@ type ActionsClient interface {
 	SetEnabledReposInOrg(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
 	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
+	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 	GetOrgVariable(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error)
-	CreateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
-	UpdateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
+	CreateOrgVariable(ctx context.Context, org string, variable github.ActionsCreateOrgVariableRequest) (*github.Response, error)
+	UpdateOrgVariable(ctx context.Context, org, name string, variable github.ActionsUpdateOrgVariableRequest) (*github.Response, error)
 	DeleteOrgVariable(ctx context.Context, org, name string) (*github.Response, error)
 	ListSelectedReposForOrgVariable(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
 	ListOrganizationRunnerGroups(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error)
 	CreateOrganizationRunnerGroup(ctx context.Context, org string, createReq github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
 	UpdateOrganizationRunnerGroup(ctx context.Context, org string, groupID int64, updateReq github.UpdateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
@@ -55,7 +54,7 @@ type ActionsClient interface {
 type DependabotClient interface {
 	GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	ListSelectedReposForOrgSecret(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error)
+	SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 }
 
 type OrganizationsClient interface {
@@ -98,7 +97,7 @@ type RepositoriesClient interface {
 	ListCollaborators(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
 	ListInvitations(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error)
 	Create(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
-	CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
+	CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
 	CreateFork(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
 	AddCollaborator(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	RemoveCollaborator(ctx context.Context, owner, repo, user string) (*github.Response, error)
@@ -115,10 +114,10 @@ type RepositoriesClient interface {
 	RemoveBranchProtection(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 	RequireSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
 	OptionalSignaturesOnProtectedBranch(ctx context.Context, owner, repo, branch string) (*github.Response, error)
-	GetAllRulesets(ctx context.Context, owner, repo string, includesParents bool) ([]*github.Ruleset, *github.Response, error)
-	GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error)
-	CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
-	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error)
+	GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error)
+	CreateRuleset(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
+	UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
 	DeleteRuleset(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 	ReplaceAllTopics(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
 }

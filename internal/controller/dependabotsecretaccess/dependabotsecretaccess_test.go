@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -72,7 +72,7 @@ func listRepos(names ...string) func(context.Context, string, string, *github.Li
 	return func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 		list := &github.SelectedReposList{}
 		for _, n := range names {
-			list.Repositories = append(list.Repositories, &github.Repository{Name: github.String(n)})
+			list.Repositories = append(list.Repositories, &github.Repository{Name: github.Ptr(n)})
 		}
 		return list, fake.GenerateEmptyResponse(), nil
 	}
@@ -235,9 +235,9 @@ func TestObserve_Selected_Pagination_CollectsAllPages(t *testing.T) {
 			if opts.Page == 0 {
 				resp := fake.GenerateEmptyResponse()
 				resp.NextPage = 2
-				return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.String(testRepoA)}}}, resp, nil
+				return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.Ptr(testRepoA)}}}, resp, nil
 			}
-			return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.String(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
+			return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.Ptr(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
 		},
 	}, nil)
 
@@ -282,14 +282,14 @@ func listSelected(ids map[string]int64) func(context.Context, string, string, *g
 	return func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 		list := &github.SelectedReposList{}
 		for n, id := range ids {
-			list.Repositories = append(list.Repositories, &github.Repository{ID: github.Int64(id), Name: github.String(n)})
+			list.Repositories = append(list.Repositories, &github.Repository{ID: github.Ptr(id), Name: github.Ptr(n)})
 		}
 		return list, fake.GenerateEmptyResponse(), nil
 	}
 }
 
-func recordSet(got *github.DependabotSecretsSelectedRepoIDs) func(context.Context, string, string, github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
-	return func(_ context.Context, _, _ string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
+func recordSet(got *[]int64) func(context.Context, string, string, []int64) (*github.Response, error) {
+	return func(_ context.Context, _, _ string, ids []int64) (*github.Response, error) {
 		*got = ids
 		return fake.GenerateEmptyResponse(), nil
 	}
@@ -307,7 +307,7 @@ func repoGetMustNotBeCalled(t *testing.T) *fake.MockRepositoriesClient {
 // GitHub's Set endpoint takes repository IDs, so Update must resolve spec
 // names the secret does not yet have and send exactly the spec IDs in spec order.
 func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listRepos(),
 		MockSetSelectedReposForOrgSecret:  recordSet(&got),
@@ -315,7 +315,7 @@ func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			ids := map[string]int64{testRepoA: testRepoAID, testRepoB: testRepoBID}
-			return &github.Repository{ID: github.Int64(ids[repo]), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(ids[repo]), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(dependabot, repos)
@@ -323,7 +323,7 @@ func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
 	if _, err := e.Update(context.Background(), newCR(visibilitySelected, testRepoA, testRepoB)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID, testRepoBID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -332,7 +332,7 @@ func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
 // removing an extra repository must take every ID from the list and cost no
 // Repositories.Get, or a large secret cannot converge within the reconcile timeout.
 func TestUpdate_RemoveExtraRepo_NoRepoGet(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID, testRepoB: testRepoBID, "repo-extra": 1}),
 		MockSetSelectedReposForOrgSecret:  recordSet(&got),
@@ -342,7 +342,7 @@ func TestUpdate_RemoveExtraRepo_NoRepoGet(t *testing.T) {
 	if _, err := e.Update(context.Background(), newCR(visibilitySelected, testRepoA, testRepoB)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID, testRepoBID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -350,7 +350,7 @@ func TestUpdate_RemoveExtraRepo_NoRepoGet(t *testing.T) {
 // Adding one repository must cost exactly one Repositories.Get, for that name
 // only; the IDs of repositories already selected come from the list.
 func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	var gets []string
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID}),
@@ -359,7 +359,7 @@ func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			gets = append(gets, repo)
-			return &github.Repository{ID: github.Int64(testRepoBID), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoBID), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(dependabot, repos)
@@ -370,7 +370,7 @@ func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
 	if diff := cmp.Diff([]string{testRepoB}, gets); diff != "" {
 		t.Errorf("Repositories.Get names: -want, +got:\n%s", diff)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID, testRepoBID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -378,15 +378,15 @@ func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
 // IDs on later list pages must be used too; otherwise every repository past
 // the first 100 would cost a Repositories.Get on each Update.
 func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: func(_ context.Context, _, _ string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 			if opts.Page == 0 {
 				resp := fake.GenerateEmptyResponse()
 				resp.NextPage = 2
-				return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Int64(testRepoAID), Name: github.String(testRepoA)}}}, resp, nil
+				return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Ptr(testRepoAID), Name: github.Ptr(testRepoA)}}}, resp, nil
 			}
-			return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Int64(testRepoBID), Name: github.String(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
+			return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Ptr(testRepoBID), Name: github.Ptr(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
 		},
 		MockSetSelectedReposForOrgSecret: recordSet(&got),
 	}
@@ -395,7 +395,7 @@ func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
 	if _, err := e.Update(context.Background(), newCR(visibilitySelected, testRepoA, testRepoB)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID, testRepoBID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -405,7 +405,7 @@ func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
 // its ID from the list: no Repositories.Get, or every Update pays for a lookup
 // GitHub resolves to the same repository.
 func TestUpdate_NameCaseDiffers_IDFromListNoRepoGet(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{"Repo-A": testRepoAID, "repo-extra": 1}),
 		MockSetSelectedReposForOrgSecret:  recordSet(&got),
@@ -415,7 +415,7 @@ func TestUpdate_NameCaseDiffers_IDFromListNoRepoGet(t *testing.T) {
 	if _, err := e.Update(context.Background(), newCR(visibilitySelected, "REPO-A")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -424,7 +424,7 @@ func TestUpdate_NameCaseDiffers_IDFromListNoRepoGet(t *testing.T) {
 // to GitHub once, with its ID taken from the list, so Update writes the same
 // set Observe compares against.
 func TestUpdate_DuplicateSpecRepo_SetOnceNoRepoGet(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID, "repo-extra": 1}),
 		MockSetSelectedReposForOrgSecret:  recordSet(&got),
@@ -434,7 +434,7 @@ func TestUpdate_DuplicateSpecRepo_SetOnceNoRepoGet(t *testing.T) {
 	if _, err := e.Update(context.Background(), newCR(visibilitySelected, testRepoA, "Repo-A")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -442,7 +442,7 @@ func TestUpdate_DuplicateSpecRepo_SetOnceNoRepoGet(t *testing.T) {
 // A new repository declared twice must cost one Repositories.Get, for its first
 // spelling, and be sent to GitHub once: the declared list is a set.
 func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
-	var got github.DependabotSecretsSelectedRepoIDs
+	var got []int64
 	var gets []string
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{testRepoA: testRepoAID}),
@@ -451,7 +451,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			gets = append(gets, repo)
-			return &github.Repository{ID: github.Int64(testRepoBID), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoBID), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(dependabot, repos)
@@ -462,7 +462,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 	if diff := cmp.Diff([]string{testRepoB}, gets); diff != "" {
 		t.Errorf("Repositories.Get names: -want, +got:\n%s", diff)
 	}
-	if diff := cmp.Diff(github.DependabotSecretsSelectedRepoIDs{testRepoAID, testRepoBID}, got); diff != "" {
+	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SetSelectedReposForOrgSecret IDs: -want, +got:\n%s", diff)
 	}
 }
@@ -474,7 +474,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
 	dependabot := &fake.MockDependabotClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{"new-name": testRepoAID, testRepoB: testRepoBID}),
-		MockSetSelectedReposForOrgSecret: func(_ context.Context, _, _ string, _ github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
+		MockSetSelectedReposForOrgSecret: func(_ context.Context, _, _ string, _ []int64) (*github.Response, error) {
 			t.Error("SetSelectedReposForOrgSecret was called, want no call")
 			return fake.GenerateEmptyResponse(), nil
 		},
@@ -482,7 +482,7 @@ func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, _ string) (*github.Repository, *github.Response, error) {
 			// GitHub redirects the old name to the renamed repository.
-			return &github.Repository{ID: github.Int64(testRepoAID), Name: github.String("new-name")}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoAID), Name: github.Ptr("new-name")}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(dependabot, repos)

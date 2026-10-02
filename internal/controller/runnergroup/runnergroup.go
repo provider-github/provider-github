@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -182,10 +182,10 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
 	req := github.CreateRunnerGroupRequest{
-		Name:                     github.String(meta.GetExternalName(cr)),
-		Visibility:               github.String(p.Visibility),
-		AllowsPublicRepositories: github.Bool(p.AllowsPublicRepositories),
-		RestrictedToWorkflows:    github.Bool(len(want) > 0),
+		Name:                     github.Ptr(meta.GetExternalName(cr)),
+		Visibility:               github.Ptr(p.Visibility),
+		AllowsPublicRepositories: github.Ptr(p.AllowsPublicRepositories),
+		RestrictedToWorkflows:    github.Ptr(len(want) > 0),
 		SelectedWorkflows:        want,
 	}
 	if p.Visibility == visibilitySelected {
@@ -219,10 +219,10 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
 	req := github.UpdateRunnerGroupRequest{
-		Name:                     github.String(meta.GetExternalName(cr)),
-		Visibility:               github.String(p.Visibility),
-		AllowsPublicRepositories: github.Bool(p.AllowsPublicRepositories),
-		RestrictedToWorkflows:    github.Bool(len(want) > 0),
+		Name:                     github.Ptr(meta.GetExternalName(cr)),
+		Visibility:               github.Ptr(p.Visibility),
+		AllowsPublicRepositories: github.Ptr(p.AllowsPublicRepositories),
+		RestrictedToWorkflows:    github.Ptr(len(want) > 0),
 		SelectedWorkflows:        want,
 	}
 	if _, _, err := c.github.Actions.UpdateOrganizationRunnerGroup(ctx, p.Org, id, req); err != nil {

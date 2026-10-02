@@ -19,7 +19,7 @@ package telemetry
 import (
 	"net/http"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	ctrl "sigs.k8s.io/controller-runtime"

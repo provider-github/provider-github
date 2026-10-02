@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 
 	"github.com/crossplane/provider-github/internal/clients/fake"
 	"github.com/crossplane/provider-github/internal/telemetry"

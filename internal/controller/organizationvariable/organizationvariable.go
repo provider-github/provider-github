@@ -21,7 +21,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -202,7 +202,12 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, err
 	}
 
-	_, err = c.github.Actions.UpdateOrgVariable(ctx, cr.Spec.ForProvider.Org, v)
+	_, err = c.github.Actions.UpdateOrgVariable(ctx, cr.Spec.ForProvider.Org, v.Name, github.ActionsUpdateOrgVariableRequest{
+		Name:                  &v.Name,
+		Value:                 &v.Value,
+		Visibility:            &v.Visibility,
+		SelectedRepositoryIDs: v.SelectedRepositoryIDs,
+	})
 	if err != nil {
 		return managed.ExternalUpdate{}, err
 	}
@@ -227,22 +232,21 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 // buildActionsVariable produces the payload for CreateOrgVariable /
 // UpdateOrgVariable. For visibility=selected, it resolves repository
 // names to IDs so they're sent in the same request.
-func buildActionsVariable(ctx context.Context, gh *ghclient.Client, cr *v1alpha1.OrganizationVariable) (*github.ActionsVariable, error) {
+func buildActionsVariable(ctx context.Context, gh *ghclient.Client, cr *v1alpha1.OrganizationVariable) (github.ActionsCreateOrgVariableRequest, error) {
 	visibility := cr.Spec.ForProvider.Visibility
-	v := &github.ActionsVariable{
+	v := github.ActionsCreateOrgVariableRequest{
 		Name:       meta.GetExternalName(cr),
 		Value:      cr.Spec.ForProvider.Value,
-		Visibility: &visibility,
+		Visibility: visibility,
 	}
 
 	if visibility == visibilitySelected {
 		resolver := ghclient.NewRepoIDResolver(gh, cr.Spec.ForProvider.Org)
 		ids, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
 		if err != nil {
-			return nil, err
+			return github.ActionsCreateOrgVariableRequest{}, err
 		}
-		repoIDs := github.SelectedRepoIDs(ids)
-		v.SelectedRepositoryIDs = &repoIDs
+		v.SelectedRepositoryIDs = ids
 	}
 
 	return v, nil
