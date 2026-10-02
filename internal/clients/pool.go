@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 // cooldownFloor is the minimum amount of time we will skip a credential

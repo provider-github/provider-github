@@ -31,7 +31,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 var (
@@ -326,8 +326,8 @@ func TestObserve(t *testing.T) {
 // re-Adding repos that are already enabled.
 func TestListEnabledReposInOrg_Paginates(t *testing.T) {
 	pages := [][]*github.Repository{
-		{{Name: github.String("a")}, {Name: github.String("b")}},
-		{{Name: github.String("c")}},
+		{{Name: github.Ptr("a")}, {Name: github.Ptr("b")}},
+		{{Name: github.Ptr("c")}},
 	}
 	calls := 0
 	gh := &ghclient.Client{
@@ -375,7 +375,7 @@ func TestSetEnabledReposForActions_SkipsWhenAlreadyMatching(t *testing.T) {
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					return &github.ActionsEnabledOnOrgRepos{
-						Repositories: []*github.Repository{{Name: github.String("r1")}, {Name: github.String("r2")}},
+						Repositories: []*github.Repository{{Name: github.Ptr("r1")}, {Name: github.Ptr("r2")}},
 					}, fake.GenerateEmptyResponse(), nil
 				},
 				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {
@@ -410,7 +410,7 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					// Org currently has only r1 (with ID, as real GitHub returns); CR wants r1+r2.
 					return &github.ActionsEnabledOnOrgRepos{
-						Repositories: []*github.Repository{{Name: github.String("r1"), ID: &idR1}},
+						Repositories: []*github.Repository{{Name: github.Ptr("r1"), ID: &idR1}},
 					}, fake.GenerateEmptyResponse(), nil
 				},
 				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {
@@ -423,7 +423,7 @@ func TestSetEnabledReposForActions_CallsSetWithResolvedIDs(t *testing.T) {
 				MockGet: func(ctx context.Context, owner, repoName string) (*github.Repository, *github.Response, error) {
 					lookedUp = append(lookedUp, repoName)
 					if repoName == "r2" {
-						return &github.Repository{ID: &idR2, Name: github.String("r2")}, fake.GenerateEmptyResponse(), nil
+						return &github.Repository{ID: &idR2, Name: github.Ptr("r2")}, fake.GenerateEmptyResponse(), nil
 					}
 					t.Fatalf("unexpected repo lookup: %s (cache seeding should have made this unnecessary)", repoName)
 					return nil, nil, nil
@@ -463,7 +463,7 @@ func TestSetEnabledReposForActions_PaginationErrorMidWalk(t *testing.T) {
 						// Page 1: return some repos and signal there's a next page.
 						r := fake.GenerateEmptyResponse()
 						r.NextPage = 2
-						return &github.ActionsEnabledOnOrgRepos{Repositories: []*github.Repository{{Name: github.String("r1")}}}, r, nil
+						return &github.ActionsEnabledOnOrgRepos{Repositories: []*github.Repository{{Name: github.Ptr("r1")}}}, r, nil
 					}
 					// Page 2: simulate an API error mid-walk.
 					return nil, fake.GenerateEmptyResponse(), errors.New("github: 503 service unavailable")
@@ -499,8 +499,8 @@ func TestSetEnabledReposForActions_SetErrorPropagates(t *testing.T) {
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					return &github.ActionsEnabledOnOrgRepos{
 						Repositories: []*github.Repository{
-							{Name: github.String("r1"), ID: github.Int64(11)},
-							{Name: github.String("r2"), ID: github.Int64(22)},
+							{Name: github.Ptr("r1"), ID: github.Ptr(int64(11))},
+							{Name: github.Ptr("r2"), ID: github.Ptr(int64(22))},
 						},
 					}, fake.GenerateEmptyResponse(), nil
 				},
@@ -529,7 +529,7 @@ func TestSetEnabledReposForActions_GetErrorPropagates(t *testing.T) {
 			Actions: &fake.MockActionsClient{
 				MockListEnabledReposInOrg: func(ctx context.Context, owner string, opts *github.ListOptions) (*github.ActionsEnabledOnOrgRepos, *github.Response, error) {
 					return &github.ActionsEnabledOnOrgRepos{
-						Repositories: []*github.Repository{{Name: github.String("r1"), ID: github.Int64(11)}},
+						Repositories: []*github.Repository{{Name: github.Ptr("r1"), ID: github.Ptr(int64(11))}},
 					}, fake.GenerateEmptyResponse(), nil
 				},
 				MockSetEnabledReposInOrg: func(ctx context.Context, owner string, ids []int64) (*github.Response, error) {

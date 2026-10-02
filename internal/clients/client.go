@@ -20,7 +20,7 @@ import (
 	"context"
 
 	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 // Client is the GitHub client controllers use. It wraps a *Services with
@@ -310,7 +310,7 @@ func (c *repositoriesClient) ListInvitations(ctx context.Context, owner, repo st
 	})
 }
 
-func (c *repositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
+func (c *repositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateFromTemplate", func() (*github.Repository, *github.Response, error) {
 		return c.RepositoriesClient.CreateFromTemplate(ctx, templateOwner, templateRepo, templateRepoReq)
 	})
@@ -406,26 +406,26 @@ func (c *repositoriesClient) OptionalSignaturesOnProtectedBranch(ctx context.Con
 	return resp, err
 }
 
-func (c *repositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, includesParents bool) ([]*github.Ruleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetAllRulesets", func() ([]*github.Ruleset, *github.Response, error) {
-		return c.RepositoriesClient.GetAllRulesets(ctx, owner, repo, includesParents)
+func (c *repositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetAllRulesets", func() ([]*github.RepositoryRuleset, *github.Response, error) {
+		return c.RepositoriesClient.GetAllRulesets(ctx, owner, repo, opts)
 	})
 }
 
-func (c *repositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetRuleset", func() (*github.Ruleset, *github.Response, error) {
+func (c *repositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.GetRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
 		return c.RepositoriesClient.GetRuleset(ctx, owner, repo, rulesetID, includesParents)
 	})
 }
 
-func (c *repositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateRuleset", func() (*github.Ruleset, *github.Response, error) {
+func (c *repositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.CreateRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
 		return c.RepositoriesClient.CreateRuleset(ctx, owner, repo, ruleset)
 	})
 }
 
-func (c *repositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
-	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.UpdateRuleset", func() (*github.Ruleset, *github.Response, error) {
+func (c *repositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Repositories.UpdateRuleset", func() (*github.RepositoryRuleset, *github.Response, error) {
 		return c.RepositoriesClient.UpdateRuleset(ctx, owner, repo, rulesetID, ruleset)
 	})
 }
@@ -547,7 +547,7 @@ func (c *actionsClient) ListSelectedReposForOrgSecret(ctx context.Context, org, 
 	})
 }
 
-func (c *actionsClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
+func (c *actionsClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error) {
 	resp, err := c.ActionsClient.SetSelectedReposForOrgSecret(ctx, org, name, ids)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.SetSelectedReposForOrgSecret", resp, err)
 	return resp, err
@@ -559,14 +559,14 @@ func (c *actionsClient) GetOrgVariable(ctx context.Context, org, name string) (*
 	})
 }
 
-func (c *actionsClient) CreateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
+func (c *actionsClient) CreateOrgVariable(ctx context.Context, org string, variable github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
 	resp, err := c.ActionsClient.CreateOrgVariable(ctx, org, variable)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.CreateOrgVariable", resp, err)
 	return resp, err
 }
 
-func (c *actionsClient) UpdateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
-	resp, err := c.ActionsClient.UpdateOrgVariable(ctx, org, variable)
+func (c *actionsClient) UpdateOrgVariable(ctx context.Context, org, name string, variable github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
+	resp, err := c.ActionsClient.UpdateOrgVariable(ctx, org, name, variable)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.UpdateOrgVariable", resp, err)
 	return resp, err
 }
@@ -581,12 +581,6 @@ func (c *actionsClient) ListSelectedReposForOrgVariable(ctx context.Context, org
 	return recordRateLimit(ctx, c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.ListSelectedReposForOrgVariable", func() (*github.SelectedReposList, *github.Response, error) {
 		return c.ActionsClient.ListSelectedReposForOrgVariable(ctx, org, name, opts)
 	})
-}
-
-func (c *actionsClient) SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
-	resp, err := c.ActionsClient.SetSelectedReposForOrgVariable(ctx, org, name, ids)
-	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Actions.SetSelectedReposForOrgVariable", resp, err)
-	return resp, err
 }
 
 func (c *actionsClient) ListOrganizationRunnerGroups(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
@@ -638,7 +632,7 @@ func (c *dependabotClient) ListSelectedReposForOrgSecret(ctx context.Context, or
 	})
 }
 
-func (c *dependabotClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
+func (c *dependabotClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error) {
 	resp, err := c.DependabotClient.SetSelectedReposForOrgSecret(ctx, org, name, ids)
 	recordResponse(c.metrics, c.org, c.appID, c.installationID, c.cacheKey, "Dependabot.SetSelectedReposForOrgSecret", resp, err)
 	return resp, err

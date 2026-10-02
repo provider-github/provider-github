@@ -42,7 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/gosimple/slug"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -747,8 +747,16 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 			username := strings.ToLower(*m.Login)
 			uToPermission[username] = "pull"
 
+			perms := m.GetPermissions()
+			granted := map[string]bool{
+				"admin":    perms.GetAdmin(),
+				"maintain": perms.GetMaintain(),
+				"push":     perms.GetPush(),
+				"triage":   perms.GetTriage(),
+				"pull":     perms.GetPull(),
+			}
 			for _, p := range permissionsOrdered {
-				if m.Permissions[p] {
+				if granted[p] {
 					uToPermission[username] = p
 					break
 				}
@@ -771,7 +779,7 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 // constant even on monorepos with thousands of branches.
 func listProtectedBranches(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Branch, error) {
 	opts := &github.BranchListOptions{
-		Protected:   github.Bool(true),
+		Protected:   github.Ptr(true),
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
 	var protected []*github.Branch
@@ -1054,7 +1062,7 @@ func teamHasWriteAccess(ctx context.Context, gh *ghclient.Client, org, slug, own
 		return false, err
 	}
 	permissions := teamRepo.GetPermissions()
-	return permissions["push"] || permissions["maintain"] || permissions[repoPermissionAdmin], nil
+	return permissions.GetPush() || permissions.GetMaintain() || permissions.GetAdmin(), nil
 }
 
 func withoutBranchProtectionActors(rules map[string]v1alpha1.BranchProtectionRule, drop []branchProtectionActorRef) map[string]v1alpha1.BranchProtectionRule {
@@ -1695,8 +1703,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	case cr.Spec.ForProvider.CreateFromTemplate != nil:
 		templateOwner := cr.Spec.ForProvider.CreateFromTemplate.Owner
 		templateRepo := cr.Spec.ForProvider.CreateFromTemplate.Repo
-		_, _, err = c.github.Repositories.CreateFromTemplate(ctx, templateOwner, templateRepo, &github.TemplateRepoRequest{
-			Name:               &name,
+		_, _, err = c.github.Repositories.CreateFromTemplate(ctx, templateOwner, templateRepo, github.TemplateRepoRequest{
+			Name:               name,
 			Owner:              &cr.Spec.ForProvider.Org,
 			Description:        &cr.Spec.ForProvider.Description,
 			IncludeAllBranches: &cr.Spec.ForProvider.CreateFromTemplate.IncludeAllBranches,
@@ -1789,7 +1797,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
-			_, _, err := c.github.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, name, crRepoRulesToRulesConfig(rule))
+			_, _, err := c.github.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, name, *crRepoRulesToRulesConfig(rule))
 			if err != nil {
 				return managed.ExternalCreation{}, err
 			}
@@ -2302,12 +2310,12 @@ func handleBranchProtectionSignature(ctx context.Context, gh *ghclient.Client, o
 
 // getRepositoryRules retrieves all the rules for a given GitHub repository.
 // It uses pagination to handle large numbers of rules, fetching 100 rules per API call.
-func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*github.Ruleset, error) {
+func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo string) ([]*github.RepositoryRuleset, error) {
 	opt := &github.ListOptions{PerPage: 100}
-	var allRules []*github.Ruleset
+	var allRules []*github.RepositoryRuleset
 
 	for {
-		rules, resp, err := gh.Repositories.GetAllRulesets(ctx, org, repo, true)
+		rules, resp, err := gh.Repositories.GetAllRulesets(ctx, org, repo, &github.RepositoryListRulesetsOptions{IncludesParents: github.Ptr(true)})
 		if err != nil {
 			return nil, err
 		}
@@ -2419,7 +2427,7 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]
 // branch rules fetched from the GitHub API.
 //
 //nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.Ruleset) (map[string]v1alpha1.RepositoryRuleset, error) {
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
 	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
 
 	for _, rule := range ghRulesets {
@@ -2427,9 +2435,12 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if err != nil {
 			return nil, err
 		}
+		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
+			return nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+		}
 		ruleset := v1alpha1.RepositoryRuleset{
-			Target:      util.ToStringPtr(rule.GetTarget()),
-			Enforcement: &rule.Enforcement,
+			Target:      util.ToStringPtr(string(pointer.Deref(rule.Target, ""))),
+			Enforcement: (*string)(&rule.Enforcement),
 			Name:        rule.Name,
 
 			Conditions: &v1alpha1.RulesetConditions{
@@ -2466,78 +2477,64 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 				ruleset.BypassActors = make([]*v1alpha1.RulesetByPassActors, len(rRuleset.BypassActors))
 				for i, actor := range rRuleset.BypassActors {
 					ruleset.BypassActors[i] = &v1alpha1.RulesetByPassActors{
-						ActorType:  actor.ActorType,
+						ActorType:  (*string)(actor.ActorType),
 						ActorId:    actor.ActorID,
-						BypassMode: actor.BypassMode,
+						BypassMode: (*string)(actor.BypassMode),
 					}
 				}
 				util.SortRulesBypassActors(ruleset.BypassActors)
 			}
 
 		}
-		if rRuleset != nil {
-			for _, rule := range rRuleset.Rules {
-				switch rule.Type {
-				case "creation":
-					ruleset.Rules.Creation = util.ToBoolPtr(true)
-				case "deletion":
-					ruleset.Rules.Deletion = util.ToBoolPtr(true)
-				case "required_linear_history":
-					ruleset.Rules.RequiredLinearHistory = util.ToBoolPtr(true)
-				case "required_signatures":
-					ruleset.Rules.RequiredSignatures = util.ToBoolPtr(true)
-				case "non_fast_forward":
-					ruleset.Rules.NonFastForward = util.ToBoolPtr(true)
-				case "update":
-					ruleset.Rules.Update = util.ToBoolPtr(true)
-				case "pull_request":
-					if rule.Parameters != nil {
-						params := github.PullRequestRuleParameters{}
-						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
-							return nil, err
-						}
-						ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
-							RequireCodeOwnerReview:         util.ToBoolPtr(params.RequireCodeOwnerReview),
-							RequireLastPushApproval:        util.ToBoolPtr(params.RequireLastPushApproval),
-							RequiredReviewThreadResolution: util.ToBoolPtr(params.RequiredReviewThreadResolution),
-							RequiredApprovingReviewCount:   util.ToIntPtr(params.RequiredApprovingReviewCount),
-							DismissStaleReviewsOnPush:      util.ToBoolPtr(params.DismissStaleReviewsOnPush),
-						}
-					}
-				case "required_deployments":
-					if rule.Parameters != nil {
-						params := github.RequiredDeploymentEnvironmentsRuleParameters{}
-						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
-							return nil, err
-						}
-						ruleset.Rules.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{
-							Environments: util.SortAndReturn(params.RequiredDeploymentEnvironments),
-						}
-					}
-				case "required_status_checks":
-					if rule.Parameters != nil {
-						params := github.RequiredStatusChecksRuleParameters{}
-						if err := json.Unmarshal(*rule.Parameters, &params); err != nil {
-							return nil, err
-						}
-						requiredStatusChecksParameters := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(params.RequiredStatusChecks))
-						for i, statusCheck := range params.RequiredStatusChecks {
-							requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
-								Context:       statusCheck.Context,
-								IntegrationId: statusCheck.IntegrationID,
-							}
-						}
-						util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
-
-						ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
-							StrictRequiredStatusChecksPolicy: util.ToBoolPtr(params.StrictRequiredStatusChecksPolicy),
-							RequiredStatusChecks:             requiredStatusChecksParameters,
-						}
+		if rRuleset != nil && rRuleset.Rules != nil {
+			rules := rRuleset.Rules
+			if rules.Creation != nil {
+				ruleset.Rules.Creation = util.ToBoolPtr(true)
+			}
+			if rules.Deletion != nil {
+				ruleset.Rules.Deletion = util.ToBoolPtr(true)
+			}
+			if rules.RequiredLinearHistory != nil {
+				ruleset.Rules.RequiredLinearHistory = util.ToBoolPtr(true)
+			}
+			if rules.RequiredSignatures != nil {
+				ruleset.Rules.RequiredSignatures = util.ToBoolPtr(true)
+			}
+			if rules.NonFastForward != nil {
+				ruleset.Rules.NonFastForward = util.ToBoolPtr(true)
+			}
+			if rules.Update != nil {
+				ruleset.Rules.Update = util.ToBoolPtr(true)
+			}
+			if params := rules.PullRequest; params != nil {
+				ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
+					RequireCodeOwnerReview:         util.ToBoolPtr(params.RequireCodeOwnerReview),
+					RequireLastPushApproval:        util.ToBoolPtr(params.RequireLastPushApproval),
+					RequiredReviewThreadResolution: util.ToBoolPtr(params.RequiredReviewThreadResolution),
+					RequiredApprovingReviewCount:   util.ToIntPtr(params.RequiredApprovingReviewCount),
+					DismissStaleReviewsOnPush:      util.ToBoolPtr(params.DismissStaleReviewsOnPush),
+				}
+			}
+			if params := rules.RequiredDeployments; params != nil {
+				ruleset.Rules.RequiredDeployments = &v1alpha1.RulesRequiredDeployments{
+					Environments: util.SortAndReturn(params.RequiredDeploymentEnvironments),
+				}
+			}
+			if params := rules.RequiredStatusChecks; params != nil {
+				requiredStatusChecksParameters := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(params.RequiredStatusChecks))
+				for i, statusCheck := range params.RequiredStatusChecks {
+					requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
+						Context:       statusCheck.Context,
+						IntegrationId: statusCheck.IntegrationID,
 					}
 				}
+				util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
 
+				ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
+					StrictRequiredStatusChecksPolicy: util.ToBoolPtr(params.StrictRequiredStatusChecksPolicy),
+					RequiredStatusChecks:             requiredStatusChecksParameters,
+				}
 			}
-
 		}
 
 		rulesToConfig[rule.Name] = ruleset
@@ -2547,25 +2544,57 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 
 }
 
+// unmanagedRuleTypes returns the sorted types of the rules in a ruleset that the
+// provider does not model. An update sends only the modelled rules, so GitHub would
+// drop these; the caller stops before anything is written. merge_queue, workflows
+// and the *_pattern rules are not listed: rulesets holding them are reconciled.
+func unmanagedRuleTypes(rules *github.RepositoryRulesetRules) []string {
+	if rules == nil {
+		return nil
+	}
+	present := map[github.RepositoryRuleType]bool{
+		github.RulesetRuleTypeCodeScanning:             rules.CodeScanning != nil,
+		github.RulesetRuleTypeCopilotCodeReview:        rules.CopilotCodeReview != nil,
+		github.RulesetRuleTypeFileExtensionRestriction: rules.FileExtensionRestriction != nil,
+		github.RulesetRuleTypeFilePathRestriction:      rules.FilePathRestriction != nil,
+		github.RulesetRuleTypeMaxFilePathLength:        rules.MaxFilePathLength != nil,
+		github.RulesetRuleTypeMaxFileSize:              rules.MaxFileSize != nil,
+		github.RulesetRuleTypeRepositoryCreate:         rules.RepositoryCreate != nil,
+		github.RulesetRuleTypeRepositoryDelete:         rules.RepositoryDelete != nil,
+		github.RulesetRuleTypeRepositoryName:           rules.RepositoryName != nil,
+		github.RulesetRuleTypeRepositoryTransfer:       rules.RepositoryTransfer != nil,
+		github.RulesetRuleTypeRepositoryVisibility:     rules.RepositoryVisibility != nil,
+	}
+	var types []string
+	for t, ok := range present {
+		if ok {
+			types = append(types, string(t))
+		}
+	}
+	slices.Sort(types)
+	return types
+}
+
 // crRepoRulesToRulesConfig transforms a RepositoryRuleset object from the Crossplane resource
 // into a Ruleset object that can be used with the GitHub API.
 //
 //nolint:gocyclo
-func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Ruleset {
-	githubRuleset := &github.Ruleset{
+func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.RepositoryRuleset {
+	githubRuleset := &github.RepositoryRuleset{
 		Name:        rule.Name,
-		Enforcement: *rule.Enforcement,
-		Target:      rule.Target,
+		Enforcement: github.RulesetEnforcement(*rule.Enforcement),
+		Target:      (*github.RulesetTarget)(rule.Target),
 	}
 
-	// If BypassActors is not nil, transform it into the github rule BypassActors
-	if rule.BypassActors != nil {
+	// If BypassActors is not empty, transform it into the github rule BypassActors.
+	// An empty list stays nil: go-github v62 omitted it from the request, v90 would send [].
+	if len(rule.BypassActors) > 0 {
 		githubBypassActors := make([]*github.BypassActor, len(rule.BypassActors))
 		for i, actor := range rule.BypassActors {
 			githubBypassActors[i] = &github.BypassActor{
 				ActorID:    actor.ActorId,
-				ActorType:  actor.ActorType,
-				BypassMode: actor.BypassMode,
+				ActorType:  (*github.BypassActorType)(actor.ActorType),
+				BypassMode: (*github.BypassMode)(actor.BypassMode),
 			}
 		}
 		githubRuleset.BypassActors = githubBypassActors
@@ -2573,8 +2602,8 @@ func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Ruleset {
 
 	// If Conditions is not nil, transform it into the github rule Conditions
 	if rule.Conditions != nil {
-		githubConditions := &github.RulesetConditions{
-			RefName: &github.RulesetRefConditionParameters{
+		githubConditions := &github.RepositoryRulesetConditions{
+			RefName: &github.RepositoryRulesetRefConditionParameters{
 				Include: rule.Conditions.RefName.Include,
 				Exclude: rule.Conditions.RefName.Exclude,
 			},
@@ -2583,96 +2612,61 @@ func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Ruleset {
 	}
 	// If Rules is not nil, transform it into the github rule Rules
 	if rule.Rules != nil {
-		githubRules := make([]*github.RepositoryRule, 0)
+		githubRules := github.RepositoryRulesetRules{}
 		if rule.Rules.RequiredStatusChecks != nil {
 			params := github.RequiredStatusChecksRuleParameters{
 				StrictRequiredStatusChecksPolicy: *rule.Rules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy,
 			}
-			requiredStatusChecks := make([]github.RuleRequiredStatusChecks, len(rule.Rules.RequiredStatusChecks.RequiredStatusChecks))
+			requiredStatusChecks := make([]*github.RuleStatusCheck, len(rule.Rules.RequiredStatusChecks.RequiredStatusChecks))
 			for i, statusCheck := range rule.Rules.RequiredStatusChecks.RequiredStatusChecks {
-				requiredStatusChecks[i] = github.RuleRequiredStatusChecks{
+				requiredStatusChecks[i] = &github.RuleStatusCheck{
 					Context:       statusCheck.Context,
 					IntegrationID: statusCheck.IntegrationId,
 				}
 			}
 			params.RequiredStatusChecks = requiredStatusChecks
-			paramsBytes, err := json.Marshal(params)
-			if err != nil {
-				return nil
-			}
-			rawParams := json.RawMessage(paramsBytes)
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type:       "required_status_checks",
-				Parameters: &rawParams,
-			})
+			githubRules.RequiredStatusChecks = &params
 		}
 
 		if *rule.Rules.Creation {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "creation",
-			})
+			githubRules.Creation = &github.EmptyRuleParameters{}
 		}
 
 		if *rule.Rules.Deletion {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "deletion",
-			})
+			githubRules.Deletion = &github.EmptyRuleParameters{}
 		}
 
 		if *rule.Rules.RequiredLinearHistory {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "required_linear_history",
-			})
+			githubRules.RequiredLinearHistory = &github.EmptyRuleParameters{}
 		}
 
 		if *rule.Rules.RequiredSignatures {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "required_signatures",
-			})
+			githubRules.RequiredSignatures = &github.EmptyRuleParameters{}
 		}
 		if *rule.Rules.NonFastForward {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "non_fast_forward",
-			})
+			githubRules.NonFastForward = &github.EmptyRuleParameters{}
 		}
 		if *rule.Rules.Update {
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type: "update",
-			})
+			githubRules.Update = &github.UpdateRuleParameters{}
 		}
 		if rule.Rules.PullRequest != nil {
-			params := github.PullRequestRuleParameters{
+			githubRules.PullRequest = &github.PullRequestRuleParameters{
 				DismissStaleReviewsOnPush:      *rule.Rules.PullRequest.DismissStaleReviewsOnPush,
 				RequireCodeOwnerReview:         *rule.Rules.PullRequest.RequireCodeOwnerReview,
 				RequireLastPushApproval:        *rule.Rules.PullRequest.RequireLastPushApproval,
 				RequiredReviewThreadResolution: *rule.Rules.PullRequest.RequiredReviewThreadResolution,
 				RequiredApprovingReviewCount:   *rule.Rules.PullRequest.RequiredApprovingReviewCount,
 			}
-			paramsBytes, err := json.Marshal(params)
-			if err != nil {
-				return nil
-			}
-			rawParams := json.RawMessage(paramsBytes)
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type:       "pull_request",
-				Parameters: &rawParams,
-			})
 		}
 		if rule.Rules.RequiredDeployments != nil {
-			params := github.RequiredDeploymentEnvironmentsRuleParameters{
+			githubRules.RequiredDeployments = &github.RequiredDeploymentsRuleParameters{
 				RequiredDeploymentEnvironments: rule.Rules.RequiredDeployments.Environments,
 			}
-			paramsBytes, err := json.Marshal(params)
-			if err != nil {
-				return nil
-			}
-			rawParams := json.RawMessage(paramsBytes)
-			githubRules = append(githubRules, &github.RepositoryRule{
-				Type:       "required_deployments",
-				Parameters: &rawParams,
-			})
 		}
-		githubRuleset.Rules = githubRules
+		// No rules stays nil: go-github v62 omitted an empty list from the request, v90 would send [].
+		if githubRules != (github.RepositoryRulesetRules{}) {
+			githubRuleset.Rules = &githubRules
+		}
 
 	}
 	return githubRuleset
@@ -2708,7 +2702,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	}
 	// Add the new rules
 	for _, rule := range toAdd {
-		_, _, err := gh.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, crRepoRulesToRulesConfig(rule))
+		_, _, err := gh.Repositories.CreateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, *crRepoRulesToRulesConfig(rule))
 		if err != nil {
 			return err
 		}
@@ -2716,7 +2710,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	// Update the existing rules
 	for name, rule := range toUpdate {
 		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
-		_, _, err := gh.Repositories.UpdateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID, crRepoRulesToRulesConfig(rule))
+		_, _, err := gh.Repositories.UpdateRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID, *crRepoRulesToRulesConfig(rule))
 		if err != nil {
 			return err
 		}
@@ -2726,7 +2720,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 
 // findRulesetIDByName iterates over a slice of GitHub Ruleset pointers and returns the ID of the ruleset
 // that matches the provided name. If no match is found, it returns an error.
-func findRulesetIDByName(rulesets []*github.Ruleset, name string) (int64, error) {
+func findRulesetIDByName(rulesets []*github.RepositoryRuleset, name string) (int64, error) {
 	for _, ruleset := range rulesets {
 		if ruleset.Name == name {
 			return *ruleset.ID, nil

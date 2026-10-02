@@ -90,7 +90,7 @@ Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube,
 
 ### GitHub client layer (`internal/clients/`)
 
-- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v62`. `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
+- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v90`. `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
 - `cached_services.go` — `NewCachedServices` parses creds in the format `appId,installationId,privateKeyPEM` (using `bradleyfalzon/ghinstallation/v2` for App auth) and keeps a process-wide map of `*Services` instances keyed by `GenerateCacheKey(creds)` (8-byte SHA-256 prefix), with a 50-minute TTL (GitHub App tokens expire at 60). `CleanupExpiredServices` is the periodic eviction routine called from `main`.
 - `client.go` — defines `Client`, the outer wrapper controllers use. Each per-service wrapper (`actionsClient`, `organizationsClient`, etc.) embeds the underlying service interface and records every response into `telemetry.RateLimitMetrics` (Prometheus) and the per-credential cooldown pool. `metrics` is nil-safe so unit tests can skip telemetry setup.
 - `pool.go` — process-wide `globalPool` of per-credential `AppQuota` snapshots (`Remaining` + `CooldownUntil` + `ConsecutiveFailures`). `recordResponse(cacheKey, resp, err)` handles three cases:

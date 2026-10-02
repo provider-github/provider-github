@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v62/github"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -216,7 +215,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		ids = append(ids, known[strings.ToLower(n)])
 	}
 
-	_, err = c.github.Dependabot.SetSelectedReposForOrgSecret(ctx, org, name, github.DependabotSecretsSelectedRepoIDs(ids))
+	_, err = c.github.Dependabot.SetSelectedReposForOrgSecret(ctx, org, name, ids)
 	return managed.ExternalUpdate{}, err
 }
 

@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 // ServicesCache caches *Services keyed by credential hash so that
@@ -125,7 +125,10 @@ func createNewServices(creds string) (*Services, error) {
 		return nil, err
 	}
 
-	ghclient := github.NewClient(&http.Client{Transport: itr})
+	ghclient, err := github.NewClient(github.WithHTTPClient(&http.Client{Transport: itr}))
+	if err != nil {
+		return nil, err
+	}
 
 	return &Services{
 		Actions:       ghclient.Actions,

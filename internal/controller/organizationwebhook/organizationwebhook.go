@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -308,12 +308,12 @@ func (c *external) desiredHook(ctx context.Context, cr *v1alpha1.OrganizationWeb
 	}
 	hook := &github.Hook{
 		Config: &github.HookConfig{
-			ContentType: github.String(p.ContentType),
-			InsecureSSL: github.String(insecureSsl),
-			URL:         github.String(p.Url),
+			ContentType: github.Ptr(p.ContentType),
+			InsecureSSL: github.Ptr(insecureSsl),
+			URL:         github.Ptr(p.Url),
 		},
 		Events: p.Events,
-		Active: github.Bool(pointer.Deref(p.Active, true)),
+		Active: github.Ptr(pointer.Deref(p.Active, true)),
 	}
 	if p.SecretKeyRef == nil {
 		return hook, "", nil
@@ -322,7 +322,7 @@ func (c *external) desiredHook(ctx context.Context, cr *v1alpha1.OrganizationWeb
 	if err != nil {
 		return nil, "", err
 	}
-	hook.Config.Secret = github.String(secret)
+	hook.Config.Secret = github.Ptr(secret)
 	return hook, secret, nil
 }
 

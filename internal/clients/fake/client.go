@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 )
 
 type MockActionsClient struct {
@@ -12,13 +12,12 @@ type MockActionsClient struct {
 	MockSetEnabledReposInOrg            func(ctx context.Context, owner string, repositoryIDs []int64) (*github.Response, error)
 	MockGetOrgSecret                    func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	MockListSelectedReposForOrgSecret   func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	MockSetSelectedReposForOrgSecret    func(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
+	MockSetSelectedReposForOrgSecret    func(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 	MockGetOrgVariable                  func(ctx context.Context, org, name string) (*github.ActionsVariable, *github.Response, error)
-	MockCreateOrgVariable               func(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
-	MockUpdateOrgVariable               func(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error)
+	MockCreateOrgVariable               func(ctx context.Context, org string, variable github.ActionsCreateOrgVariableRequest) (*github.Response, error)
+	MockUpdateOrgVariable               func(ctx context.Context, org, name string, variable github.ActionsUpdateOrgVariableRequest) (*github.Response, error)
 	MockDeleteOrgVariable               func(ctx context.Context, org, name string) (*github.Response, error)
 	MockListSelectedReposForOrgVariable func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	MockSetSelectedReposForOrgVariable  func(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error)
 	MockListOrganizationRunnerGroups    func(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error)
 	MockCreateOrganizationRunnerGroup   func(ctx context.Context, org string, createReq github.CreateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
 	MockUpdateOrganizationRunnerGroup   func(ctx context.Context, org string, groupID int64, updateReq github.UpdateRunnerGroupRequest) (*github.RunnerGroup, *github.Response, error)
@@ -43,7 +42,7 @@ func (m *MockActionsClient) ListSelectedReposForOrgSecret(ctx context.Context, o
 	return m.MockListSelectedReposForOrgSecret(ctx, org, name, opts)
 }
 
-func (m *MockActionsClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
+func (m *MockActionsClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error) {
 	return m.MockSetSelectedReposForOrgSecret(ctx, org, name, ids)
 }
 
@@ -51,12 +50,12 @@ func (m *MockActionsClient) GetOrgVariable(ctx context.Context, org, name string
 	return m.MockGetOrgVariable(ctx, org, name)
 }
 
-func (m *MockActionsClient) CreateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
+func (m *MockActionsClient) CreateOrgVariable(ctx context.Context, org string, variable github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
 	return m.MockCreateOrgVariable(ctx, org, variable)
 }
 
-func (m *MockActionsClient) UpdateOrgVariable(ctx context.Context, org string, variable *github.ActionsVariable) (*github.Response, error) {
-	return m.MockUpdateOrgVariable(ctx, org, variable)
+func (m *MockActionsClient) UpdateOrgVariable(ctx context.Context, org, name string, variable github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
+	return m.MockUpdateOrgVariable(ctx, org, name, variable)
 }
 
 func (m *MockActionsClient) DeleteOrgVariable(ctx context.Context, org, name string) (*github.Response, error) {
@@ -65,10 +64,6 @@ func (m *MockActionsClient) DeleteOrgVariable(ctx context.Context, org, name str
 
 func (m *MockActionsClient) ListSelectedReposForOrgVariable(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 	return m.MockListSelectedReposForOrgVariable(ctx, org, name, opts)
-}
-
-func (m *MockActionsClient) SetSelectedReposForOrgVariable(ctx context.Context, org, name string, ids github.SelectedRepoIDs) (*github.Response, error) {
-	return m.MockSetSelectedReposForOrgVariable(ctx, org, name, ids)
 }
 
 func (m *MockActionsClient) ListOrganizationRunnerGroups(ctx context.Context, org string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
@@ -98,7 +93,7 @@ func (m *MockActionsClient) SetRepositoryAccessRunnerGroup(ctx context.Context, 
 type MockDependabotClient struct {
 	MockGetOrgSecret                  func(ctx context.Context, org, name string) (*github.Secret, *github.Response, error)
 	MockListSelectedReposForOrgSecret func(ctx context.Context, org, name string, opts *github.ListOptions) (*github.SelectedReposList, *github.Response, error)
-	MockSetSelectedReposForOrgSecret  func(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error)
+	MockSetSelectedReposForOrgSecret  func(ctx context.Context, org, name string, ids []int64) (*github.Response, error)
 }
 
 func (m *MockDependabotClient) GetOrgSecret(ctx context.Context, org, name string) (*github.Secret, *github.Response, error) {
@@ -109,7 +104,7 @@ func (m *MockDependabotClient) ListSelectedReposForOrgSecret(ctx context.Context
 	return m.MockListSelectedReposForOrgSecret(ctx, org, name, opts)
 }
 
-func (m *MockDependabotClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids github.DependabotSecretsSelectedRepoIDs) (*github.Response, error) {
+func (m *MockDependabotClient) SetSelectedReposForOrgSecret(ctx context.Context, org, name string, ids []int64) (*github.Response, error) {
 	return m.MockSetSelectedReposForOrgSecret(ctx, org, name, ids)
 }
 
@@ -186,7 +181,7 @@ type MockRepositoriesClient struct {
 	MockListCollaborators                   func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error)
 	MockListInvitations                     func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error)
 	MockCreate                              func(ctx context.Context, org string, repo *github.Repository) (*github.Repository, *github.Response, error)
-	MockCreateFromTemplate                  func(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
+	MockCreateFromTemplate                  func(ctx context.Context, templateOwner, templateRepo string, templateRepoReq github.TemplateRepoRequest) (*github.Repository, *github.Response, error)
 	MockCreateFork                          func(ctx context.Context, owner, repo string, opts *github.RepositoryCreateForkOptions) (*github.Repository, *github.Response, error)
 	MockAddCollaborator                     func(ctx context.Context, owner, repo, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error)
 	MockRemoveCollaborator                  func(ctx context.Context, owner, repo, user string) (*github.Response, error)
@@ -203,10 +198,10 @@ type MockRepositoriesClient struct {
 	MockRemoveBranchProtection              func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
 	MockRequireSignaturesOnProtectedBranch  func(ctx context.Context, owner, repo, branch string) (*github.SignaturesProtectedBranch, *github.Response, error)
 	MockOptionalSignaturesOnProtectedBranch func(ctx context.Context, owner, repo, branch string) (*github.Response, error)
-	MockGetAllRulesets                      func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error)
-	MockGetRuleset                          func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error)
-	MockCreateRuleset                       func(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
-	MockUpdateRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error)
+	MockGetAllRulesets                      func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error)
+	MockGetRuleset                          func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error)
+	MockCreateRuleset                       func(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
+	MockUpdateRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error)
 	MockDeleteRuleset                       func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error)
 	MockReplaceAllTopics                    func(ctx context.Context, owner, repo string, topics []string) ([]string, *github.Response, error)
 }
@@ -227,7 +222,7 @@ func (m *MockRepositoriesClient) Create(ctx context.Context, org string, repo *g
 	return m.MockCreate(ctx, org, repo)
 }
 
-func (m *MockRepositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq *github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
+func (m *MockRepositoriesClient) CreateFromTemplate(ctx context.Context, templateOwner, templateRepo string, templateRepoReq github.TemplateRepoRequest) (*github.Repository, *github.Response, error) {
 	return m.MockCreateFromTemplate(ctx, templateOwner, templateRepo, templateRepoReq)
 }
 
@@ -303,19 +298,19 @@ func (m *MockRepositoriesClient) OptionalSignaturesOnProtectedBranch(ctx context
 	return m.MockOptionalSignaturesOnProtectedBranch(ctx, owner, repo, branch)
 }
 
-func (m *MockRepositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, includesParents bool) ([]*github.Ruleset, *github.Response, error) {
-	return m.MockGetAllRulesets(ctx, owner, repo)
+func (m *MockRepositoriesClient) GetAllRulesets(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+	return m.MockGetAllRulesets(ctx, owner, repo, opts)
 }
 
-func (m *MockRepositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+func (m *MockRepositoriesClient) GetRuleset(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 	return m.MockGetRuleset(ctx, owner, repo, rulesetID, includesParents)
 }
 
-func (m *MockRepositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+func (m *MockRepositoriesClient) CreateRuleset(ctx context.Context, owner, repo string, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
 	return m.MockCreateRuleset(ctx, owner, repo, ruleset)
 }
 
-func (m *MockRepositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+func (m *MockRepositoriesClient) UpdateRuleset(ctx context.Context, owner, repo string, rulesetID int64, ruleset github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
 	return m.MockUpdateRuleset(ctx, owner, repo, rulesetID, ruleset)
 }
 

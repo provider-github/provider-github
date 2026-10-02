@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
