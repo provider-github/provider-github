@@ -90,7 +90,7 @@ Important: in `Connect`, controllers call `ghclient.ResolveAndConnect(ctx, kube,
 
 ### GitHub client layer (`internal/clients/`)
 
-- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v90`. `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
+- `services.go` — defines narrow per-service interfaces (`ActionsClient`, `OrganizationsClient`, `TeamsClient`, `RepositoriesClient`, etc.) over `google/go-github/v90`, except `RulesetsClient`, which speaks the provider's own ruleset wire types (`rulesets/`). `Services` is a struct of those interfaces — the bag of service handles bound to one credential. `Is404(err)` is the canonical way to detect "not found" GitHub errors.
 - `cached_services.go` — `NewCachedServices` parses creds in the format `appId,installationId,privateKeyPEM` (using `bradleyfalzon/ghinstallation/v2` for App auth) and keeps a process-wide map of `*Services` instances keyed by `GenerateCacheKey(creds)` (8-byte SHA-256 prefix), with a 50-minute TTL (GitHub App tokens expire at 60). `CleanupExpiredServices` is the periodic eviction routine called from `main`.
 - `client.go` — defines `Client`, the outer wrapper controllers use. Each per-service wrapper (`actionsClient`, `organizationsClient`, etc.) embeds the underlying service interface and records every response into `telemetry.RateLimitMetrics` (Prometheus) and the per-credential cooldown pool. `metrics` is nil-safe so unit tests can skip telemetry setup.
 - `pool.go` — process-wide `globalPool` of per-credential `AppQuota` snapshots (`Remaining` + `CooldownUntil` + `ConsecutiveFailures`). `recordResponse(cacheKey, resp, err)` handles three cases:
@@ -127,6 +127,7 @@ The seventh, `github_repository_unreconcilable{organization, repository, dimensi
 - Linters enabled: `govet`, `gocyclo` (max 30), `gocritic`, `goconst`, `prealloc`, `unconvert`, `misspell`, `nakedret`. The `repository` controller has high complexity by design — `gocyclo:ignore`/`//nolint:gocyclo` is used judiciously.
 - Generated files (`zz_generated_*.go`, `package/crds/`) are committed; never hand-edit them.
 - All new managed resources must obtain their GitHub client via `ghclient.ResolveAndConnect`, never by calling `NewCachedServices` / `NewClient` directly — that's how they participate in the multi-app credential pool and quota-aware picking.
+- Repository rulesets are read and written with the provider's own types in `internal/clients/rulesets` (go-github transport, raw JSON per rule). They cover every rule and parameter GitHub accepts on a repository ruleset and keep every rule type GitHub returns, so `Observe` can stop on a ruleset holding a type the provider does not model. A managed ruleset belongs to the CR: an update sends exactly the rules and parameters built from it.
 
 ## Where to find more
 

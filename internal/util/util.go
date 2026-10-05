@@ -205,20 +205,44 @@ func SortRequiredStatusChecks(checks []*v1alpha1.RequiredStatusCheck) {
 }
 
 // SortRulesRequiredStatusChecks sorts a slice of RequiredStatusCheck pointers in-place
-// by the Context field in ascending order.
+// by the Context field in ascending order, then by IntegrationId with nil first.
 func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksParameters) {
 	sort.Slice(checks, func(i, j int) bool {
-		return checks[i].Context < checks[j].Context
+		a, b := checks[i], checks[j]
+		if a.Context != b.Context {
+			return a.Context < b.Context
+		}
+		if (a.IntegrationId == nil) != (b.IntegrationId == nil) {
+			return a.IntegrationId == nil
+		}
+		return a.IntegrationId != nil && *a.IntegrationId < *b.IntegrationId
 	})
 }
 
-// SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place
-// by the ActorId field in ascending order.
+// SortRulesCodeScanningTools sorts a slice of RulesCodeScanningTool pointers in-place
+// by the Tool field in ascending order.
+func SortRulesCodeScanningTools(tools []*v1alpha1.RulesCodeScanningTool) {
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Tool < tools[j].Tool
+	})
+}
+
+// SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place by
+// ActorType, then ActorId with nil first, then BypassMode.
 func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 	sort.Slice(actors, func(i, j int) bool {
-		return *actors[i].ActorId < *actors[j].ActorId
+		a, b := actors[i], actors[j]
+		if ta, tb := pointer.Deref(a.ActorType, ""), pointer.Deref(b.ActorType, ""); ta != tb {
+			return ta < tb
+		}
+		if (a.ActorId == nil) != (b.ActorId == nil) {
+			return a.ActorId == nil
+		}
+		if a.ActorId != nil && *a.ActorId != *b.ActorId {
+			return *a.ActorId < *b.ActorId
+		}
+		return pointer.Deref(a.BypassMode, "") < pointer.Deref(b.BypassMode, "")
 	})
-
 }
 
 // ToBoolPtr converts a boolean value to a pointer to a boolean value.
