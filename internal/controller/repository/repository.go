@@ -313,7 +313,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghRepositoryRules, _ := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
 
 		crRepositoryRulesToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
-		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules)
+		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
@@ -727,8 +727,6 @@ func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 	return tToPermission, nil
 }
 
-var permissionsOrdered = [...]string{"admin", "maintain", "push", "triage", "pull"}
-
 func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
 	uToPermission := make(map[string]string)
 
@@ -745,21 +743,19 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 
 		for _, m := range users {
 			username := strings.ToLower(*m.Login)
-			uToPermission[username] = "pull"
 
 			perms := m.GetPermissions()
-			granted := map[string]bool{
-				"admin":    perms.GetAdmin(),
-				"maintain": perms.GetMaintain(),
-				"push":     perms.GetPush(),
-				"triage":   perms.GetTriage(),
-				"pull":     perms.GetPull(),
-			}
-			for _, p := range permissionsOrdered {
-				if granted[p] {
-					uToPermission[username] = p
-					break
-				}
+			switch {
+			case perms.GetAdmin():
+				uToPermission[username] = "admin"
+			case perms.GetMaintain():
+				uToPermission[username] = "maintain"
+			case perms.GetPush():
+				uToPermission[username] = "push"
+			case perms.GetTriage():
+				uToPermission[username] = "triage"
+			default:
+				uToPermission[username] = "pull"
 			}
 		}
 
@@ -2424,10 +2420,11 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]
 }
 
 // getRepositoryRulesWithConfig creates a map of RepositoryRules based on the
-// branch rules fetched from the GitHub API.
+// branch rules fetched from the GitHub API. It checks for unmanaged rules only
+// in the rulesets named in crRulesets: those not named there are deleted, never updated.
 //
 //nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*github.RepositoryRuleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
 	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
 
 	for _, rule := range ghRulesets {
@@ -2435,8 +2432,10 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if err != nil {
 			return nil, err
 		}
-		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
-			return nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+		if _, inCR := crRulesets[rule.Name]; inCR {
+			if types := unmanagedRuleTypes(rRuleset.GetRules()); len(types) > 0 {
+				return nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+			}
 		}
 		ruleset := v1alpha1.RepositoryRuleset{
 			Target:      util.ToStringPtr(string(pointer.Deref(rule.Target, ""))),
@@ -2685,7 +2684,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	// Generate a map of the repository rules from the Crossplane resource
 	crRToConfig := getRepositoryRulesMapFromCr(cr.Spec.ForProvider.RepositoryRules)
 	// Generate a map of the repository rules from GitHub
-	ghRToConfig, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules)
+	ghRToConfig, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
 	if err != nil {
 		return err
 	}

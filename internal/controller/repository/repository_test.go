@@ -3388,3 +3388,70 @@ func TestObserveRulesetWithUnmanagedRuleFails(t *testing.T) {
 		t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
 	}
 }
+
+const githubOnlyRulesetID int64 = 456
+
+// withGitHubOnlyRuleset adds a ruleset that exists on GitHub but is not named in the CR,
+// holding a rule the provider does not model.
+func withGitHubOnlyRuleset(repos *fake.MockRepositoriesClient) {
+	githubOnly := func() *github.RepositoryRuleset {
+		return &github.RepositoryRuleset{
+			ID:          github.Ptr(githubOnlyRulesetID),
+			Name:        "github-only",
+			Enforcement: github.RulesetEnforcement(rr1enforcement),
+			Rules: &github.RepositoryRulesetRules{
+				FilePathRestriction: &github.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/"}},
+			},
+		}
+	}
+	repos.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+		return append(githubRuleset(), githubOnly()), fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+		if rulesetID == githubOnlyRulesetID {
+			return githubOnly(), fake.GenerateEmptyResponse(), nil
+		}
+		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+	}
+}
+
+// The unmanaged-rule guard covers only rulesets named in the CR. A ruleset not named there
+// is deleted, never updated, so no rule of it can be dropped; failing on it would block
+// the reconcile that removes it.
+func TestObserveGitHubOnlyRulesetWithUnmanagedRuleIsSurplus(t *testing.T) {
+	repos := upToDateRepositories(nil)
+	withGitHubOnlyRuleset(repos)
+
+	got, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = true, want false: the GitHub-only ruleset is surplus and must be deleted")
+	}
+}
+
+// Update deletes a ruleset that is not named in the CR even when it holds a rule the
+// provider does not model, and never updates it: an update would drop that rule.
+func TestUpdateRepositoryRulesDeletesGitHubOnlyRuleset(t *testing.T) {
+	repos := upToDateRepositories(nil)
+	withGitHubOnlyRuleset(repos)
+	var deleted []int64
+	repos.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		deleted = append(deleted, rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+		if rulesetID == githubOnlyRulesetID {
+			t.Errorf("UpdateRuleset called for the GitHub-only ruleset; it would drop the file_path_restriction rule")
+		}
+		return &rs, fake.GenerateEmptyResponse(), nil
+	}
+
+	if err := updateRepositoryRules(context.Background(), repository(), clientFor(repos), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	if diff := cmp.Diff([]int64{githubOnlyRulesetID}, deleted); diff != "" {
+		t.Errorf("DeleteRuleset IDs: -want, +got:\n%s", diff)
+	}
+}
