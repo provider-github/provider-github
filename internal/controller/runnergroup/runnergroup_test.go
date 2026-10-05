@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -88,11 +88,11 @@ func newCR(m ...modifier) *v1alpha1.RunnerGroup {
 // ghGroup builds the GitHub-side runner group matching newCR's defaults.
 func ghGroup(m ...func(*github.RunnerGroup)) *github.RunnerGroup {
 	g := &github.RunnerGroup{
-		ID:                       github.Int64(testGroupID),
-		Name:                     github.String(testGroupName),
-		Visibility:               github.String("all"),
-		AllowsPublicRepositories: github.Bool(false),
-		RestrictedToWorkflows:    github.Bool(false),
+		ID:                       github.Ptr(testGroupID),
+		Name:                     github.Ptr(testGroupName),
+		Visibility:               github.Ptr("all"),
+		AllowsPublicRepositories: github.Ptr(false),
+		RestrictedToWorkflows:    github.Ptr(false),
 	}
 	for _, f := range m {
 		f(g)
@@ -110,7 +110,7 @@ func listRepoAccess(ids ...int64) func(context.Context, string, int64, *github.L
 	return func(_ context.Context, _ string, _ int64, _ *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
 		repos := make([]*github.Repository, 0, len(ids))
 		for _, id := range ids {
-			repos = append(repos, &github.Repository{ID: github.Int64(id)})
+			repos = append(repos, &github.Repository{ID: github.Ptr(id)})
 		}
 		return &github.ListRepositories{Repositories: repos}, fake.GenerateEmptyResponse(), nil
 	}
@@ -124,7 +124,7 @@ func mockRepoGet(ids map[string]int64) func(ctx context.Context, owner, repo str
 		if !ok {
 			return nil, fake.GenerateEmptyResponse(), fake.Generate404Response()
 		}
-		return &github.Repository{ID: github.Int64(id), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+		return &github.Repository{ID: github.Ptr(id), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 	}
 }
 
@@ -137,7 +137,7 @@ func knownRepos() *fake.MockRepositoriesClient {
 // Runner groups are matched by name; a list without that name means
 // the group does not exist and must be created.
 func TestObserve_NameNotListed_ReportsNotExists(t *testing.T) {
-	other := ghGroup(func(g *github.RunnerGroup) { g.Name = github.String("other-runners") })
+	other := ghGroup(func(g *github.RunnerGroup) { g.Name = github.Ptr("other-runners") })
 	e := newExternal(&fake.MockActionsClient{MockListOrganizationRunnerGroups: listGroups(other)}, nil)
 
 	got, err := e.Observe(context.Background(), newCR())
@@ -158,7 +158,7 @@ func TestObserve_FindsGroupOnLaterPage(t *testing.T) {
 		MockListOrganizationRunnerGroups: func(_ context.Context, _ string, opts *github.ListOrgRunnerGroupOptions) (*github.RunnerGroups, *github.Response, error) {
 			pages = append(pages, opts.Page)
 			if opts.Page == 0 {
-				other := ghGroup(func(g *github.RunnerGroup) { g.Name = github.String("other-runners") })
+				other := ghGroup(func(g *github.RunnerGroup) { g.Name = github.Ptr("other-runners") })
 				return &github.RunnerGroups{RunnerGroups: []*github.RunnerGroup{other}}, &github.Response{NextPage: 2}, nil
 			}
 			return &github.RunnerGroups{RunnerGroups: []*github.RunnerGroup{ghGroup()}}, fake.GenerateEmptyResponse(), nil
@@ -183,9 +183,9 @@ func TestObserve_FindsGroupOnLaterPage(t *testing.T) {
 func TestObserve_UpToDate_AllFieldsMatch(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
-			g.Visibility = github.String("selected")
-			g.AllowsPublicRepositories = github.Bool(true)
-			g.RestrictedToWorkflows = github.Bool(true)
+			g.Visibility = github.Ptr("selected")
+			g.AllowsPublicRepositories = github.Ptr(true)
+			g.RestrictedToWorkflows = github.Ptr(true)
 			g.SelectedWorkflows = []string{testWorkflowB, testWorkflowA}
 		})),
 		MockListRepositoryAccessRunnerGroup: listRepoAccess(testRepoBID, testRepoAID),
@@ -215,16 +215,16 @@ func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
 	}{
 		"Visibility": {
 			cr: newCR(),
-			gh: ghGroup(func(g *github.RunnerGroup) { g.Visibility = github.String("private") }),
+			gh: ghGroup(func(g *github.RunnerGroup) { g.Visibility = github.Ptr("private") }),
 		},
 		"AllowsPublicRepositories": {
 			cr: newCR(),
-			gh: ghGroup(func(g *github.RunnerGroup) { g.AllowsPublicRepositories = github.Bool(true) }),
+			gh: ghGroup(func(g *github.RunnerGroup) { g.AllowsPublicRepositories = github.Ptr(true) }),
 		},
 		"SelectedWorkflows": {
 			cr: newCR(withWorkflows(testWorkflowA)),
 			gh: ghGroup(func(g *github.RunnerGroup) {
-				g.RestrictedToWorkflows = github.Bool(true)
+				g.RestrictedToWorkflows = github.Ptr(true)
 				g.SelectedWorkflows = []string{testWorkflowA, testWorkflowB}
 			}),
 		},
@@ -249,7 +249,7 @@ func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
 func TestObserve_Selected_RepoAccessDrift_ReportsNotUpToDate(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
-			g.Visibility = github.String("selected")
+			g.Visibility = github.Ptr("selected")
 		})),
 		MockListRepositoryAccessRunnerGroup: listRepoAccess(testRepoAID, testRepoBID),
 	}
@@ -269,12 +269,12 @@ func TestObserve_Selected_RepoAccessDrift_ReportsNotUpToDate(t *testing.T) {
 func TestObserve_Selected_NamesMatch_NoRepoLookups(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
-			g.Visibility = github.String("selected")
+			g.Visibility = github.Ptr("selected")
 		})),
 		MockListRepositoryAccessRunnerGroup: func(_ context.Context, _ string, _ int64, _ *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
 			return &github.ListRepositories{Repositories: []*github.Repository{
-				{ID: github.Int64(testRepoBID), Name: github.String(testRepoB)},
-				{ID: github.Int64(testRepoAID), Name: github.String("Example-Repo-A")},
+				{ID: github.Ptr(testRepoBID), Name: github.Ptr(testRepoB)},
+				{ID: github.Ptr(testRepoAID), Name: github.Ptr("Example-Repo-A")},
 			}}, fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -300,11 +300,11 @@ func TestObserve_Selected_NamesMatch_NoRepoLookups(t *testing.T) {
 func TestObserve_Selected_RenamedRepo_UpToDateByID(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListOrganizationRunnerGroups: listGroups(ghGroup(func(g *github.RunnerGroup) {
-			g.Visibility = github.String("selected")
+			g.Visibility = github.Ptr("selected")
 		})),
 		MockListRepositoryAccessRunnerGroup: func(_ context.Context, _ string, _ int64, _ *github.ListOptions) (*github.ListRepositories, *github.Response, error) {
 			return &github.ListRepositories{Repositories: []*github.Repository{
-				{ID: github.Int64(testRepoAID), Name: github.String("example-repo-a-renamed")},
+				{ID: github.Ptr(testRepoAID), Name: github.Ptr("example-repo-a-renamed")},
 			}}, fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -347,11 +347,11 @@ func TestCreate_SendsRepoIDsAndWorkflows(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := github.CreateRunnerGroupRequest{
-		Name:                     github.String(testGroupName),
-		Visibility:               github.String("selected"),
+		Name:                     github.Ptr(testGroupName),
+		Visibility:               github.Ptr("selected"),
 		SelectedRepositoryIDs:    []int64{testRepoAID, testRepoBID},
-		AllowsPublicRepositories: github.Bool(false),
-		RestrictedToWorkflows:    github.Bool(true),
+		AllowsPublicRepositories: github.Ptr(false),
+		RestrictedToWorkflows:    github.Ptr(true),
 		SelectedWorkflows:        []string{testWorkflowA},
 	}
 	if diff := cmp.Diff(want, captured); diff != "" {

@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -84,7 +84,7 @@ func mockRepoGet(ids map[string]int64) func(ctx context.Context, owner, repo str
 		if !ok {
 			return nil, fake.GenerateEmptyResponse(), fake.Generate404Response()
 		}
-		return &github.Repository{ID: github.Int64(id), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+		return &github.Repository{ID: github.Ptr(id), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 	}
 }
 
@@ -92,7 +92,7 @@ func ghVariable(value, visibility string) *github.ActionsVariable {
 	return &github.ActionsVariable{
 		Name:       testVariableName,
 		Value:      value,
-		Visibility: github.String(visibility),
+		Visibility: github.Ptr(visibility),
 	}
 }
 
@@ -178,8 +178,8 @@ func TestObserve_Selected_UpToDateWhenRepoIDsMatch(t *testing.T) {
 		},
 		MockListSelectedReposForOrgVariable: func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 			return &github.SelectedReposList{Repositories: []*github.Repository{
-				{ID: github.Int64(testRepoBID), Name: github.String(testRepoB)},
-				{ID: github.Int64(testRepoAID), Name: github.String(testRepoA)},
+				{ID: github.Ptr(testRepoBID), Name: github.Ptr(testRepoB)},
+				{ID: github.Ptr(testRepoAID), Name: github.Ptr(testRepoA)},
 			}}, fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -229,8 +229,8 @@ func TestObserve_Selected_DriftReportsNotUpToDate(t *testing.T) {
 		},
 		MockListSelectedReposForOrgVariable: func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 			return &github.SelectedReposList{Repositories: []*github.Repository{
-				{ID: github.Int64(testRepoAID)},
-				{ID: github.Int64(testRepoBID)},
+				{ID: github.Ptr(testRepoAID)},
+				{ID: github.Ptr(testRepoBID)},
 			}}, fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -253,10 +253,10 @@ func TestObserve_Selected_DriftReportsNotUpToDate(t *testing.T) {
 // SelectedRepositoryIDs — sending IDs when visibility != selected
 // is rejected by the GitHub API.
 func TestCreate_VisibilityAll_OmitsSelectedRepoIDs(t *testing.T) {
-	var captured *github.ActionsVariable
+	var captured *github.ActionsCreateOrgVariableRequest
 	actions := &fake.MockActionsClient{
-		MockCreateOrgVariable: func(_ context.Context, _ string, v *github.ActionsVariable) (*github.Response, error) {
-			captured = v
+		MockCreateOrgVariable: func(_ context.Context, _ string, v github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
+			captured = &v
 			return fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -272,7 +272,7 @@ func TestCreate_VisibilityAll_OmitsSelectedRepoIDs(t *testing.T) {
 		t.Errorf("Value = %q, want bar", captured.Value)
 	}
 	if captured.SelectedRepositoryIDs != nil {
-		t.Errorf("SelectedRepositoryIDs = %v, want nil", *captured.SelectedRepositoryIDs)
+		t.Errorf("SelectedRepositoryIDs = %v, want nil", captured.SelectedRepositoryIDs)
 	}
 }
 
@@ -280,10 +280,10 @@ func TestCreate_VisibilityAll_OmitsSelectedRepoIDs(t *testing.T) {
 // pass them in SelectedRepositoryIDs so GitHub knows which repos can
 // read the variable on the very first reconcile.
 func TestCreate_VisibilitySelected_ResolvesAndSendsRepoIDs(t *testing.T) {
-	var captured *github.ActionsVariable
+	var captured *github.ActionsCreateOrgVariableRequest
 	actions := &fake.MockActionsClient{
-		MockCreateOrgVariable: func(_ context.Context, _ string, v *github.ActionsVariable) (*github.Response, error) {
-			captured = v
+		MockCreateOrgVariable: func(_ context.Context, _ string, v github.ActionsCreateOrgVariableRequest) (*github.Response, error) {
+			captured = &v
 			return fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -299,7 +299,7 @@ func TestCreate_VisibilitySelected_ResolvesAndSendsRepoIDs(t *testing.T) {
 	if captured.SelectedRepositoryIDs == nil {
 		t.Fatal("SelectedRepositoryIDs is nil, want IDs for selected repos")
 	}
-	got := []int64(*captured.SelectedRepositoryIDs)
+	got := captured.SelectedRepositoryIDs
 	if diff := cmp.Diff([]int64{testRepoAID, testRepoBID}, got); diff != "" {
 		t.Errorf("SelectedRepositoryIDs: -want, +got:\n%s", diff)
 	}
@@ -310,10 +310,10 @@ func TestCreate_VisibilitySelected_ResolvesAndSendsRepoIDs(t *testing.T) {
 // leak a stale repo-ID list (which would re-add associations the
 // user just removed).
 func TestUpdate_VisibilityChange_DropsRepoIDs(t *testing.T) {
-	var captured *github.ActionsVariable
+	var captured *github.ActionsUpdateOrgVariableRequest
 	actions := &fake.MockActionsClient{
-		MockUpdateOrgVariable: func(_ context.Context, _ string, v *github.ActionsVariable) (*github.Response, error) {
-			captured = v
+		MockUpdateOrgVariable: func(_ context.Context, _, _ string, v github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
+			captured = &v
 			return fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -324,7 +324,41 @@ func TestUpdate_VisibilityChange_DropsRepoIDs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if captured.SelectedRepositoryIDs != nil {
-		t.Errorf("SelectedRepositoryIDs leaked into visibility=all update: %v", *captured.SelectedRepositoryIDs)
+		t.Errorf("SelectedRepositoryIDs leaked into visibility=all update: %v", captured.SelectedRepositoryIDs)
+	}
+}
+
+// Update must send name, value, visibility and the selected repo IDs:
+// every field left out of the PATCH keeps its old value on GitHub, so
+// the drift Observe reported would never converge.
+func TestUpdate_VisibilitySelected_SendsFullPayload(t *testing.T) {
+	var captured *github.ActionsUpdateOrgVariableRequest
+	actions := &fake.MockActionsClient{
+		MockUpdateOrgVariable: func(_ context.Context, _, _ string, v github.ActionsUpdateOrgVariableRequest) (*github.Response, error) {
+			captured = &v
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+	repos := &fake.MockRepositoriesClient{
+		MockGet: mockRepoGet(map[string]int64{testRepoA: testRepoAID, testRepoB: testRepoBID}),
+	}
+	e := newExternalWithActions(actions, repos)
+
+	cr := newCR(withValue("new"), withVisibility("selected"), withSelectedRepos(testRepoA, testRepoB))
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("UpdateOrgVariable was not invoked")
+	}
+	want := github.ActionsUpdateOrgVariableRequest{
+		Name:                  github.Ptr(testVariableName),
+		Value:                 github.Ptr("new"),
+		Visibility:            github.Ptr("selected"),
+		SelectedRepositoryIDs: []int64{testRepoAID, testRepoBID},
+	}
+	if diff := cmp.Diff(want, *captured); diff != "" {
+		t.Errorf("UpdateOrgVariable request: -want, +got:\n%s", diff)
 	}
 }
 

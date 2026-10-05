@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -72,7 +72,7 @@ func listRepos(names ...string) func(context.Context, string, string, *github.Li
 	return func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 		list := &github.SelectedReposList{}
 		for _, n := range names {
-			list.Repositories = append(list.Repositories, &github.Repository{Name: github.String(n)})
+			list.Repositories = append(list.Repositories, &github.Repository{Name: github.Ptr(n)})
 		}
 		return list, fake.GenerateEmptyResponse(), nil
 	}
@@ -235,9 +235,9 @@ func TestObserve_Selected_Pagination_CollectsAllPages(t *testing.T) {
 			if opts.Page == 0 {
 				resp := fake.GenerateEmptyResponse()
 				resp.NextPage = 2
-				return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.String(testRepoA)}}}, resp, nil
+				return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.Ptr(testRepoA)}}}, resp, nil
 			}
-			return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.String(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
+			return &github.SelectedReposList{Repositories: []*github.Repository{{Name: github.Ptr(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
 		},
 	}, nil)
 
@@ -282,14 +282,14 @@ func listSelected(ids map[string]int64) func(context.Context, string, string, *g
 	return func(_ context.Context, _, _ string, _ *github.ListOptions) (*github.SelectedReposList, *github.Response, error) {
 		list := &github.SelectedReposList{}
 		for n, id := range ids {
-			list.Repositories = append(list.Repositories, &github.Repository{ID: github.Int64(id), Name: github.String(n)})
+			list.Repositories = append(list.Repositories, &github.Repository{ID: github.Ptr(id), Name: github.Ptr(n)})
 		}
 		return list, fake.GenerateEmptyResponse(), nil
 	}
 }
 
-func recordSet(got *github.SelectedRepoIDs) func(context.Context, string, string, github.SelectedRepoIDs) (*github.Response, error) {
-	return func(_ context.Context, _, _ string, ids github.SelectedRepoIDs) (*github.Response, error) {
+func recordSet(got *github.SelectedRepoIDs) func(context.Context, string, string, []int64) (*github.Response, error) {
+	return func(_ context.Context, _, _ string, ids []int64) (*github.Response, error) {
 		*got = ids
 		return fake.GenerateEmptyResponse(), nil
 	}
@@ -315,7 +315,7 @@ func TestUpdate_SetsResolvedRepoIDs(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			ids := map[string]int64{testRepoA: testRepoAID, testRepoB: testRepoBID}
-			return &github.Repository{ID: github.Int64(ids[repo]), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(ids[repo]), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(actions, repos)
@@ -359,7 +359,7 @@ func TestUpdate_AddOneRepo_GetsOnlyThatRepo(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			gets = append(gets, repo)
-			return &github.Repository{ID: github.Int64(testRepoBID), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoBID), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(actions, repos)
@@ -384,9 +384,9 @@ func TestUpdate_IDsFromLaterPages_NoRepoGet(t *testing.T) {
 			if opts.Page == 0 {
 				resp := fake.GenerateEmptyResponse()
 				resp.NextPage = 2
-				return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Int64(testRepoAID), Name: github.String(testRepoA)}}}, resp, nil
+				return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Ptr(testRepoAID), Name: github.Ptr(testRepoA)}}}, resp, nil
 			}
-			return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Int64(testRepoBID), Name: github.String(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
+			return &github.SelectedReposList{Repositories: []*github.Repository{{ID: github.Ptr(testRepoBID), Name: github.Ptr(testRepoB)}}}, fake.GenerateEmptyResponse(), nil
 		},
 		MockSetSelectedReposForOrgSecret: recordSet(&got),
 	}
@@ -451,7 +451,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, repo string) (*github.Repository, *github.Response, error) {
 			gets = append(gets, repo)
-			return &github.Repository{ID: github.Int64(testRepoBID), Name: github.String(repo)}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoBID), Name: github.Ptr(repo)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(actions, repos)
@@ -474,7 +474,7 @@ func TestUpdate_DuplicateNewRepo_OneRepoGetSetOnce(t *testing.T) {
 func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
 	actions := &fake.MockActionsClient{
 		MockListSelectedReposForOrgSecret: listSelected(map[string]int64{"new-name": testRepoAID, testRepoB: testRepoBID}),
-		MockSetSelectedReposForOrgSecret: func(_ context.Context, _, _ string, _ github.SelectedRepoIDs) (*github.Response, error) {
+		MockSetSelectedReposForOrgSecret: func(_ context.Context, _, _ string, _ []int64) (*github.Response, error) {
 			t.Error("SetSelectedReposForOrgSecret was called, want no call")
 			return fake.GenerateEmptyResponse(), nil
 		},
@@ -482,7 +482,7 @@ func TestUpdate_RenamedRepo_ErrorAndNoSet(t *testing.T) {
 	repos := &fake.MockRepositoriesClient{
 		MockGet: func(_ context.Context, _, _ string) (*github.Repository, *github.Response, error) {
 			// GitHub redirects the old name to the renamed repository.
-			return &github.Repository{ID: github.Int64(testRepoAID), Name: github.String("new-name")}, fake.GenerateEmptyResponse(), nil
+			return &github.Repository{ID: github.Ptr(testRepoAID), Name: github.Ptr("new-name")}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(actions, repos)

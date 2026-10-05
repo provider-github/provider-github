@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -92,13 +92,13 @@ func newCR(m ...modifier) *v1alpha1.OrganizationWebhook {
 // ghHook builds the GitHub-side hook matching newCR's defaults.
 func ghHook(m ...func(*github.Hook)) *github.Hook {
 	h := &github.Hook{
-		ID:     github.Int64(testHookID),
+		ID:     github.Ptr(testHookID),
 		Events: []string{"push", "pull_request"},
-		Active: github.Bool(true),
+		Active: github.Ptr(true),
 		Config: &github.HookConfig{
-			URL:         github.String(testURL),
-			ContentType: github.String("json"),
-			InsecureSSL: github.String("0"),
+			URL:         github.Ptr(testURL),
+			ContentType: github.Ptr("json"),
+			InsecureSSL: github.Ptr("0"),
 		},
 	}
 	for _, f := range m {
@@ -107,7 +107,7 @@ func ghHook(m ...func(*github.Hook)) *github.Hook {
 	return h
 }
 
-func withGHSecret(h *github.Hook) { h.Config.Secret = github.String(maskedSecret) }
+func withGHSecret(h *github.Hook) { h.Config.Secret = github.Ptr(maskedSecret) }
 
 func getHook(h *github.Hook) func(context.Context, string, int64) (*github.Hook, *github.Response, error) {
 	return func(_ context.Context, _ string, _ int64) (*github.Hook, *github.Response, error) {
@@ -202,8 +202,8 @@ func TestObserve_AdoptsByURLOnLaterPage(t *testing.T) {
 			pages = append(pages, opts.Page)
 			if opts.Page == 0 {
 				other := ghHook(func(h *github.Hook) {
-					h.ID = github.Int64(99999)
-					h.Config.URL = github.String(testOtherURL)
+					h.ID = github.Ptr(int64(99999))
+					h.Config.URL = github.Ptr(testOtherURL)
 				})
 				return []*github.Hook{other}, &github.Response{NextPage: 2}, nil
 			}
@@ -236,7 +236,7 @@ func TestObserve_AdoptsByURLOnLaterPage(t *testing.T) {
 func TestObserve_URLNotListed_ReportsNotExists(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockListHooks: func(_ context.Context, _ string, _ *github.ListOptions) ([]*github.Hook, *github.Response, error) {
-			other := ghHook(func(h *github.Hook) { h.Config.URL = github.String(testOtherURL) })
+			other := ghHook(func(h *github.Hook) { h.Config.URL = github.Ptr(testOtherURL) })
 			return []*github.Hook{other}, fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -273,11 +273,11 @@ func TestObserve_EventsReordered_UpToDate(t *testing.T) {
 // and false.
 func TestObserve_FieldDrift_ReportsNotUpToDate(t *testing.T) {
 	cases := map[string]*github.Hook{
-		"Url":         ghHook(func(h *github.Hook) { h.Config.URL = github.String(testOtherURL) }),
-		"ContentType": ghHook(func(h *github.Hook) { h.Config.ContentType = github.String("form") }),
+		"Url":         ghHook(func(h *github.Hook) { h.Config.URL = github.Ptr(testOtherURL) }),
+		"ContentType": ghHook(func(h *github.Hook) { h.Config.ContentType = github.Ptr("form") }),
 		"Events":      ghHook(func(h *github.Hook) { h.Events = []string{"push"} }),
-		"Active":      ghHook(func(h *github.Hook) { h.Active = github.Bool(false) }),
-		"InsecureSsl": ghHook(func(h *github.Hook) { h.Config.InsecureSSL = github.String("1") }),
+		"Active":      ghHook(func(h *github.Hook) { h.Active = github.Ptr(false) }),
+		"InsecureSsl": ghHook(func(h *github.Hook) { h.Config.InsecureSSL = github.Ptr("1") }),
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -365,7 +365,7 @@ func TestCreate_SetsExternalNameAndPublishesSecret(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockCreateHook: func(_ context.Context, _ string, h *github.Hook) (*github.Hook, *github.Response, error) {
 			sent = h
-			return &github.Hook{ID: github.Int64(testHookID)}, fake.GenerateEmptyResponse(), nil
+			return &github.Hook{ID: github.Ptr(testHookID)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(orgs, newKube(t, sourceSecret(testSecret)))
@@ -381,12 +381,12 @@ func TestCreate_SetsExternalNameAndPublishesSecret(t *testing.T) {
 	}
 	wantHook := &github.Hook{
 		Events: []string{"push", "pull_request"},
-		Active: github.Bool(true),
+		Active: github.Ptr(true),
 		Config: &github.HookConfig{
-			URL:         github.String(testURL),
-			ContentType: github.String("json"),
-			InsecureSSL: github.String("0"),
-			Secret:      github.String(testSecret),
+			URL:         github.Ptr(testURL),
+			ContentType: github.Ptr("json"),
+			InsecureSSL: github.Ptr("0"),
+			Secret:      github.Ptr(testSecret),
 		},
 	}
 	if diff := cmp.Diff(wantHook, sent); diff != "" {
@@ -406,7 +406,7 @@ func TestCreate_NoSecret(t *testing.T) {
 	orgs := &fake.MockOrganizationsClient{
 		MockCreateHook: func(_ context.Context, _ string, h *github.Hook) (*github.Hook, *github.Response, error) {
 			sent = h
-			return &github.Hook{ID: github.Int64(testHookID)}, fake.GenerateEmptyResponse(), nil
+			return &github.Hook{ID: github.Ptr(testHookID)}, fake.GenerateEmptyResponse(), nil
 		},
 	}
 	e := newExternal(orgs, newKube(t))

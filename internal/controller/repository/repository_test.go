@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -38,7 +39,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"github.com/google/go-github/v62/github"
+	"github.com/google/go-github/v90/github"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -370,7 +371,7 @@ func githubRepository() *github.Repository {
 		Archived:    &archived,
 		Private:     &private,
 		IsTemplate:  &isTemplate,
-		Fork:        github.Bool(false),
+		Fork:        github.Ptr(false),
 		Topics:      []string{topic1, topic2, topic3},
 	}
 }
@@ -384,7 +385,7 @@ func githubWebhooks() []*github.Hook {
 				InsecureSSL: &webhook1InsecureSslStr,
 			},
 			Events: []string{webhook1event1, webhook1event2},
-			Active: github.Bool(webhook1active),
+			Active: github.Ptr(webhook1active),
 		},
 	}
 }
@@ -479,15 +480,15 @@ func githubProtectedBranch() *github.Protection {
 	}
 }
 
-func githubRuleset() []*github.Ruleset {
-	return []*github.Ruleset{
+func githubRuleset() []*github.RepositoryRuleset {
+	return []*github.RepositoryRuleset{
 		{
 			ID:          &rr1Id,
 			Name:        rr1name,
-			Target:      &rr1target,
-			Enforcement: rr1enforcement,
-			Conditions: &github.RulesetConditions{
-				RefName: &github.RulesetRefConditionParameters{
+			Target:      github.Ptr(github.RulesetTarget(rr1target)),
+			Enforcement: github.RulesetEnforcement(rr1enforcement),
+			Conditions: &github.RepositoryRulesetConditions{
+				RefName: &github.RepositoryRulesetRefConditionParameters{
 					Include: rr1Include,
 					Exclude: rr1Exclude,
 				},
@@ -495,29 +496,17 @@ func githubRuleset() []*github.Ruleset {
 			BypassActors: []*github.BypassActor{
 				{
 					ActorID:    &rr1actorId,
-					ActorType:  &rr1actorType,
-					BypassMode: &rr1bypassMode,
+					ActorType:  github.Ptr(github.BypassActorType(rr1actorType)),
+					BypassMode: github.Ptr(github.BypassMode(rr1bypassMode)),
 				},
 			},
-			Rules: []*github.RepositoryRule{
-				{
-					Type: "creation",
-				},
-				{
-					Type: "deletion",
-				},
-				{
-					Type: "update",
-				},
-				{
-					Type: "required_linear_history",
-				},
-				{
-					Type: "required_signatures",
-				},
-				{
-					Type: "non_fast_forward",
-				},
+			Rules: &github.RepositoryRulesetRules{
+				Creation:              &github.EmptyRuleParameters{},
+				Deletion:              &github.EmptyRuleParameters{},
+				Update:                &github.UpdateRuleParameters{},
+				RequiredLinearHistory: &github.EmptyRuleParameters{},
+				RequiredSignatures:    &github.EmptyRuleParameters{},
+				NonFastForward:        &github.EmptyRuleParameters{},
 			},
 		},
 	}
@@ -527,15 +516,15 @@ func githubCollaborators() []*github.User {
 	return []*github.User{
 		{
 			Login: &user1,
-			Permissions: map[string]bool{
+			Permissions: repoPermissions(map[string]bool{
 				user1Role: true,
-			},
+			}),
 		},
 		{
 			Login: &user2,
-			Permissions: map[string]bool{
+			Permissions: repoPermissions(map[string]bool{
 				user2Role: true,
-			},
+			}),
 		},
 	}
 }
@@ -557,7 +546,7 @@ func githubBranches() []*github.Branch {
 	return []*github.Branch{
 		{
 			Name:      &bpr1branch,
-			Protected: github.Bool(true),
+			Protected: github.Ptr(true),
 		},
 	}
 }
@@ -605,10 +594,10 @@ func TestObserve(t *testing.T) {
 						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
 							return []*github.Branch{}, fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -651,10 +640,10 @@ func TestObserve(t *testing.T) {
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -697,10 +686,10 @@ func TestObserve(t *testing.T) {
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -756,7 +745,7 @@ func TestObserve(t *testing.T) {
 							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
 						},
 						MockListInvitations: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.RepositoryInvitation, *github.Response, error) {
-							return []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("pending-user")}}}, fake.GenerateEmptyResponse(), nil
+							return []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.Ptr("pending-user")}}}, fake.GenerateEmptyResponse(), nil
 						},
 						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
 							return githubTeams(), fake.GenerateEmptyResponse(), nil
@@ -770,10 +759,10 @@ func TestObserve(t *testing.T) {
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -800,7 +789,7 @@ func TestObserve(t *testing.T) {
 					Repositories: &fake.MockRepositoriesClient{
 						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 							r := githubRepository()
-							r.Archived = github.Bool(true)
+							r.Archived = github.Ptr(true)
 							return r, nil, nil
 						},
 						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
@@ -853,7 +842,7 @@ func TestUpdate(t *testing.T) {
 		return cr
 	}
 	ghRepo := func(arch bool) *github.Repository {
-		return &github.Repository{Name: &repo, Archived: &arch, Fork: github.Bool(false), Topics: []string{topic1, topic2, topic3}}
+		return &github.Repository{Name: &repo, Archived: &arch, Fork: github.Ptr(false), Topics: []string{topic1, topic2, topic3}}
 	}
 
 	type want struct {
@@ -936,9 +925,9 @@ func TestUpdate(t *testing.T) {
 					frozenWrite = "UpdateBranchProtection"
 					return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 				},
-				MockCreateRuleset: func(ctx context.Context, owner, r string, rs *github.Ruleset) (*github.Ruleset, *github.Response, error) {
+				MockCreateRuleset: func(ctx context.Context, owner, r string, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
 					frozenWrite = "CreateRuleset"
-					return rs, fake.GenerateEmptyResponse(), nil
+					return &rs, fake.GenerateEmptyResponse(), nil
 				},
 				MockCreateHook: func(ctx context.Context, owner, r string, hook *github.Hook) (*github.Hook, *github.Response, error) {
 					frozenWrite = "CreateHook"
@@ -979,7 +968,18 @@ func TestUpdate(t *testing.T) {
 }
 
 func ghUserWithPerm(login, perm string) *github.User {
-	return &github.User{Login: github.String(login), Permissions: map[string]bool{perm: true}}
+	return &github.User{Login: github.Ptr(login), Permissions: repoPermissions(map[string]bool{perm: true})}
+}
+
+// repoPermissions builds go-github's permissions struct from permission names.
+func repoPermissions(perms map[string]bool) *github.RepositoryPermissions {
+	return &github.RepositoryPermissions{
+		Admin:    github.Ptr(perms["admin"]),
+		Maintain: github.Ptr(perms["maintain"]),
+		Push:     github.Ptr(perms["push"]),
+		Triage:   github.Ptr(perms["triage"]),
+		Pull:     github.Ptr(perms["pull"]),
+	}
 }
 
 // TestCategorizeCollaborators pins the collaborator buckets. The key invariant is
@@ -1014,7 +1014,7 @@ func TestCategorizeCollaborators(t *testing.T) {
 			reason:  "A declared user with an outstanding invitation is pending, not an add.",
 			crUsers: []v1alpha1.RepositoryUser{u("alice", "push"), u("bob", "pull")},
 			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
-			invites: []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("bob")}}},
+			invites: []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.Ptr("bob")}}},
 			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{}, pending: []string{"bob"}},
 		},
 		"GenuineAdd": {
@@ -1028,6 +1028,12 @@ func TestCategorizeCollaborators(t *testing.T) {
 			crUsers: []v1alpha1.RepositoryUser{u("alice", "admin")},
 			ghUsers: []*github.User{ghUserWithPerm("alice", "push")},
 			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{"alice": "admin"}},
+		},
+		"MaintainMatching": {
+			reason:  "GitHub reports a maintainer with maintain, push, triage and pull all set; read as push, the role would be re-applied every reconcile.",
+			crUsers: []v1alpha1.RepositoryUser{u("alice", "maintain")},
+			ghUsers: []*github.User{{Login: github.Ptr("alice"), Permissions: repoPermissions(map[string]bool{"maintain": true, "push": true, "triage": true, "pull": true})}},
+			want:    want{toRemove: map[string]string{}, toUpsert: map[string]string{}},
 		},
 		"Remove": {
 			reason:  "An active collaborator absent from the CR is removed.",
@@ -1067,7 +1073,7 @@ func TestCategorizeCollaborators(t *testing.T) {
 						if tc.orgAdmins[user] {
 							role = "admin"
 						}
-						return &github.Membership{Role: github.String(role)}, fake.GenerateEmptyResponse(), nil
+						return &github.Membership{Role: github.Ptr(role)}, fake.GenerateEmptyResponse(), nil
 					},
 				},
 			}}
@@ -1144,10 +1150,10 @@ func TestObserveMainSettingsDrift(t *testing.T) {
 					MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 						return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 					},
-					MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+					MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 						return githubRuleset(), fake.GenerateEmptyResponse(), nil
 					},
-					MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+					MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 						return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 					},
 				},
@@ -1339,9 +1345,9 @@ func TestFilterMissingBranchProtectionRules(t *testing.T) {
 								return nil, &github.Response{Response: &http.Response{StatusCode: http.StatusNotFound}}, fmt.Errorf("unexpected status code: 404 Not Found")
 							case tc.mock.renamed[branch] != "":
 								// 200 with a different name — GetBranch followed a rename redirect.
-								return &github.Branch{Name: github.String(tc.mock.renamed[branch])}, fake.GenerateEmptyResponse(), nil
+								return &github.Branch{Name: github.Ptr(tc.mock.renamed[branch])}, fake.GenerateEmptyResponse(), nil
 							case tc.mock.exists[branch]:
-								return &github.Branch{Name: github.String(branch)}, fake.GenerateEmptyResponse(), nil
+								return &github.Branch{Name: github.Ptr(branch)}, fake.GenerateEmptyResponse(), nil
 							default:
 								return nil, nil, errors.New("unexpected branch in mock: " + branch)
 							}
@@ -1735,7 +1741,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 		"TeamPullEnforced": {
 			reason:         "a restriction team with pull is dropped by GitHub: up to date, condition names it",
 			mods:           []repositoryModifier{withRestrictionTeam("some-team", "pull")},
-			repoTeams:      []*github.Team{{Slug: github.String("some-team"), Permission: github.String("pull")}},
+			repoTeams:      []*github.Team{{Slug: github.Ptr("some-team"), Permission: github.Ptr("pull")}},
 			teamPerms:      map[string]bool{"pull": true},
 			wantUpToDate:   true,
 			wantStatus:     corev1.ConditionTrue,
@@ -1755,7 +1761,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 		"TeamPushIsDrift": {
 			reason:         "a restriction team with push would be stored: not up to date",
 			mods:           []repositoryModifier{withRestrictionTeam("some-team", "push")},
-			repoTeams:      []*github.Team{{Slug: github.String("some-team"), Permission: github.String("push")}},
+			repoTeams:      []*github.Team{{Slug: github.Ptr("some-team"), Permission: github.Ptr("push")}},
 			teamPerms:      map[string]bool{"pull": true, "push": true},
 			wantUpToDate:   false,
 			wantStatus:     corev1.ConditionFalse,
@@ -1773,7 +1779,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 		"TeamProbedOncePerObserve": {
 			reason:         "the same team missing from two fields is probed once",
 			mods:           []repositoryModifier{withRestrictionTeam("some-team", "pull"), withBypassTeam("some-team")},
-			repoTeams:      []*github.Team{{Slug: github.String("some-team"), Permission: github.String("pull")}},
+			repoTeams:      []*github.Team{{Slug: github.Ptr("some-team"), Permission: github.Ptr("pull")}},
 			teamPerms:      map[string]bool{"pull": true},
 			wantUpToDate:   true,
 			wantStatus:     corev1.ConditionTrue,
@@ -1784,6 +1790,14 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 			reason:         "a team inheriting push from its parent is absent from the repo team list but stored by GitHub: not up to date",
 			mods:           []repositoryModifier{withRestrictionTeamActor("child-team")},
 			teamPerms:      map[string]bool{"pull": true, "push": true},
+			wantUpToDate:   false,
+			wantStatus:     corev1.ConditionFalse,
+			wantTeamProbes: 1,
+		},
+		"TeamMaintainIsDrift": {
+			reason:         "maintain grants write, so GitHub stores a maintain team: not up to date, not reported as enforced",
+			mods:           []repositoryModifier{withRestrictionTeamActor("some-team")},
+			teamPerms:      map[string]bool{"maintain": true},
 			wantUpToDate:   false,
 			wantStatus:     corev1.ConditionFalse,
 			wantTeamProbes: 1,
@@ -1827,7 +1841,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
 							branches := githubBranches()
 							if tc.extraBranch != "" {
-								branches = append(branches, &github.Branch{Name: github.String(tc.extraBranch), Protected: github.Bool(true)})
+								branches = append(branches, &github.Branch{Name: github.Ptr(tc.extraBranch), Protected: github.Ptr(true)})
 							}
 							return branches, fake.GenerateEmptyResponse(), nil
 						},
@@ -1847,12 +1861,12 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 							if p, ok := tc.userPerms[user]; ok {
 								permission = p
 							}
-							return &github.RepositoryPermissionLevel{Permission: github.String(permission)}, fake.GenerateEmptyResponse(), nil
+							return &github.RepositoryPermissionLevel{Permission: github.Ptr(permission)}, fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -1862,7 +1876,7 @@ func TestObserveBranchProtectionEnforcedActors(t *testing.T) {
 							if tc.teamProbeErr != nil {
 								return nil, fake.GenerateEmptyResponse(), tc.teamProbeErr
 							}
-							return &github.Repository{Permissions: tc.teamPerms}, fake.GenerateEmptyResponse(), nil
+							return &github.Repository{Permissions: repoPermissions(tc.teamPerms)}, fake.GenerateEmptyResponse(), nil
 						},
 					},
 				},
@@ -2009,7 +2023,7 @@ func TestUnappliedItems(t *testing.T) {
 			},
 		}
 	}
-	on, off := github.Bool(true), github.Bool(false)
+	on, off := github.Ptr(true), github.Ptr(false)
 
 	cases := map[string]struct {
 		reason   string
@@ -2059,9 +2073,9 @@ func TestUnappliedItems(t *testing.T) {
 
 // A record must stop matching once its rule changes, or stale memory would mask drift.
 func TestRuleHash(t *testing.T) {
-	rule := v1alpha1.BranchProtectionRule{Branch: "main", AllowForcePushes: github.Bool(false)}
+	rule := v1alpha1.BranchProtectionRule{Branch: "main", AllowForcePushes: github.Ptr(false)}
 	changed := rule
-	changed.AllowForcePushes = github.Bool(true)
+	changed.AllowForcePushes = github.Ptr(true)
 
 	if ruleHash(rule) != ruleHash(*rule.DeepCopy()) {
 		t.Errorf("equal rules must hash equally")
@@ -2184,7 +2198,7 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 			stored.AllowForcePushes.Enabled = tc.storedForcePush
 			if tc.storedBypassApp != "" {
 				allowances := stored.RequiredPullRequestReviews.BypassPullRequestAllowances
-				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.String(tc.storedBypassApp)})
+				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.Ptr(tc.storedBypassApp)})
 			}
 			if tc.storedNoBypass {
 				stored.RequiredPullRequestReviews.BypassPullRequestAllowances = nil
@@ -2211,12 +2225,12 @@ func TestObserveRememberedUnappliedBranchProtection(t *testing.T) {
 							return stored, fake.GenerateEmptyResponse(), nil
 						},
 						MockGetPermissionLevel: func(ctx context.Context, owner, repo, user string) (*github.RepositoryPermissionLevel, *github.Response, error) {
-							return &github.RepositoryPermissionLevel{Permission: github.String(tc.userPermission)}, fake.GenerateEmptyResponse(), nil
+							return &github.RepositoryPermissionLevel{Permission: github.Ptr(tc.userPermission)}, fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -2290,10 +2304,10 @@ func TestObserveBranchProtectionPartialClears(t *testing.T) {
 						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 							return stored, fake.GenerateEmptyResponse(), nil
 						},
-						MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
 						},
-						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+						MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 						},
 					},
@@ -2349,7 +2363,7 @@ func TestUpdateRecordsUnappliedBranchProtection(t *testing.T) {
 			echo: func() *github.Protection {
 				p := githubProtectedBranch()
 				allowances := p.RequiredPullRequestReviews.BypassPullRequestAllowances
-				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.String("some-app")})
+				allowances.Apps = append(allowances.Apps, &github.App{Slug: github.Ptr("some-app")})
 				return p
 			},
 		},
@@ -2482,10 +2496,10 @@ func upToDateRepositories(invitations []*github.RepositoryInvitation) *fake.Mock
 		MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
 			return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 		},
-		MockGetAllRulesets: func(ctx context.Context, owner, repo string) ([]*github.Ruleset, *github.Response, error) {
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 			return githubRuleset(), fake.GenerateEmptyResponse(), nil
 		},
-		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.Ruleset, *github.Response, error) {
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
 			return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 		},
 	}
@@ -2502,7 +2516,7 @@ func TestObservePublishesCollaboratorsUnreconcilable(t *testing.T) {
 
 	pending := repository(withExtraUser("pending-user", "pull"))
 	pending.Spec.ForProvider.Org = "acme"
-	invitations := []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.String("pending-user")}}}
+	invitations := []*github.RepositoryInvitation{{Invitee: &github.User{Login: github.Ptr("pending-user")}}}
 	e := external{github: clientFor(upToDateRepositories(invitations)), metrics: metrics}
 	if _, err := e.Observe(context.Background(), pending); err != nil {
 		t.Fatalf("Observe(pending): %v", err)
@@ -2531,7 +2545,7 @@ func TestDeleteForgetsRepositoryUnreconcilable(t *testing.T) {
 
 	cr := repository()
 	cr.Spec.ForProvider.Org = "acme"
-	cr.Spec.ForProvider.ForceDelete = github.Bool(true)
+	cr.Spec.ForProvider.ForceDelete = github.Ptr(true)
 	gh := &ghclient.Client{
 		Services: &ghclient.Services{
 			Repositories: &fake.MockRepositoriesClient{
@@ -2583,7 +2597,7 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	repos := upToDateRepositories(nil)
 	repos.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
 		r := githubRepository()
-		r.Archived = github.Bool(true)
+		r.Archived = github.Ptr(true)
 		return r, nil, nil
 	}
 	cr := repository(withArchived(true))
@@ -2736,17 +2750,17 @@ func TestUnappliedSettings(t *testing.T) {
 		want   []v1alpha1.UnappliedSetting
 	}{
 		"WikiRefused": {
-			req:    &github.Repository{HasWiki: github.Bool(true)},
-			echoed: &github.Repository{HasWiki: github.Bool(false)},
+			req:    &github.Repository{HasWiki: github.Ptr(true)},
+			echoed: &github.Repository{HasWiki: github.Ptr(false)},
 			want:   []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}},
 		},
 		"AllApplied": {
-			req:    &github.Repository{HasWiki: github.Bool(true), HasIssues: github.Bool(false), Description: github.String("widgets")},
-			echoed: &github.Repository{HasWiki: github.Bool(true), HasIssues: github.Bool(false), Description: github.String("widgets")},
+			req:    &github.Repository{HasWiki: github.Ptr(true), HasIssues: github.Ptr(false), Description: github.Ptr("widgets")},
+			echoed: &github.Repository{HasWiki: github.Ptr(true), HasIssues: github.Ptr(false), Description: github.Ptr("widgets")},
 		},
 		"TwoRefusedSorted": {
-			req:    &github.Repository{HasWiki: github.Bool(true), HasProjects: github.Bool(true)},
-			echoed: &github.Repository{HasWiki: github.Bool(false), HasProjects: github.Bool(false)},
+			req:    &github.Repository{HasWiki: github.Ptr(true), HasProjects: github.Ptr(true)},
+			echoed: &github.Repository{HasWiki: github.Ptr(false), HasProjects: github.Ptr(false)},
 			want: []v1alpha1.UnappliedSetting{
 				{Field: "hasProjects", Declared: "true"},
 				{Field: "hasWiki", Declared: "true"},
@@ -2754,7 +2768,7 @@ func TestUnappliedSettings(t *testing.T) {
 		},
 		"UnsetNotRecorded": {
 			req:    &github.Repository{},
-			echoed: &github.Repository{HasWiki: github.Bool(true)},
+			echoed: &github.Repository{HasWiki: github.Ptr(true)},
 		},
 	}
 
@@ -2860,7 +2874,7 @@ func TestUpdateRecordsUnappliedSettings(t *testing.T) {
 		"WikiRefused": {
 			echo: func(req *github.Repository) *github.Repository {
 				echoed := *req
-				echoed.HasWiki = github.Bool(false)
+				echoed.HasWiki = github.Ptr(false)
 				return &echoed
 			},
 			want: []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}},
@@ -2891,7 +2905,7 @@ func TestUpdateRecordsUnappliedSettings(t *testing.T) {
 
 			cr := &v1alpha1.Repository{}
 			meta.SetExternalName(cr, repo)
-			cr.Spec.ForProvider.HasWiki = github.Bool(true)
+			cr.Spec.ForProvider.HasWiki = github.Ptr(true)
 			cr.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "hasProjects", Declared: "true"}}
 
 			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repoClient}}}
@@ -2946,23 +2960,23 @@ func withAllSettingsDeclared() repositoryModifier {
 	return func(r *v1alpha1.Repository) {
 		fp := &r.Spec.ForProvider
 		fp.Description = "widgets"
-		fp.Private = github.Bool(false)
-		fp.IsTemplate = github.Bool(true)
-		fp.DefaultBranch = github.String("trunk")
-		fp.AllowMergeCommit = github.Bool(true)
-		fp.AllowSquashMerge = github.Bool(true)
-		fp.AllowRebaseMerge = github.Bool(true)
-		fp.AllowAutoMerge = github.Bool(true)
-		fp.AllowUpdateBranch = github.Bool(true)
-		fp.DeleteBranchOnMerge = github.Bool(true)
-		fp.HasIssues = github.Bool(true)
-		fp.HasProjects = github.Bool(true)
-		fp.HasWiki = github.Bool(true)
-		fp.HasDiscussions = github.Bool(true)
-		fp.MergeCommitTitle = github.String("PR_TITLE")
-		fp.MergeCommitMessage = github.String("PR_BODY")
-		fp.SquashMergeCommitTitle = github.String("PR_TITLE")
-		fp.SquashMergeCommitMessage = github.String("COMMIT_MESSAGES")
+		fp.Private = github.Ptr(false)
+		fp.IsTemplate = github.Ptr(true)
+		fp.DefaultBranch = github.Ptr("trunk")
+		fp.AllowMergeCommit = github.Ptr(true)
+		fp.AllowSquashMerge = github.Ptr(true)
+		fp.AllowRebaseMerge = github.Ptr(true)
+		fp.AllowAutoMerge = github.Ptr(true)
+		fp.AllowUpdateBranch = github.Ptr(true)
+		fp.DeleteBranchOnMerge = github.Ptr(true)
+		fp.HasIssues = github.Ptr(true)
+		fp.HasProjects = github.Ptr(true)
+		fp.HasWiki = github.Ptr(true)
+		fp.HasDiscussions = github.Ptr(true)
+		fp.MergeCommitTitle = github.Ptr("PR_TITLE")
+		fp.MergeCommitMessage = github.Ptr("PR_BODY")
+		fp.SquashMergeCommitTitle = github.Ptr("PR_TITLE")
+		fp.SquashMergeCommitMessage = github.Ptr("COMMIT_MESSAGES")
 	}
 }
 
@@ -3063,7 +3077,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Errorf("records after hasWiki change: -want, +got:\n%s", diff)
 	}
 
-	cr.Spec.ForProvider.DefaultBranch = github.String("release")
+	cr.Spec.ForProvider.DefaultBranch = github.Ptr("release")
 	got, err = e.Observe(context.Background(), cr)
 	if err != nil {
 		t.Fatalf("Observe after defaultBranch change: %v", err)
@@ -3135,7 +3149,7 @@ func TestEditRequestSettings(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			gh := githubRepository()
-			gh.Fork = github.Bool(tc.fork)
+			gh.Fork = github.Ptr(tc.fork)
 			cr := &v1alpha1.Repository{}
 
 			got := pushedSettings(editRequest(cr, gh, repo), gh)
@@ -3144,5 +3158,300 @@ func TestEditRequestSettings(t *testing.T) {
 				t.Errorf("pushedSettings(editRequest(...)): -want, +got:\n%s", diff)
 			}
 		})
+	}
+}
+
+// Observe compares the CR against the rulesets GitHub lists with includes_parents=true;
+// a listing without inherited rulesets changes which rulesets the controller sees as present.
+func TestObserveListsRulesetsIncludingParents(t *testing.T) {
+	var got *github.RepositoryListRulesetsOptions
+	repos := upToDateRepositories(nil)
+	repos.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+		got = opts
+		return githubRuleset(), fake.GenerateEmptyResponse(), nil
+	}
+
+	if _, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository()); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !got.GetIncludesParents() {
+		t.Errorf("GetAllRulesets IncludesParents = %v, want true", got.GetIncludesParents())
+	}
+}
+
+// The ruleset sent on create and update carries every declared rule, and leaves "rules"
+// and "bypass_actors" out when none are declared: on an update (PUT) an explicit empty
+// list replaces what GitHub holds, while an omitted key leaves it alone.
+func TestCrRepoRulesToRulesConfig(t *testing.T) {
+	ruleset := func(m ...func(*v1alpha1.RepositoryRuleset)) v1alpha1.RepositoryRuleset {
+		r := v1alpha1.RepositoryRuleset{
+			Name:        rr1name,
+			Target:      github.Ptr(rr1target),
+			Enforcement: github.Ptr(rr1enforcement),
+			Rules: &v1alpha1.Rules{
+				Creation:              github.Ptr(false),
+				Deletion:              github.Ptr(false),
+				Update:                github.Ptr(false),
+				RequiredLinearHistory: github.Ptr(false),
+				RequiredSignatures:    github.Ptr(false),
+				NonFastForward:        github.Ptr(false),
+			},
+		}
+		for _, f := range m {
+			f(&r)
+		}
+		return r
+	}
+	allRules := func(r *v1alpha1.RepositoryRuleset) {
+		r.BypassActors = []*v1alpha1.RulesetByPassActors{{ActorId: &rr1actorId, ActorType: github.Ptr(rr1actorType), BypassMode: github.Ptr(rr1bypassMode)}}
+		r.Rules = &v1alpha1.Rules{
+			Creation:              github.Ptr(true),
+			Deletion:              github.Ptr(true),
+			Update:                github.Ptr(true),
+			RequiredLinearHistory: github.Ptr(true),
+			RequiredSignatures:    github.Ptr(true),
+			NonFastForward:        github.Ptr(true),
+			RequiredDeployments:   &v1alpha1.RulesRequiredDeployments{Environments: []string{"prod"}},
+			PullRequest: &v1alpha1.RulesPullRequest{
+				DismissStaleReviewsOnPush:      github.Ptr(true),
+				RequireCodeOwnerReview:         github.Ptr(true),
+				RequireLastPushApproval:        github.Ptr(true),
+				RequiredApprovingReviewCount:   github.Ptr(1),
+				RequiredReviewThreadResolution: github.Ptr(true),
+			},
+			RequiredStatusChecks: &v1alpha1.RulesRequiredStatusChecks{
+				StrictRequiredStatusChecksPolicy: github.Ptr(true),
+				RequiredStatusChecks:             []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "ci"}},
+			},
+		}
+	}
+
+	cases := map[string]struct {
+		reason        string
+		rule          v1alpha1.RepositoryRuleset
+		wantRuleTypes []string // nil: the "rules" key is omitted
+		wantBypass    bool
+	}{
+		"NoRuleEnabled": {
+			reason: "a ruleset with every rule off and nil bypass actors must omit both, not send empty lists",
+			rule:   ruleset(),
+		},
+		"EmptyBypassActors": {
+			reason: "an empty bypass actor list must be omitted, not sent as []",
+			rule:   ruleset(func(r *v1alpha1.RepositoryRuleset) { r.BypassActors = []*v1alpha1.RulesetByPassActors{} }),
+		},
+		"UpdateOnly": {
+			reason:        "an update rule on its own must be sent",
+			rule:          ruleset(func(r *v1alpha1.RepositoryRuleset) { r.Rules.Update = github.Ptr(true) }),
+			wantRuleTypes: []string{"update"},
+		},
+		"AllRules": {
+			reason:        "every modelled rule and the bypass actors must be sent",
+			rule:          ruleset(allRules),
+			wantRuleTypes: []string{"creation", "deletion", "non_fast_forward", "pull_request", "required_deployments", "required_linear_history", "required_signatures", "required_status_checks", "update"},
+			wantBypass:    true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(crRepoRulesToRulesConfig(tc.rule))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(body, &fields); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if _, ok := fields["bypass_actors"]; ok != tc.wantBypass {
+				t.Errorf("%s\nbypass_actors present = %v, want %v; body %s", tc.reason, ok, tc.wantBypass, body)
+			}
+
+			raw, ok := fields["rules"]
+			if tc.wantRuleTypes == nil {
+				if ok {
+					t.Errorf("%s\nrules present, want omitted; body %s", tc.reason, body)
+				}
+				return
+			}
+			var rules []struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(raw, &rules); err != nil {
+				t.Fatalf("unmarshal rules %s: %v", raw, err)
+			}
+			got := make([]string, 0, len(rules))
+			for _, r := range rules {
+				got = append(got, r.Type)
+			}
+			if diff := cmp.Diff(tc.wantRuleTypes, got, cmpopts.SortSlices(func(a, b string) bool { return a < b })); diff != "" {
+				t.Errorf("%s\nrule types: -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// An update sends only the rules the provider models, so GitHub drops every other rule
+// in the ruleset. unmanagedRuleTypes names those rules so Observe can stop first. It
+// leaves out merge_queue, workflows and the *_pattern rules: rulesets holding them are
+// reconciled, and reporting them would stop that.
+func TestUnmanagedRuleTypes(t *testing.T) {
+	// decode builds the rules from GitHub's wire format, so each case also pins that the
+	// type name GitHub sends reaches the field the guard checks.
+	decode := func(types ...string) *github.RepositoryRulesetRules {
+		wire := make([]map[string]string, len(types))
+		for i, typ := range types {
+			wire[i] = map[string]string{"type": typ}
+		}
+		body, err := json.Marshal(wire)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		rules := &github.RepositoryRulesetRules{}
+		if err := json.Unmarshal(body, rules); err != nil {
+			t.Fatalf("unmarshal %s: %v", body, err)
+		}
+		return rules
+	}
+
+	type testCase struct {
+		reason string
+		rules  *github.RepositoryRulesetRules
+		want   []string
+	}
+	cases := map[string]testCase{
+		"NoRules": {
+			reason: "a ruleset without rules holds nothing an update could drop",
+		},
+		"ModelledOnly": {
+			reason: "rules the provider models survive an update",
+			rules:  decode("creation", "update", "deletion", "required_linear_history", "required_deployments", "required_signatures", "pull_request", "required_status_checks", "non_fast_forward"),
+		},
+		"ReconciledUnmodelled": {
+			reason: "rulesets holding these are reconciled; reporting them would stop that",
+			rules:  decode("merge_queue", "workflows", "commit_message_pattern", "commit_author_email_pattern", "committer_email_pattern", "branch_name_pattern", "tag_name_pattern"),
+		},
+		"SortedWithModelled": {
+			reason: "the error lists the unmanaged types sorted, whatever order GitHub sends them in",
+			rules:  decode("max_file_size", "creation", "code_scanning"),
+			want:   []string{"code_scanning", "max_file_size"},
+		},
+	}
+	for _, typ := range []string{
+		"code_scanning", "copilot_code_review", "file_extension_restriction", "file_path_restriction",
+		"max_file_path_length", "max_file_size", "repository_create", "repository_delete",
+		"repository_name", "repository_transfer", "repository_visibility",
+	} {
+		cases[typ] = testCase{
+			reason: "an update would drop this rule",
+			rules:  decode(typ),
+			want:   []string{typ},
+		}
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, unmanagedRuleTypes(tc.rules)); diff != "" {
+				t.Errorf("%s\nunmanagedRuleTypes(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// Observe fails on a ruleset holding a rule the provider does not model, and nothing is
+// written: an update would send the ruleset without that rule and GitHub would drop it.
+func TestObserveRulesetWithUnmanagedRuleFails(t *testing.T) {
+	repos := upToDateRepositories(nil)
+	repos.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+		rs := githubRuleset()[0]
+		rs.Rules.FilePathRestriction = &github.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/"}}
+		return rs, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockCreateRuleset = func(ctx context.Context, owner, repo string, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called; a ruleset with unmanaged rules must not be written")
+		return nil, nil, nil
+	}
+	repos.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+		t.Errorf("UpdateRuleset called; it would drop the file_path_restriction rule")
+		return nil, nil, nil
+	}
+	repos.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		t.Errorf("DeleteRuleset called; a ruleset with unmanaged rules must not be written")
+		return nil, nil
+	}
+
+	_, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository())
+
+	want := errors.New("ruleset test-ruleset-1 has rule types this provider does not manage (file_path_restriction); remove them on GitHub or stop managing repositoryRules for this repository")
+	if diff := cmp.Diff(want, err, test.EquateErrors()); diff != "" {
+		t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
+	}
+}
+
+const githubOnlyRulesetID int64 = 456
+
+// withGitHubOnlyRuleset adds a ruleset that exists on GitHub but is not named in the CR,
+// holding a rule the provider does not model.
+func withGitHubOnlyRuleset(repos *fake.MockRepositoriesClient) {
+	githubOnly := func() *github.RepositoryRuleset {
+		return &github.RepositoryRuleset{
+			ID:          github.Ptr(githubOnlyRulesetID),
+			Name:        "github-only",
+			Enforcement: github.RulesetEnforcement(rr1enforcement),
+			Rules: &github.RepositoryRulesetRules{
+				FilePathRestriction: &github.FilePathRestrictionRuleParameters{RestrictedFilePaths: []string{"secrets/"}},
+			},
+		}
+	}
+	repos.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
+		return append(githubRuleset(), githubOnly()), fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*github.RepositoryRuleset, *github.Response, error) {
+		if rulesetID == githubOnlyRulesetID {
+			return githubOnly(), fake.GenerateEmptyResponse(), nil
+		}
+		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
+	}
+}
+
+// The unmanaged-rule guard covers only rulesets named in the CR. A ruleset not named there
+// is deleted, never updated, so no rule of it can be dropped; failing on it would block
+// the reconcile that removes it.
+func TestObserveGitHubOnlyRulesetWithUnmanagedRuleIsSurplus(t *testing.T) {
+	repos := upToDateRepositories(nil)
+	withGitHubOnlyRuleset(repos)
+
+	got, err := (&external{github: clientFor(repos)}).Observe(context.Background(), repository())
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got.ResourceUpToDate {
+		t.Errorf("ResourceUpToDate = true, want false: the GitHub-only ruleset is surplus and must be deleted")
+	}
+}
+
+// Update deletes a ruleset that is not named in the CR even when it holds a rule the
+// provider does not model, and never updates it: an update would drop that rule.
+func TestUpdateRepositoryRulesDeletesGitHubOnlyRuleset(t *testing.T) {
+	repos := upToDateRepositories(nil)
+	withGitHubOnlyRuleset(repos)
+	var deleted []int64
+	repos.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		deleted = append(deleted, rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, rs github.RepositoryRuleset) (*github.RepositoryRuleset, *github.Response, error) {
+		if rulesetID == githubOnlyRulesetID {
+			t.Errorf("UpdateRuleset called for the GitHub-only ruleset; it would drop the file_path_restriction rule")
+		}
+		return &rs, fake.GenerateEmptyResponse(), nil
+	}
+
+	if err := updateRepositoryRules(context.Background(), repository(), clientFor(repos), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	if diff := cmp.Diff([]int64{githubOnlyRulesetID}, deleted); diff != "" {
+		t.Errorf("DeleteRuleset IDs: -want, +got:\n%s", diff)
 	}
 }
