@@ -4486,6 +4486,48 @@ func TestObserveSurplusRulesetRecordsNoEvent(t *testing.T) {
 	}
 }
 
+// Each Observe that finds unmanaged parameters adds one per affected rule type, with or
+// without an event recorder, so operators can alert on the parameters the next ruleset
+// update resets.
+func TestObserveCountsUnmanagedParameters(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	counter := metrics.RulesetUnmanagedParametersForTest()
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, pullRequestOnGitHub())
+	cr := repository(withPullRequestRule(2), withMergeQueueRule())
+	cr.Spec.ForProvider.Org = "acme"
+	e := external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}
+
+	for want := 1.0; want <= 2; want++ {
+		if _, err := e.Observe(context.Background(), cr); err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		for _, ruleType := range []string{"merge_queue", "pull_request"} {
+			if got := testutil.ToFloat64(counter.WithLabelValues("acme", ruleType)); got != want {
+				t.Errorf("unmanaged_parameters_total{rule_type=%s} after %v Observe = %v, want %v", ruleType, want, got, want)
+			}
+		}
+	}
+}
+
+// A ruleset holding only parameters the provider manages leaves the counter without series.
+func TestObserveManagedParametersCountNothing(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	rs := upToDateRulesets()
+	rulesetHolding(t, rs, func(m *rulesets.ModelledRules) {
+		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
+	})
+	cr := repository(withPullRequestRule(2))
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := testutil.CollectAndCount(metrics.RulesetUnmanagedParametersForTest()); got != 0 {
+		t.Errorf("unmanaged_parameters_total series = %d, want 0", got)
+	}
+}
+
 // One sentence names a rule's unmanaged parameters, in the singular or the plural.
 func TestUnmanagedParametersSentence(t *testing.T) {
 	cases := map[string]struct {

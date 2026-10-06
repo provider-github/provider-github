@@ -59,6 +59,9 @@ type RateLimitMetrics struct {
 
 	// Repository-unreconcilable gauge, per (org, repository, dimension).
 	repositoryUnreconcilable *prometheus.GaugeVec
+
+	// Ruleset-unmanaged-parameters counter, per (org, rule type).
+	rulesetUnmanagedParameters *prometheus.CounterVec
 }
 
 // Dimensions of declared repository state GitHub may refuse to apply.
@@ -138,6 +141,13 @@ func newRateLimitMetrics() *RateLimitMetrics {
 			},
 			[]string{"organization", "repository", "dimension"},
 		),
+		rulesetUnmanagedParameters: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "github_ruleset_unmanaged_parameters_total",
+				Help: "Observations of a ruleset rule carrying a parameter GitHub returns and the provider does not model, by rule type.",
+			},
+			[]string{"organization", "rule_type"},
+		),
 	}
 }
 
@@ -154,6 +164,7 @@ func NewRateLimitMetrics(_ ctrl.Manager) *RateLimitMetrics {
 	prometheus.MustRegister(m.apiCallsTotal)
 	prometheus.MustRegister(m.picksTotal)
 	prometheus.MustRegister(m.repositoryUnreconcilable)
+	prometheus.MustRegister(m.rulesetUnmanagedParameters)
 
 	return m
 }
@@ -194,6 +205,11 @@ func (m *RateLimitMetrics) PicksCountForTest(org, appID, installationID, reason 
 // RepositoryUnreconcilableForTest exposes the gauge vec to cross-package tests.
 func (m *RateLimitMetrics) RepositoryUnreconcilableForTest() *prometheus.GaugeVec {
 	return m.repositoryUnreconcilable
+}
+
+// RulesetUnmanagedParametersForTest exposes the counter vec to cross-package tests.
+func (m *RateLimitMetrics) RulesetUnmanagedParametersForTest() *prometheus.CounterVec {
+	return m.rulesetUnmanagedParameters
 }
 
 func counterValue(c prometheus.Counter) float64 {
@@ -245,4 +261,10 @@ func (m *RateLimitMetrics) SetRepositoryUnreconcilable(org, repo, dimension stri
 // ForgetRepository deletes every github_repository_unreconcilable series of the repository.
 func (m *RateLimitMetrics) ForgetRepository(org, repo string) {
 	m.repositoryUnreconcilable.DeletePartialMatch(prometheus.Labels{"organization": org, "repository": repo})
+}
+
+// RecordRulesetUnmanagedParameters increments the github_ruleset_unmanaged_parameters_total
+// counter for a rule of ruleType that carries parameters the provider does not model.
+func (m *RateLimitMetrics) RecordRulesetUnmanagedParameters(org, ruleType string) {
+	m.rulesetUnmanagedParameters.WithLabelValues(org, ruleType).Inc()
 }

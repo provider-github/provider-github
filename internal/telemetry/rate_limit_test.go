@@ -136,6 +136,23 @@ func TestRecordAppUnhealthy_IncrementsCounter(t *testing.T) {
 	}
 }
 
+// Each recorded observation adds one to its (org, rule type) series alone, so an alert
+// names the rule type whose parameters the next ruleset update resets.
+func TestRecordRulesetUnmanagedParameters_CountsPerRuleType(t *testing.T) {
+	m := newRateLimitMetrics()
+
+	m.RecordRulesetUnmanagedParameters("acme", "pull_request")
+	m.RecordRulesetUnmanagedParameters("acme", "pull_request")
+	m.RecordRulesetUnmanagedParameters("acme", "merge_queue")
+
+	if got := testutil.ToFloat64(m.rulesetUnmanagedParameters.WithLabelValues("acme", "pull_request")); got != 2 {
+		t.Errorf("unmanaged_parameters_total{rule_type=pull_request} = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(m.rulesetUnmanagedParameters.WithLabelValues("acme", "merge_queue")); got != 1 {
+		t.Errorf("unmanaged_parameters_total{rule_type=merge_queue} = %v, want 1", got)
+	}
+}
+
 // The gauge reads 1 while a dimension is unreconcilable and drops back to 0 once it is not.
 func TestSetRepositoryUnreconcilable_FollowsState(t *testing.T) {
 	m := newRateLimitMetrics()
