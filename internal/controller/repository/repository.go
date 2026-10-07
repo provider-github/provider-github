@@ -320,12 +320,12 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Rulesets are skipped while the CR is being deleted, so the deletion goes ahead even
 	// when the ruleset endpoint fails (403 on plans without private-repository rulesets).
 	if cr.Spec.ForProvider.RepositoryRules != nil && !meta.WasDeleted(cr) {
-		ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
+		crRepositoryRulesToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 
-		crRepositoryRulesToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
+		ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
@@ -2391,6 +2391,9 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) (map[string
 		if err := duplicateBypassActor(rCopy.Name, rCopy.BypassActors); err != nil {
 			return nil, err
 		}
+		if err := duplicateRefPattern(rCopy.Name, rCopy.Conditions); err != nil {
+			return nil, err
+		}
 
 		// Unset rules mean every rule is off.
 		if rCopy.Rules == nil {
@@ -2936,6 +2939,26 @@ func duplicateBypassActor(ruleset string, actors []*v1alpha1.RulesetByPassActors
 	return nil
 }
 
+// duplicateRefPattern returns an error naming the first ref pattern the ruleset lists twice
+// in include or exclude. GitHub stores each pattern once, so the CR must list each once too.
+// The conditions come from rulesetConditions, so both lists are sorted.
+func duplicateRefPattern(ruleset string, c *v1alpha1.RulesetConditions) error {
+	if c == nil {
+		return nil
+	}
+	for _, list := range []struct {
+		name     string
+		patterns []string
+	}{{"include", c.RefName.Include}, {"exclude", c.RefName.Exclude}} {
+		for i := 1; i < len(list.patterns); i++ {
+			if list.patterns[i] == list.patterns[i-1] {
+				return errors.Errorf("ruleset %s lists ref pattern %s twice in %s", ruleset, list.patterns[i], list.name)
+			}
+		}
+	}
+	return nil
+}
+
 // actorIDIgnored reports whether GitHub stores this actor type with a null actor_id.
 func actorIDIgnored(actorType *string) bool {
 	t := pointer.Deref(actorType, "")
@@ -3129,13 +3152,13 @@ func decimalToGitHub(s *string) (*float64, error) {
 // It performs necessary additions, updates, or deletions based on the difference between
 // the actual state on GitHub and the desired state in the resource object.
 func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.Client, repoName string) error {
-	// Fetch the current repository rules from GitHub
-	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	// Generate a map of the repository rules from the Crossplane resource
+	crRToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 	if err != nil {
 		return err
 	}
-	// Generate a map of the repository rules from the Crossplane resource
-	crRToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
+	// Fetch the current repository rules from GitHub
+	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
 	if err != nil {
 		return err
 	}

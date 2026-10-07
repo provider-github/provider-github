@@ -439,10 +439,8 @@ type RulesetConditions struct {
 type RulesetRefName struct {
 	// Include is the list of refs to include: full ref patterns such as
 	// "refs/heads/main" or "refs/tags/v*", or "~DEFAULT_BRANCH" or "~ALL". Each pattern is listed once.
-	// +listType=set
 	Include []string `json:"include"`
 	// Exclude is the list of refs to exclude, in the same form as Include. Each pattern is listed once.
-	// +listType=set
 	Exclude []string `json:"exclude"`
 }
 

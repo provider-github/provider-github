@@ -5304,6 +5304,97 @@ func TestBypassActorsDuplicateIgnoredIDTypes(t *testing.T) {
 	}
 }
 
+// A ref pattern listed twice in include or exclude stops Observe, Update and Create with
+// an error naming it, before any ruleset call, because GitHub stores each pattern once.
+func TestRefPatternDuplicates(t *testing.T) {
+	noCalls := func(t *testing.T) *fake.MockRulesetsClient {
+		return &fake.MockRulesetsClient{
+			MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+				t.Errorf("GetAllRulesets called")
+				return nil, fake.GenerateEmptyResponse(), nil
+			},
+			MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+				t.Errorf("GetRuleset called")
+				return nil, fake.GenerateEmptyResponse(), nil
+			},
+			MockCreateRuleset: func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+				t.Errorf("CreateRuleset called")
+				return &r, fake.GenerateEmptyResponse(), nil
+			},
+			MockUpdateRuleset: func(ctx context.Context, owner, repo string, id int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+				t.Errorf("UpdateRuleset called")
+				return &r, fake.GenerateEmptyResponse(), nil
+			},
+			MockDeleteRuleset: func(ctx context.Context, owner, repo string, id int64) (*github.Response, error) {
+				t.Errorf("DeleteRuleset called")
+				return fake.GenerateEmptyResponse(), nil
+			},
+		}
+	}
+	cases := map[string]v1alpha1.RulesetRefName{
+		"include": {Include: []string{"refs/heads/main", "~DEFAULT_BRANCH", "refs/heads/main"}, Exclude: []string{"refs/heads/x"}},
+		"exclude": {Include: []string{"refs/heads/main"}, Exclude: []string{"refs/heads/y", "refs/heads/x", "refs/heads/y"}},
+	}
+	for list, refName := range cases {
+		withDuplicate := func(cr *v1alpha1.Repository) {
+			(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{RefName: refName.DeepCopy()}
+		}
+		pattern := "refs/heads/main"
+		if list == "exclude" {
+			pattern = "refs/heads/y"
+		}
+		wantErr := fmt.Sprintf("ruleset %s lists ref pattern %s twice in %s", rr1name, pattern, list)
+		check := func(t *testing.T, err error) {
+			t.Helper()
+			if err == nil || err.Error() != wantErr {
+				t.Errorf("error = %v, want %q", err, wantErr)
+			}
+		}
+
+		t.Run(list+"/Observe", func(t *testing.T) {
+			_, err := (&external{github: clientFor(upToDateRepositories(nil), noCalls(t))}).Observe(context.Background(), repository(withDuplicate))
+			check(t, err)
+		})
+		t.Run(list+"/Update", func(t *testing.T) {
+			repos := upToDateRepositories(nil)
+			repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+				return req, fake.GenerateEmptyResponse(), nil
+			}
+			repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+				return topics, fake.GenerateEmptyResponse(), nil
+			}
+			cr := settingsOnlyRepository()
+			cr.Spec.ForProvider.RepositoryRules = repository(withDuplicate).Spec.ForProvider.RepositoryRules
+			_, err := (&external{github: clientFor(repos, noCalls(t))}).Update(context.Background(), cr)
+			check(t, err)
+		})
+		t.Run(list+"/Create", func(t *testing.T) {
+			repos := &fake.MockRepositoriesClient{
+				MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+					return r, fake.GenerateEmptyResponse(), nil
+				},
+				MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+					return nil, fake.GenerateEmptyResponse(), nil
+				},
+				MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+					return topics, fake.GenerateEmptyResponse(), nil
+				},
+			}
+			teams := &fake.MockTeamsClient{
+				MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+					return fake.GenerateEmptyResponse(), nil
+				},
+			}
+			cr := repository(withDuplicate)
+			cr.Spec.ForProvider.Webhooks = nil
+			cr.Spec.ForProvider.BranchProtectionRules = nil
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: noCalls(t)}}}
+			_, err := e.Create(context.Background(), cr)
+			check(t, err)
+		})
+	}
+}
+
 // A ruleset the CR does not name is deleted without a GET, so its deletion goes ahead
 // even when the GET or its parameters would fail.
 func TestSurplusRulesetIsNotFetched(t *testing.T) {
