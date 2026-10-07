@@ -39,6 +39,7 @@ type RepositoryParameters struct {
 	// an empty list ([]) deletes them all. When the field is absent, the rulesets
 	// on GitHub stay as they are. GitHub allows at most 75 rulesets per repository.
 	// +kubebuilder:validation:MaxItems=75
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.name == x.name))",message="each ruleset name may appear once in repositoryRules"
 	RepositoryRules *[]RepositoryRuleset `json:"repositoryRules,omitempty"`
 
 	// Creates a new repository using a repository template
@@ -389,6 +390,7 @@ type BranchProtectionRestrictions struct {
 // RepositoryRuleset represents the rules for a repository
 type RepositoryRuleset struct {
 	// Name is the name of the ruleset
+	// +kubebuilder:validation:MaxLength=255
 	Name string `json:"name"`
 	// Enforcement is the enforcement level of the ruleset, one of "disabled", "active" or
 	// "evaluate" (GitHub Enterprise only). Defaults to "active".

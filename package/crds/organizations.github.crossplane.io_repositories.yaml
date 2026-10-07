@@ -735,6 +735,7 @@ spec:
                           type: string
                         name:
                           description: Name is the name of the ruleset
+                          maxLength: 255
                           type: string
                         rules:
                           description: Rules is the rules for the ruleset
@@ -1316,6 +1317,9 @@ spec:
                       type: object
                     maxItems: 75
                     type: array
+                    x-kubernetes-validations:
+                    - message: each ruleset name may appear once in repositoryRules
+                      rule: self.all(x, self.exists_one(y, y.name == x.name))
                   squashMergeCommitMessage:
                     description: |-
                       SquashMergeCommitMessage sets the default body format for squash-merge commits.
