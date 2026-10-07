@@ -985,6 +985,8 @@ spec:
                                 maxFilePathLength:
                                   description: MaxFilePathLength is the maximum number
                                     of characters allowed in file paths.
+                                  maximum: 32767
+                                  minimum: 1
                                   type: integer
                               required:
                               - maxFilePathLength
@@ -1003,6 +1005,8 @@ spec:
                                   description: MaxFileSize is the maximum file size
                                     allowed, in megabytes.
                                   format: int64
+                                  maximum: 100
+                                  minimum: 1
                                   type: integer
                               required:
                               - maxFileSize
@@ -1015,6 +1019,8 @@ spec:
                                   description: CheckResponseTimeoutMinutes is the
                                     maximum time, in minutes, for a required status
                                     check to report a conclusion.
+                                  maximum: 360
+                                  minimum: 1
                                   type: integer
                                 groupingStrategy:
                                   description: 'GroupingStrategy decides which pull
@@ -1028,10 +1034,14 @@ spec:
                                   description: MaxEntriesToBuild is the maximum number
                                     of queued pull requests requesting checks and
                                     workflow runs at the same time.
+                                  maximum: 100
+                                  minimum: 0
                                   type: integer
                                 maxEntriesToMerge:
                                   description: MaxEntriesToMerge is the maximum number
                                     of pull requests merged together in a group.
+                                  maximum: 100
+                                  minimum: 0
                                   type: integer
                                 mergeMethod:
                                   description: MergeMethod is the method used to merge
@@ -1044,11 +1054,15 @@ spec:
                                 minEntriesToMerge:
                                   description: MinEntriesToMerge is the minimum number
                                     of pull requests merged together in a group.
+                                  maximum: 100
+                                  minimum: 0
                                   type: integer
                                 minEntriesToMergeWaitMinutes:
                                   description: MinEntriesToMergeWaitMinutes is the
                                     time, in minutes, the merge queue waits for MinEntriesToMerge
                                     pull requests.
+                                  maximum: 360
+                                  minimum: 0
                                   type: integer
                               required:
                               - checkResponseTimeoutMinutes
@@ -1145,6 +1159,8 @@ spec:
                                   description: RequiredApprovingReviewCount specifies
                                     the number of reviewers required to approve pull
                                     requests.
+                                  maximum: 10
+                                  minimum: 0
                                   type: integer
                                 requiredReviewThreadResolution:
                                   description: RequiredReviewThreadResolution requires
@@ -1166,6 +1182,8 @@ spec:
                                       minimumApprovals:
                                         description: MinimumApprovals is how many
                                           approvals the reviewer must give.
+                                        maximum: 10
+                                        minimum: 0
                                         type: integer
                                       reviewer:
                                         description: Reviewer is the team that must

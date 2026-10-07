@@ -531,20 +531,30 @@ type Rules struct {
 
 type RulesMergeQueue struct {
 	// CheckResponseTimeoutMinutes is the maximum time, in minutes, for a required status check to report a conclusion.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=360
 	CheckResponseTimeoutMinutes int `json:"checkResponseTimeoutMinutes"`
 	// GroupingStrategy decides which pull requests' checks must pass: all of them (ALLGREEN) or the head of the group (HEADGREEN).
 	// +kubebuilder:validation:Enum=ALLGREEN;HEADGREEN
 	GroupingStrategy string `json:"groupingStrategy"`
 	// MaxEntriesToBuild is the maximum number of queued pull requests requesting checks and workflow runs at the same time.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	MaxEntriesToBuild int `json:"maxEntriesToBuild"`
 	// MaxEntriesToMerge is the maximum number of pull requests merged together in a group.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	MaxEntriesToMerge int `json:"maxEntriesToMerge"`
 	// MergeMethod is the method used to merge changes in queued pull requests.
 	// +kubebuilder:validation:Enum=MERGE;SQUASH;REBASE
 	MergeMethod string `json:"mergeMethod"`
 	// MinEntriesToMerge is the minimum number of pull requests merged together in a group.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	MinEntriesToMerge int `json:"minEntriesToMerge"`
 	// MinEntriesToMergeWaitMinutes is the time, in minutes, the merge queue waits for MinEntriesToMerge pull requests.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=360
 	MinEntriesToMergeWaitMinutes int `json:"minEntriesToMergeWaitMinutes"`
 }
 
@@ -634,11 +644,15 @@ type RulesFilePathRestriction struct {
 
 type RulesMaxFilePathLength struct {
 	// MaxFilePathLength is the maximum number of characters allowed in file paths.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=32767
 	MaxFilePathLength int `json:"maxFilePathLength"`
 }
 
 type RulesMaxFileSize struct {
 	// MaxFileSize is the maximum file size allowed, in megabytes.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	MaxFileSize int64 `json:"maxFileSize"`
 	// IgnoredFilePaths are paths exempt from the rule. Unset means an empty list.
 	// +optional
@@ -682,6 +696,8 @@ type RulesPullRequest struct {
 	// +optional
 	RequireLastPushApproval *bool `json:"requireLastPushApproval,omitempty"`
 	// RequiredApprovingReviewCount specifies the number of reviewers required to approve pull requests.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
 	// +optional
 	RequiredApprovingReviewCount *int `json:"requiredApprovingReviewCount,omitempty"`
 	// RequiredReviewThreadResolution requires all conversations on code to be resolved before a pull request can be merged.
@@ -711,6 +727,8 @@ type RulesRequiredReviewer struct {
 	// FilePatterns are the file patterns whose changes need the reviewer's approval.
 	FilePatterns []string `json:"filePatterns"`
 	// MinimumApprovals is how many approvals the reviewer must give.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
 	MinimumApprovals int `json:"minimumApprovals"`
 	// Reviewer is the team that must approve.
 	Reviewer RulesReviewer `json:"reviewer"`
