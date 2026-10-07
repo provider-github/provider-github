@@ -264,8 +264,8 @@ func ruleset() Ruleset {
 	}
 }
 
-// wantBody is ruleset() as JSON. "source" is sent empty, as go-github sent it.
-const wantBody = `{"name":"main","target":"branch","source":"","enforcement":"active",
+// wantBody is ruleset() as JSON. "source" is read-only, so it is left out.
+const wantBody = `{"name":"main","target":"branch","enforcement":"active",
 "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}],
 "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
 "rules":[{"type":"creation"},{"type":"pull_request","parameters":{"required_approving_review_count":1}}]}`
@@ -306,7 +306,7 @@ func TestRulesetEmptyListsAreSent(t *testing.T) {
 	if _, _, err := s.UpdateRuleset(context.Background(), "acme", "repo", 42, rs); err != nil {
 		t.Fatalf("UpdateRuleset: %v", err)
 	}
-	jsonEqual(t, `{"name":"main","source":"","enforcement":"active","bypass_actors":[],"rules":[]}`, got.body)
+	jsonEqual(t, `{"name":"main","enforcement":"active","bypass_actors":[],"rules":[]}`, got.body)
 }
 
 func TestDeleteRulesetRequest(t *testing.T) {

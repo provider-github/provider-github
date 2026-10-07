@@ -33,13 +33,14 @@ import (
 	"github.com/google/go-github/v90/github"
 )
 
-// Ruleset is a repository ruleset as the REST API returns and accepts it.
+// Ruleset is a repository ruleset as the REST API returns and accepts it. Source is
+// set by GitHub, so requests leave it out.
 type Ruleset struct {
 	ID           *int64         `json:"id,omitempty"`
 	Name         string         `json:"name"`
 	Target       *string        `json:"target,omitempty"`
 	SourceType   *string        `json:"source_type,omitempty"`
-	Source       string         `json:"source"`
+	Source       string         `json:"source,omitempty"`
 	Enforcement  string         `json:"enforcement"`
 	BypassActors []*BypassActor `json:"bypass_actors,omitzero"`
 	Conditions   *Conditions    `json:"conditions,omitempty"`
