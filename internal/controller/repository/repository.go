@@ -326,22 +326,31 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 
 		ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
-		if err != nil {
+		// A 403 is GitHub refusing rulesets on this repository; the other blocks still decide ResourceUpToDate.
+		if err != nil && !ghclient.Is403(err) {
 			return managed.ExternalObservation{}, err
 		}
-		ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+		setRulesetsPartialCondition(cr, err)
+		c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
 		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
-		if len(unmanagedParameters) > 0 && c.recorder != nil {
-			c.recorder.Event(cr, event.Warning(reasonUnmanagedRulesetParameters, errors.New(strings.Join(unmanagedParameters, "; "))))
-		}
-		c.recordUnmanagedParameters(cr, len(unmanagedParameters) > 0)
+			c.recordUnmanagedParameters(cr, false)
+		} else {
+			ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			if len(unmanagedParameters) > 0 && c.recorder != nil {
+				c.recorder.Event(cr, event.Warning(reasonUnmanagedRulesetParameters, errors.New(strings.Join(unmanagedParameters, "; "))))
+			}
+			c.recordUnmanagedParameters(cr, len(unmanagedParameters) > 0)
 
-		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-			return notUpToDate, nil
+			if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
+				return notUpToDate, nil
+			}
 		}
 	} else {
+		setRulesetsPartialCondition(cr, nil)
+		c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
 		c.recordUnmanagedParameters(cr, false)
 	}
 
@@ -417,6 +426,35 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 	})
 }
 
+// Condition surfaced while GitHub answers the ruleset list with 403, such as on a
+// private repository whose plan has no rulesets.
+const (
+	typeRulesetsPartial     xpv1.ConditionType   = "RulesetsPartial"
+	reasonRulesetsForbidden xpv1.ConditionReason = "RulesetsForbidden"
+	reasonRulesetsListed    xpv1.ConditionReason = "RulesetsListed"
+)
+
+// setRulesetsPartialCondition carries GitHub's message from forbidden, the 403 of the
+// ruleset list, and reports False when forbidden is nil.
+func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error) {
+	c := xpv1.Condition{Type: typeRulesetsPartial, LastTransitionTime: metav1.Now()}
+	if forbidden == nil {
+		c.Status = corev1.ConditionFalse
+		c.Reason = reasonRulesetsListed
+		cr.SetConditions(c)
+		return
+	}
+	msg := forbidden.Error()
+	var errResp *github.ErrorResponse
+	if errors.As(forbidden, &errResp) {
+		msg = errResp.Message
+	}
+	c.Status = corev1.ConditionTrue
+	c.Reason = reasonRulesetsForbidden
+	c.Message = "GitHub answers the ruleset list with 403, so rulesets are left as they are: " + msg
+	cr.SetConditions(c)
+}
+
 // recordUnreconcilable publishes the dimension's gauge from its condition's current status.
 func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv1.ConditionType) {
 	if c.metrics == nil {
@@ -461,6 +499,8 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
+	setRulesetsPartialCondition(cr, nil)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
@@ -3310,7 +3350,9 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 			return managed.ExternalUpdate{}, err
 		}
 	}
-	if cr.Spec.ForProvider.RepositoryRules != nil {
+	// Rulesets wait while Observe reports GitHub refusing them, so the rest still converges.
+	rulesetsForbidden := cr.GetCondition(typeRulesetsPartial).Reason == reasonRulesetsForbidden
+	if cr.Spec.ForProvider.RepositoryRules != nil && !rulesetsForbidden {
 		err = updateRepositoryRules(ctx, cr, c.github, name)
 		if err != nil {
 			return managed.ExternalUpdate{}, err

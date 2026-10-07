@@ -5200,6 +5200,216 @@ func TestObserveFailsWhenRulesetListFails(t *testing.T) {
 	}
 }
 
+// rulesetsForbidden answers the ruleset list with GitHub's 403 for a private repository
+// on a plan without rulesets, and fails the test on any other ruleset call.
+func rulesetsForbidden(t *testing.T) *fake.MockRulesetsClient {
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: planWithoutRulesets}
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetRuleset called after the list answered 403")
+		return nil, nil, errors.New("unexpected GetRuleset")
+	}
+	return rs
+}
+
+const planWithoutRulesets = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+
+// GitHub refuses rulesets on a private repository whose plan has none. Observe reports
+// that on RulesetsPartial and the rulesets gauge and lets the other blocks decide
+// ResourceUpToDate, with repositoryRules empty or not, so the rest of the repository
+// keeps reconciling.
+func TestObserveRulesetListForbidden(t *testing.T) {
+	cases := map[string]struct {
+		cr           *v1alpha1.Repository
+		wantUpToDate bool
+	}{
+		"EmptyRepositoryRules": {
+			cr:           repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{} }),
+			wantUpToDate: true,
+		},
+		"DeclaredRulesets": {
+			cr:           repository(),
+			wantUpToDate: true,
+		},
+		"TopicsDrift": {
+			cr:           repository(withDifferentTopics()),
+			wantUpToDate: false,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			tc.cr.Spec.ForProvider.Org = "acme"
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), tc.cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate %v", got, tc.wantUpToDate)
+			}
+			condition := tc.cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonRulesetsForbidden {
+				t.Errorf("RulesetsPartial = %v/%v, want True/%v", condition.Status, condition.Reason, reasonRulesetsForbidden)
+			}
+			if !strings.HasSuffix(condition.Message, ": "+planWithoutRulesets) {
+				t.Errorf("RulesetsPartial message = %q, want GitHub's message %q", condition.Message, planWithoutRulesets)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 1 {
+				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 1", got)
+			}
+		})
+	}
+}
+
+// Once GitHub lists the rulesets again, RulesetsPartial turns False and the gauge 0.
+func TestObserveRulesetListAllowedClearsRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	cr := repository()
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(403): %v", err)
+	}
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(200): %v", err)
+	}
+
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsListed || got.Message != "" {
+		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsListed)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
+		t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
+	}
+}
+
+// Any other failure of the ruleset list fails Observe, so a transient error is retried
+// instead of being reported as a refusal: a 500, and a 403 that is GitHub's rate limit.
+func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
+	cases := map[string]error{
+		"ServerError": &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusInternalServerError}, Message: "Server Error"},
+		"RateLimit":   &github.RateLimitError{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: "API rate limit exceeded"},
+	}
+	for name, listErr := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs := upToDateRulesets()
+			rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+				return nil, nil, listErr
+			}
+			cr := repository()
+
+			_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr)
+			if !errors.Is(err, listErr) {
+				t.Errorf("Observe(...) error = %#v, want the list error %#v", err, listErr)
+			}
+			if got := cr.GetCondition(typeRulesetsPartial).Status; got == corev1.ConditionTrue {
+				t.Errorf("RulesetsPartial = True, want it unset after a %s", name)
+			}
+		})
+	}
+}
+
+// A repository whose rulesets the provider leaves alone publishes rulesets=0 and
+// RulesetsPartial False, so an earlier refusal does not keep an alert firing:
+// repositoryRules unset, the repository archived, or the CR being deleted.
+func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
+	archived := upToDateRepositories(nil)
+	archived.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+		r := githubRepository()
+		r.Archived = github.Ptr(true)
+		return r, nil, nil
+	}
+	deleted := repository()
+	now := metav1.Now()
+	deleted.SetDeletionTimestamp(&now)
+	cases := map[string]struct {
+		repos *fake.MockRepositoriesClient
+		cr    *v1alpha1.Repository
+	}{
+		"RepositoryRulesUnset": {
+			repos: upToDateRepositories(nil),
+			cr:    repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = nil }),
+		},
+		"Archived": {
+			repos: archived,
+			cr:    repository(withArchived(true)),
+		},
+		"Deleted": {
+			repos: upToDateRepositories(nil),
+			cr:    deleted,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
+			tc.cr.Spec.ForProvider.Org = "acme"
+			tc.cr.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
+
+			if _, err := (&external{github: clientFor(tc.repos, rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), tc.cr); err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got := tc.cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
+				t.Errorf("RulesetsPartial = %v, want False", got)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
+				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
+			}
+		})
+	}
+}
+
+// While GitHub refuses rulesets, Update leaves them out and brings the rest of the
+// repository to the CR, so the topics converge and Synced can turn True. Without the
+// refusal reported, Update syncs rulesets as before.
+func TestUpdateSkipsRulesetsWhileForbidden(t *testing.T) {
+	var replaced []string
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		replaced = topics
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	lists := 0
+	rs := rulesetsForbidden(t)
+	forbiddenList := rs.MockGetAllRulesets
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		lists++
+		return forbiddenList(ctx, owner, repo, opts)
+	}
+	e := external{github: clientFor(repos, rs)}
+	newCR := func() *v1alpha1.Repository {
+		cr := repository(withDifferentTopics())
+		cr.Spec.ForProvider.Webhooks = nil
+		cr.Spec.ForProvider.BranchProtectionRules = nil
+		return cr
+	}
+
+	cr := newCR()
+	if got, err := e.Observe(context.Background(), cr); err != nil || got.ResourceUpToDate {
+		t.Fatalf("Observe = %+v, %v; want topic drift and no error", got, err)
+	}
+	lists = 0
+	if _, err := e.Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update while forbidden: %v", err)
+	}
+	if lists != 0 {
+		t.Errorf("GetAllRulesets calls during Update = %d, want 0 while GitHub refuses rulesets", lists)
+	}
+	if diff := cmp.Diff(cr.Spec.ForProvider.Topics, replaced); diff != "" {
+		t.Errorf("topics sent: -want, +got:\n%s", diff)
+	}
+
+	_, err := e.Update(context.Background(), newCR())
+	if !ghclient.Is403(err) || lists != 1 {
+		t.Errorf("Update without RulesetsPartial: error = %v, GetAllRulesets calls = %d; want the list's 403 after 1 call", err, lists)
+	}
+}
+
 // A failed GET of a declared ruleset fails Observe and the update, instead of making
 // the ruleset look missing.
 func TestRulesetGetErrorFails(t *testing.T) {

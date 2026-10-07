@@ -138,3 +138,15 @@ func Is404(err error) bool {
 
 	return false
 }
+
+// Is403 reports a 403 that carries GitHub's error body. Rate-limit 403s arrive as
+// *github.RateLimitError or *github.AbuseRateLimitError and report false.
+func Is403(err error) bool {
+	var errResp *github.ErrorResponse
+
+	if errors.As(err, &errResp) && errResp.Response.StatusCode == 403 {
+		return true
+	}
+
+	return false
+}

@@ -70,6 +70,7 @@ const (
 	DimensionBranchProtection = "branch_protection"
 	DimensionArchived         = "archived"
 	DimensionSettings         = "settings"
+	DimensionRulesets         = "rulesets"
 )
 
 // labels carried by every rate-limit metric:

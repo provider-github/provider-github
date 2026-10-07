@@ -108,6 +108,54 @@ func TestRulesets_NotFoundReachesPoolAndIs404(t *testing.T) {
 	}
 }
 
+// GitHub answers the ruleset list of a private repository on a plan without rulesets
+// with 403; the repository controller reports that on a condition. Rate-limit 403s stay
+// errors to retry, so Is403 is false for them.
+func TestRulesets_Is403(t *testing.T) {
+	cases := map[string]struct {
+		headers map[string]string
+		body    string
+		want    bool
+	}{
+		"PlanWithoutRulesets": {
+			body: `{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","documentation_url":"https://docs.github.com/rest/repos/rules#get-all-repository-rulesets","status":"403"}`,
+			want: true,
+		},
+		"PrimaryRateLimit": {
+			headers: map[string]string{"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "4102444800"},
+			body:    `{"message":"API rate limit exceeded for installation ID 1."}`,
+		},
+		"SecondaryRateLimit": {
+			headers: map[string]string{"Retry-After": "60"},
+			body:    `{"message":"You have exceeded a secondary rate limit","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits"}`,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			swapGlobalPool(t, newQuotaPool(time.Now))
+			client, _ := rulesetsAgainst(t, "k"+name, func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, tc.body)
+			})
+
+			_, _, err := client.Rulesets.GetAllRulesets(context.Background(), "acme", "repo", nil)
+
+			if err == nil {
+				t.Fatal("GetAllRulesets error = nil, want the 403")
+			}
+			if got := Is403(err); got != tc.want {
+				t.Errorf("Is403(%v) = %v, want %v", err, got, tc.want)
+			}
+			if Is404(err) {
+				t.Errorf("Is404(%v) = true, want false", err)
+			}
+		})
+	}
+}
+
 // After a secondary rate limit, go-github answers further calls itself without reaching
 // GitHub. That answer carries a response, so the pool must not count it as a token-mint
 // or network failure of the credential.
