@@ -136,23 +136,6 @@ func TestRecordAppUnhealthy_IncrementsCounter(t *testing.T) {
 	}
 }
 
-// The gauge reads 1 while a repository's managed rulesets carry unmodelled parameters and
-// drops back to 0 once they do not, so an alert on it does not depend on the poll interval.
-func TestSetRulesetUnmanagedParameters_FollowsState(t *testing.T) {
-	m := newRateLimitMetrics()
-
-	m.SetRulesetUnmanagedParameters("acme", "widgets", true)
-	m.SetRulesetUnmanagedParameters("acme", "widgets", true)
-	if got := testutil.ToFloat64(m.rulesetUnmanagedParameters.WithLabelValues("acme", "widgets")); got != 1 {
-		t.Errorf("unmanaged_parameters{repository=widgets} after two observations = %v, want 1", got)
-	}
-
-	m.SetRulesetUnmanagedParameters("acme", "widgets", false)
-	if got := testutil.ToFloat64(m.rulesetUnmanagedParameters.WithLabelValues("acme", "widgets")); got != 0 {
-		t.Errorf("unmanaged_parameters{repository=widgets} = %v, want 0", got)
-	}
-}
-
 // The gauge reads 1 while a dimension is unreconcilable and drops back to 0 once it is not.
 func TestSetRepositoryUnreconcilable_FollowsState(t *testing.T) {
 	m := newRateLimitMetrics()
@@ -175,9 +158,8 @@ func TestForgetRepository_RemovesOnlyThatRepository(t *testing.T) {
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionBranchProtection, false)
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionArchived, false)
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionRulesets, true)
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionRulesetParameters, true)
 	m.SetRepositoryUnreconcilable("acme", "gadgets", DimensionCollaborators, true)
-	m.SetRulesetUnmanagedParameters("acme", "widgets", true)
-	m.SetRulesetUnmanagedParameters("acme", "gadgets", true)
 
 	m.ForgetRepository("acme", "widgets")
 
@@ -186,11 +168,5 @@ func TestForgetRepository_RemovesOnlyThatRepository(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.repositoryUnreconcilable.WithLabelValues("acme", "gadgets", DimensionCollaborators)); got != 1 {
 		t.Errorf("unreconcilable{repository=gadgets} = %v, want 1", got)
-	}
-	if got := testutil.CollectAndCount(m.rulesetUnmanagedParameters); got != 1 {
-		t.Errorf("unmanaged_parameters series after forget = %d, want 1", got)
-	}
-	if got := testutil.ToFloat64(m.rulesetUnmanagedParameters.WithLabelValues("acme", "gadgets")); got != 1 {
-		t.Errorf("unmanaged_parameters{repository=gadgets} = %v, want 1", got)
 	}
 }

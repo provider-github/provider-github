@@ -37,7 +37,6 @@ import (
 	"github.com/crossplane/provider-github/internal/telemetry"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
@@ -46,7 +45,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
 )
 
 // Unlike many Kubernetes projects Crossplane does not use third party testing
@@ -4593,59 +4591,61 @@ func TestObserveIgnoresUnmodelledParameters(t *testing.T) {
 	}
 }
 
-// observeEvents runs Observe with a recorder and returns the observation and the events
-// recorded, each as "type reason message".
-func observeEvents(t *testing.T, rs *fake.MockRulesetsClient, cr *v1alpha1.Repository) (managed.ExternalObservation, []string) {
-	t.Helper()
-	rec := record.NewFakeRecorder(10)
-	got, err := (&external{github: clientFor(upToDateRepositories(nil), rs), recorder: event.NewAPIRecorder(rec)}).Observe(context.Background(), cr)
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	close(rec.Events)
-	events := make([]string, 0, len(rec.Events))
-	for e := range rec.Events {
-		events = append(events, e)
-	}
-	return got, events
-}
-
-// The next update resets parameters the provider has no field for, so Observe warns
-// the operator in one event. They are not drift: GitHub may return a new parameter on
-// every read, and drift would update the ruleset on every poll.
-func TestObserveWarnsOfUnmanagedParameters(t *testing.T) {
+// The next update resets parameters the provider has no field for, so Observe reports
+// them on RulesetsPartial and the ruleset_parameters gauge on every Observe. They are
+// not drift: GitHub may return a new parameter on every read, and drift would update
+// the ruleset on every poll. Once GitHub holds only modelled parameters, both clear.
+func TestObserveUnmanagedParametersSetRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	gauge := metrics.RepositoryUnreconcilableForTest()
 	rs := upToDateRulesets()
 	rulesetWithRules(rs, pullRequestOnGitHub())
+	cr := repository(withPullRequestRule(2), withMergeQueueRule())
+	cr.Spec.ForProvider.Org = "acme"
+	e := external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}
+	want := "ruleset test-ruleset-1: rule merge_queue has parameter actor_controlled_merging that this provider does not manage; GitHub resets it when the ruleset is next updated; " +
+		"ruleset test-ruleset-1: rule pull_request has parameter ignore_approvals_from_contributors that this provider does not manage; GitHub resets it when the ruleset is next updated"
 
-	got, events := observeEvents(t, rs, repository(withPullRequestRule(2), withMergeQueueRule()))
-
-	if !got.ResourceUpToDate {
-		t.Errorf("ResourceUpToDate = false, want true: unmanaged parameters are not drift")
+	for observe := 1; observe <= 2; observe++ {
+		got, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if !got.ResourceUpToDate {
+			t.Errorf("Observe %d: ResourceUpToDate = false, want true: unmanaged parameters are not drift", observe)
+		}
+		condition := cr.GetCondition(typeRulesetsPartial)
+		if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedParameters || condition.Message != want {
+			t.Errorf("Observe %d: RulesetsPartial = %v/%v %q, want True/%v %q", observe, condition.Status, condition.Reason, condition.Message, reasonUnmanagedParameters, want)
+		}
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 1 {
+			t.Errorf("Observe %d: unreconcilable{dimension=ruleset_parameters} = %v, want 1", observe, got)
+		}
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
+			t.Errorf("Observe %d: unreconcilable{dimension=rulesets} = %v, want 0: GitHub lists the rulesets", observe, got)
+		}
 	}
-	want := []string{"Warning UnmanagedRulesetParameters " +
-		"ruleset test-ruleset-1: rule merge_queue has parameter actor_controlled_merging that this provider does not manage; GitHub resets it when the ruleset is next updated; " +
-		"ruleset test-ruleset-1: rule pull_request has parameter ignore_approvals_from_contributors that this provider does not manage; GitHub resets it when the ruleset is next updated"}
-	if diff := cmp.Diff(want, events); diff != "" {
-		t.Errorf("events: -want, +got:\n%s", diff)
-	}
-}
 
-// A ruleset holding only parameters the provider manages records no event.
-func TestObserveManagedParametersRecordNoEvent(t *testing.T) {
-	rs := upToDateRulesets()
-	rulesetHolding(t, rs, func(m *rulesets.ModelledRules) {
+	modelled := upToDateRulesets()
+	rulesetHolding(t, modelled, func(m *rulesets.ModelledRules) {
 		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
 	})
-
-	_, events := observeEvents(t, rs, repository(withPullRequestRule(2)))
-
-	if len(events) > 0 {
-		t.Errorf("events = %q, want none", events)
+	cr.Spec.ForProvider = repository(withPullRequestRule(2)).Spec.ForProvider
+	cr.Spec.ForProvider.Org = "acme"
+	e = external{github: clientFor(upToDateRepositories(nil), modelled), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Message != "" {
+		t.Errorf("RulesetsPartial with only modelled parameters = %v %q, want False with no message", got.Status, got.Message)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} with only modelled parameters = %v, want 0", got)
 	}
 }
 
-// A surplus ruleset is deleted, never updated, so its parameters record no event.
-func TestObserveSurplusRulesetRecordsNoEvent(t *testing.T) {
+// A surplus ruleset is deleted, never updated, so its parameters leave RulesetsPartial False.
+func TestObserveSurplusRulesetParametersLeaveRulesetsPartialFalse(t *testing.T) {
 	surplus := func() *rulesets.Ruleset {
 		return &rulesets.Ruleset{
 			ID:          github.Ptr(githubOnlyRulesetID),
@@ -4664,85 +4664,18 @@ func TestObserveSurplusRulesetRecordsNoEvent(t *testing.T) {
 		}
 		return githubRuleset()[0], fake.GenerateEmptyResponse(), nil
 	}
-
-	_, events := observeEvents(t, rs, repository())
-
-	if len(events) > 0 {
-		t.Errorf("events = %q, want none", events)
-	}
-}
-
-// Observe publishes 1 on every Observe while a managed ruleset carries parameters the
-// provider does not model, with or without an event recorder, and 0 once GitHub holds
-// only modelled ones, so an alert on it does not depend on the poll interval.
-func TestObservePublishesUnmanagedParameters(t *testing.T) {
 	metrics := telemetry.NewForTest()
-	gauge := metrics.RulesetUnmanagedParametersForTest()
-	rs := upToDateRulesets()
-	rulesetWithRules(rs, pullRequestOnGitHub())
-	cr := repository(withPullRequestRule(2), withMergeQueueRule())
+	cr := repository()
 	cr.Spec.ForProvider.Org = "acme"
-	e := external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}
 
-	for observe := 1; observe <= 2; observe++ {
-		if _, err := e.Observe(context.Background(), cr); err != nil {
-			t.Fatalf("Observe: %v", err)
-		}
-		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo)); got != 1 {
-			t.Errorf("unmanaged_parameters after Observe %d = %v, want 1", observe, got)
-		}
-	}
-
-	modelled := upToDateRulesets()
-	rulesetHolding(t, modelled, func(m *rulesets.ModelledRules) {
-		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
-	})
-	cr = repository(withPullRequestRule(2))
-	cr.Spec.ForProvider.Org = "acme"
-	e = external{github: clientFor(upToDateRepositories(nil), modelled), metrics: metrics}
-	if _, err := e.Observe(context.Background(), cr); err != nil {
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}).Observe(context.Background(), cr); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo)); got != 0 {
-		t.Errorf("unmanaged_parameters with only modelled parameters = %v, want 0", got)
+	if got := cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
+		t.Errorf("RulesetsPartial = %v, want False", got)
 	}
-}
-
-// A repository whose rulesets the provider leaves alone publishes 0, so an earlier 1 does
-// not keep an alert firing: repositoryRules unset, or the repository archived.
-func TestObserveUnreadRulesetsPublishNoUnmanagedParameters(t *testing.T) {
-	archived := upToDateRepositories(nil)
-	archived.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-		r := githubRepository()
-		r.Archived = github.Ptr(true)
-		return r, nil, nil
-	}
-	cases := map[string]struct {
-		repos *fake.MockRepositoriesClient
-		cr    *v1alpha1.Repository
-	}{
-		"RepositoryRulesUnset": {
-			repos: upToDateRepositories(nil),
-			cr:    repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = nil }),
-		},
-		"Archived": {
-			repos: archived,
-			cr:    repository(withArchived(true)),
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			metrics := telemetry.NewForTest()
-			metrics.SetRulesetUnmanagedParameters("acme", repo, true)
-			tc.cr.Spec.ForProvider.Org = "acme"
-
-			if _, err := (&external{github: clientFor(tc.repos, rulesetsWithoutWrites(t)), metrics: metrics}).Observe(context.Background(), tc.cr); err != nil {
-				t.Fatalf("Observe: %v", err)
-			}
-			if got := testutil.ToFloat64(metrics.RulesetUnmanagedParametersForTest().WithLabelValues("acme", repo)); got != 0 {
-				t.Errorf("unmanaged_parameters = %v, want 0", got)
-			}
-		})
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0", got)
 	}
 }
 
@@ -5387,6 +5320,9 @@ func TestObserveRulesetListForbidden(t *testing.T) {
 			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 1 {
 				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 1", got)
 			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
+				t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0: nothing was fetched", got)
+			}
 		})
 	}
 }
@@ -5438,8 +5374,9 @@ func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
 	}
 }
 
-// A repository whose rulesets the provider leaves alone publishes rulesets=0 and
-// RulesetsPartial False, so an earlier refusal does not keep an alert firing:
+// A repository whose rulesets the provider leaves alone publishes rulesets=0,
+// ruleset_parameters=0 and RulesetsPartial False, so an earlier report does not keep
+// an alert firing:
 // repositoryRules unset, the repository archived, or the CR being deleted.
 func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 	archived := upToDateRepositories(nil)
@@ -5472,6 +5409,7 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			metrics := telemetry.NewForTest()
 			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetParameters, true)
 			tc.cr.Spec.ForProvider.Org = "acme"
 			tc.cr.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
 
@@ -5481,8 +5419,10 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 			if got := tc.cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
 				t.Errorf("RulesetsPartial = %v, want False", got)
 			}
-			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
-				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
+			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters} {
+				if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, dimension)); got != 0 {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want 0", dimension, got)
+				}
 			}
 		})
 	}
@@ -5534,6 +5474,14 @@ func TestUpdateSkipsRulesetsWhileForbidden(t *testing.T) {
 	_, err := e.Update(context.Background(), newCR())
 	if !ghclient.Is403(err) || lists != 1 {
 		t.Errorf("Update without RulesetsPartial: error = %v, GetAllRulesets calls = %d; want the list's 403 after 1 call", err, lists)
+	}
+
+	// Unmanaged parameters are reset by the update, so they leave the rulesets in it.
+	unmanaged := newCR()
+	unmanaged.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonUnmanagedParameters})
+	_, err = e.Update(context.Background(), unmanaged)
+	if !ghclient.Is403(err) || lists != 2 {
+		t.Errorf("Update with unmanaged parameters reported: error = %v, GetAllRulesets calls = %d; want the list's 403 after 2 calls in all", err, lists)
 	}
 }
 

@@ -86,16 +86,14 @@ func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
 	}
 
-	recorder := event.NewAPIRecorder(mgr.GetEventRecorderFor(name))
 	reconcilerOptions := []managed.ReconcilerOption{
 		managed.WithExternalConnecter(&connector{
-			kube:     mgr.GetClient(),
-			usage:    resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics:  metrics,
-			recorder: recorder}),
+			kube:    mgr.GetClient(),
+			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+			metrics: metrics}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(recorder),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
 		managed.WithConnectionPublishers(cps...),
 		managed.WithFinalizer(&forgettingFinalizer{
 			inner:   resource.NewAPIFinalizer(mgr.GetClient(), managed.FinalizerName),
@@ -145,10 +143,9 @@ func (f *forgettingFinalizer) RemoveFinalizer(ctx context.Context, obj resource.
 }
 
 type connector struct {
-	kube     client.Client
-	usage    resource.Tracker
-	metrics  *telemetry.RateLimitMetrics
-	recorder event.Recorder
+	kube    client.Client
+	usage   resource.Tracker
+	metrics *telemetry.RateLimitMetrics
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
@@ -172,10 +169,9 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	}
 
 	return &external{
-		github:   gh,
-		kube:     c.kube,
-		metrics:  c.metrics,
-		recorder: c.recorder,
+		github:  gh,
+		kube:    c.kube,
+		metrics: c.metrics,
 	}, nil
 }
 
@@ -183,8 +179,6 @@ type external struct {
 	kube    client.Client
 	github  *ghclient.Client
 	metrics *telemetry.RateLimitMetrics
-	// recorder is nil-safe so unit tests can leave it unset.
-	recorder event.Recorder
 }
 
 //nolint:gocyclo
@@ -330,28 +324,24 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil && !ghclient.Is403(err) {
 			return managed.ExternalObservation{}, err
 		}
-		setRulesetsPartialCondition(cr, err)
-		c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
 		if err != nil {
-			c.recordUnmanagedParameters(cr, false)
+			setRulesetsPartialCondition(cr, err, nil)
+			c.recordRulesetsUnreconcilable(cr)
 		} else {
 			ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
 			if err != nil {
 				return managed.ExternalObservation{}, err
 			}
-			if len(unmanagedParameters) > 0 && c.recorder != nil {
-				c.recorder.Event(cr, event.Warning(reasonUnmanagedRulesetParameters, errors.New(strings.Join(unmanagedParameters, "; "))))
-			}
-			c.recordUnmanagedParameters(cr, len(unmanagedParameters) > 0)
+			setRulesetsPartialCondition(cr, nil, unmanagedParameters)
+			c.recordRulesetsUnreconcilable(cr)
 
 			if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 				return notUpToDate, nil
 			}
 		}
 	} else {
-		setRulesetsPartialCondition(cr, nil)
-		c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
-		c.recordUnmanagedParameters(cr, false)
+		setRulesetsPartialCondition(cr, nil, nil)
+		c.recordRulesetsUnreconcilable(cr)
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
@@ -427,49 +417,58 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 }
 
 // Condition surfaced while GitHub answers the ruleset list with 403, such as on a
-// private repository whose plan has no rulesets.
+// private repository whose plan has no rulesets, or while a managed ruleset holds
+// parameters the provider does not model. A 403 leaves nothing fetched, so one reason
+// at a time applies.
 const (
-	typeRulesetsPartial     xpv1.ConditionType   = "RulesetsPartial"
-	reasonRulesetsForbidden xpv1.ConditionReason = "RulesetsForbidden"
-	reasonRulesetsListed    xpv1.ConditionReason = "RulesetsListed"
+	typeRulesetsPartial       xpv1.ConditionType   = "RulesetsPartial"
+	reasonRulesetsForbidden   xpv1.ConditionReason = "RulesetsForbidden"
+	reasonUnmanagedParameters xpv1.ConditionReason = "UnmanagedParameters"
+	reasonRulesetsListed      xpv1.ConditionReason = "RulesetsListed"
 )
 
 // setRulesetsPartialCondition carries GitHub's message from forbidden, the 403 of the
-// ruleset list, and reports False when forbidden is nil.
-func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error) {
+// ruleset list, or the sentences naming unmanaged parameters, and reports False when
+// there are neither.
+func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error, unmanagedParameters []string) {
 	c := xpv1.Condition{Type: typeRulesetsPartial, LastTransitionTime: metav1.Now()}
-	if forbidden == nil {
+	switch {
+	case forbidden != nil:
+		msg := forbidden.Error()
+		var errResp *github.ErrorResponse
+		if errors.As(forbidden, &errResp) {
+			msg = errResp.Message
+		}
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonRulesetsForbidden
+		c.Message = "GitHub answers the ruleset list with 403, so rulesets are left as they are: " + msg
+	case len(unmanagedParameters) > 0:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonUnmanagedParameters
+		c.Message = strings.Join(unmanagedParameters, "; ")
+	default:
 		c.Status = corev1.ConditionFalse
 		c.Reason = reasonRulesetsListed
-		cr.SetConditions(c)
-		return
 	}
-	msg := forbidden.Error()
-	var errResp *github.ErrorResponse
-	if errors.As(forbidden, &errResp) {
-		msg = errResp.Message
-	}
-	c.Status = corev1.ConditionTrue
-	c.Reason = reasonRulesetsForbidden
-	c.Message = "GitHub answers the ruleset list with 403, so rulesets are left as they are: " + msg
 	cr.SetConditions(c)
 }
 
-// recordUnreconcilable publishes the dimension's gauge from its condition's current status.
-func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv1.ConditionType) {
-	if c.metrics == nil {
-		return
-	}
-	unreconcilable := cr.GetCondition(conditionType).Status == corev1.ConditionTrue
-	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
+// recordRulesetsUnreconcilable publishes the rulesets and ruleset_parameters dimensions,
+// each from its reason of the RulesetsPartial condition.
+func (c *external) recordRulesetsUnreconcilable(cr *v1alpha1.Repository) {
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial, reasonRulesetsForbidden)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedParameters)
 }
 
-// recordUnmanagedParameters publishes whether a managed ruleset carries parameters the provider does not model.
-func (c *external) recordUnmanagedParameters(cr *v1alpha1.Repository, unmanaged bool) {
+// recordUnreconcilable publishes the dimension's gauge from its condition's current status.
+// With a reason given, the dimension is unreconcilable only while the condition holds it.
+func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv1.ConditionType, reason ...xpv1.ConditionReason) {
 	if c.metrics == nil {
 		return
 	}
-	c.metrics.SetRulesetUnmanagedParameters(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), unmanaged)
+	condition := cr.GetCondition(conditionType)
+	unreconcilable := condition.Status == corev1.ConditionTrue && (len(reason) == 0 || slices.Contains(reason, condition.Reason))
+	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
 }
 
 // observeArchived reports drift for an archived repo. Only team access, topics and
@@ -499,12 +498,11 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
-	setRulesetsPartialCondition(cr, nil)
-	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial)
+	setRulesetsPartialCondition(cr, nil, nil)
+	c.recordRulesetsUnreconcilable(cr)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
-	c.recordUnmanagedParameters(cr, false)
 
 	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)
@@ -2731,10 +2729,6 @@ func patternRuleFromGitHub(params *rulesets.PatternRuleParameters) *v1alpha1.Rul
 		Pattern:  params.Pattern,
 	}
 }
-
-// reasonUnmanagedRulesetParameters is the reason of the Warning event that names the
-// parameters of managed rulesets this provider has no field for.
-const reasonUnmanagedRulesetParameters event.Reason = "UnmanagedRulesetParameters"
 
 // unmanagedParametersSentence states that the next update of ruleset resets the
 // parameters keys of its ruleType rule.
