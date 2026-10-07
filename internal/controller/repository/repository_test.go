@@ -3365,6 +3365,65 @@ func TestCrRepoRulesToRulesConfig(t *testing.T) {
 	}
 }
 
+// A ruleset as declared, with unset pointers and no conditions, is sent exactly as the
+// same ruleset after getRepositoryRulesMapFromCr, so any caller of crRepoRulesToRulesConfig
+// sends the same request and none can panic on an unset field. The declared ruleset stays
+// as it is, since it is the live CR's spec.
+func TestCrRepoRulesToRulesConfigNormalises(t *testing.T) {
+	send := func(t *testing.T, r v1alpha1.RepositoryRuleset) string {
+		t.Helper()
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("crRepoRulesToRulesConfig panicked: %v", p)
+			}
+		}()
+		rs, err := crRepoRulesToRulesConfig(r)
+		if err != nil {
+			t.Fatalf("crRepoRulesToRulesConfig: %v", err)
+		}
+		body, err := json.Marshal(rs)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(body)
+	}
+	cases := map[string]v1alpha1.RepositoryRuleset{
+		"NameOnly": {Name: "raw"},
+		"Push":     {Name: "raw", Target: github.Ptr("push")},
+		"EveryRuleUnset": {
+			Name:         "raw",
+			BypassActors: []*v1alpha1.RulesetByPassActors{{ActorId: github.Ptr(int64(9)), ActorType: github.Ptr("Team")}, {ActorType: github.Ptr("OrganizationAdmin")}},
+			Rules: &v1alpha1.Rules{
+				Update:                               github.Ptr(true),
+				RequiredDeployments:                  &v1alpha1.RulesRequiredDeployments{},
+				PullRequest:                          &v1alpha1.RulesPullRequest{},
+				RequiredStatusChecks:                 &v1alpha1.RulesRequiredStatusChecks{RequiredStatusChecks: []*v1alpha1.RulesRequiredStatusChecksParameters{{Context: "b"}, {Context: "a"}}},
+				CommitMessagePattern:                 &v1alpha1.RulesPattern{Operator: "contains", Pattern: "fix"},
+				CodeScanning:                         &v1alpha1.RulesCodeScanning{CodeScanningTools: []*v1alpha1.RulesCodeScanningTool{{Tool: "ZAP", AlertsThreshold: "all", SecurityAlertsThreshold: "all"}, {Tool: "CodeQL", AlertsThreshold: "all", SecurityAlertsThreshold: "all"}}},
+				CodeCoverage:                         &v1alpha1.RulesCodeCoverage{MinimumCoverage: github.Ptr("80.0")},
+				RequireSecretScanningAlertResolution: &v1alpha1.RulesSecretScanningAlertResolution{},
+				CopilotCodeReview:                    &v1alpha1.RulesCopilotCodeReview{},
+				FileExtensionRestriction:             &v1alpha1.RulesFileExtensionRestriction{RestrictedFileExtensions: []string{"*.exe", "*.bin"}},
+				FilePathRestriction:                  &v1alpha1.RulesFilePathRestriction{RestrictedFilePaths: []string{"secrets/", "keys/"}},
+				MaxFileSize:                          &v1alpha1.RulesMaxFileSize{MaxFileSize: 10},
+			},
+		},
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			declared := raw.DeepCopy()
+			want := send(t, crRulesets(t, []v1alpha1.RepositoryRuleset{raw})[raw.Name])
+
+			if got := send(t, raw); got != want {
+				t.Errorf("request from the declared ruleset:\n got %s\nwant %s", got, want)
+			}
+			if diff := cmp.Diff(declared, &raw); diff != "" {
+				t.Errorf("declared ruleset changed: -before, +after:\n%s", diff)
+			}
+		})
+	}
+}
+
 // unmanagedRuleTypes names exactly the unmodelled rule types, including types GitHub adds later.
 func TestUnmanagedRuleTypes(t *testing.T) {
 	// decode builds the rules from GitHub's wire format, so each case also pins that the

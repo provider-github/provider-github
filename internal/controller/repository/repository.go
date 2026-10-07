@@ -2369,99 +2369,109 @@ func getRepositoryRules(ctx context.Context, gh *ghclient.Client, org, repo stri
 }
 
 // getRepositoryRulesMapFromCr generates a map from the RepositoryRules slice
-// in the Crossplane resource.
-//
-//nolint:gocyclo
+// in the Crossplane resource, each ruleset in the form normalizeRuleset returns.
 func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, error) {
 	crRulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(rules))
 
 	for i := range rules {
-		// Use a copy to avoid changing passed []v1alpha1.RepositoryRules
-		// This prevents the controller from changing the spec of the live CR
-		// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
-		orig := &rules[i]
-		rCopy := orig.DeepCopy()
-
-		// handle optional fields
-		rCopy.Target = util.StringDerefToPointer(rCopy.Target, "branch")
-		rCopy.Enforcement = util.StringDerefToPointer(rCopy.Enforcement, "active")
-
-		rCopy.Conditions = rulesetConditions(*rCopy.Target, rCopy.Conditions)
-		rCopy.BypassActors = rulesetBypassActors(rCopy.BypassActors)
-		if err := duplicateBypassActor(rCopy.Name, rCopy.BypassActors); err != nil {
+		rule, err := normalizeRuleset(rules[i])
+		if err != nil {
 			return nil, err
 		}
-		if err := duplicateRefPattern(rCopy.Name, rCopy.Conditions); err != nil {
-			return nil, err
-		}
-
-		// Unset rules mean every rule is off.
-		if rCopy.Rules == nil {
-			rCopy.Rules = &v1alpha1.Rules{}
-		}
-		rRules := rCopy.Rules
-		rRules.RequiredSignatures = util.BoolDerefToPointer(rRules.RequiredSignatures, false)
-		rRules.NonFastForward = util.BoolDerefToPointer(rRules.NonFastForward, false)
-		rRules.Creation = util.BoolDerefToPointer(rRules.Creation, false)
-		rRules.Deletion = util.BoolDerefToPointer(rRules.Deletion, false)
-		rRules.RequiredLinearHistory = util.BoolDerefToPointer(rRules.RequiredLinearHistory, false)
-		rRules.Update = util.BoolDerefToPointer(rRules.Update, false)
-		rRules.LicenseComplianceScanning = util.BoolDerefToPointer(rRules.LicenseComplianceScanning, false)
-		// Fetch and merge is a parameter of the update rule, so it is set only with that rule.
-		if *rRules.Update {
-			rRules.UpdateAllowsFetchAndMerge = util.BoolDerefToPointer(rRules.UpdateAllowsFetchAndMerge, false)
-		} else {
-			rRules.UpdateAllowsFetchAndMerge = nil
-		}
-		if r := rRules.RequireSecretScanningAlertResolution; r != nil {
-			r.SecretTypes = secretTypeSet(r.SecretTypes)
-		}
-
-		if rRules.RequiredDeployments != nil {
-			rRules.RequiredDeployments.Environments = util.SortAndReturn(util.DefaultToStringSlice(rRules.RequiredDeployments.Environments))
-		}
-		if rRules.PullRequest != nil {
-			pullRequestDefaults(rRules.PullRequest)
-		}
-		if rRules.RequiredStatusChecks != nil {
-			copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
-			copy(copyOfStatusChecks, rRules.RequiredStatusChecks.RequiredStatusChecks)
-			util.SortRulesRequiredStatusChecks(copyOfStatusChecks)
-			rRules.RequiredStatusChecks.RequiredStatusChecks = copyOfStatusChecks
-			rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = util.BoolDerefToPointer(rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy, false)
-			rRules.RequiredStatusChecks.DoNotEnforceOnCreate = util.BoolDerefToPointer(rRules.RequiredStatusChecks.DoNotEnforceOnCreate, false)
-		}
-		for _, p := range []*v1alpha1.RulesPattern{rRules.CommitMessagePattern, rRules.CommitAuthorEmailPattern, rRules.CommitterEmailPattern, rRules.BranchNamePattern, rRules.TagNamePattern} {
-			if p != nil {
-				p.Name = util.StringDerefToPointer(p.Name, "")
-				p.Negate = util.BoolDerefToPointer(p.Negate, false)
-			}
-		}
-		if rRules.CodeCoverage != nil {
-			rRules.CodeCoverage.MinimumCoverage = canonicalDecimal(rRules.CodeCoverage.MinimumCoverage)
-			rRules.CodeCoverage.MaxCoverageDrop = canonicalDecimal(rRules.CodeCoverage.MaxCoverageDrop)
-		}
-		if rRules.CodeScanning != nil {
-			util.SortRulesCodeScanningTools(rRules.CodeScanning.CodeScanningTools)
-		}
-		if rRules.CopilotCodeReview != nil {
-			rRules.CopilotCodeReview.ReviewOnPush = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewOnPush, false)
-			rRules.CopilotCodeReview.ReviewDraftPullRequests = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewDraftPullRequests, false)
-		}
-		if rRules.FileExtensionRestriction != nil {
-			rRules.FileExtensionRestriction.RestrictedFileExtensions = util.SortAndReturn(rRules.FileExtensionRestriction.RestrictedFileExtensions)
-		}
-		if rRules.FilePathRestriction != nil {
-			rRules.FilePathRestriction.RestrictedFilePaths = util.SortAndReturn(rRules.FilePathRestriction.RestrictedFilePaths)
-			rRules.FilePathRestriction.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.FilePathRestriction.IgnoredFilePaths))
-		}
-		if rRules.MaxFileSize != nil {
-			rRules.MaxFileSize.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.MaxFileSize.IgnoredFilePaths))
-		}
-		crRulesToConfig[rCopy.Name] = *rCopy
+		crRulesToConfig[rule.Name] = rule
 	}
 
 	return crRulesToConfig, nil
+}
+
+// normalizeRuleset returns a copy of the ruleset in the form that is compared and sent:
+// unset fields hold GitHub's defaults and lists GitHub treats as sets are sorted. It
+// returns the same ruleset for a ruleset it has already normalised.
+//
+//nolint:gocyclo
+func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRuleset, error) {
+	// Use a copy to avoid changing passed []v1alpha1.RepositoryRules
+	// This prevents the controller from changing the spec of the live CR
+	// It can also prevent infinite reconciliation loops when managing the resources with ArgoCD
+	rCopy := rule.DeepCopy()
+
+	// handle optional fields
+	rCopy.Target = util.StringDerefToPointer(rCopy.Target, "branch")
+	rCopy.Enforcement = util.StringDerefToPointer(rCopy.Enforcement, "active")
+
+	rCopy.Conditions = rulesetConditions(*rCopy.Target, rCopy.Conditions)
+	rCopy.BypassActors = rulesetBypassActors(rCopy.BypassActors)
+	if err := duplicateBypassActor(rCopy.Name, rCopy.BypassActors); err != nil {
+		return v1alpha1.RepositoryRuleset{}, err
+	}
+	if err := duplicateRefPattern(rCopy.Name, rCopy.Conditions); err != nil {
+		return v1alpha1.RepositoryRuleset{}, err
+	}
+
+	// Unset rules mean every rule is off.
+	if rCopy.Rules == nil {
+		rCopy.Rules = &v1alpha1.Rules{}
+	}
+	rRules := rCopy.Rules
+	rRules.RequiredSignatures = util.BoolDerefToPointer(rRules.RequiredSignatures, false)
+	rRules.NonFastForward = util.BoolDerefToPointer(rRules.NonFastForward, false)
+	rRules.Creation = util.BoolDerefToPointer(rRules.Creation, false)
+	rRules.Deletion = util.BoolDerefToPointer(rRules.Deletion, false)
+	rRules.RequiredLinearHistory = util.BoolDerefToPointer(rRules.RequiredLinearHistory, false)
+	rRules.Update = util.BoolDerefToPointer(rRules.Update, false)
+	rRules.LicenseComplianceScanning = util.BoolDerefToPointer(rRules.LicenseComplianceScanning, false)
+	// Fetch and merge is a parameter of the update rule, so it is set only with that rule.
+	if *rRules.Update {
+		rRules.UpdateAllowsFetchAndMerge = util.BoolDerefToPointer(rRules.UpdateAllowsFetchAndMerge, false)
+	} else {
+		rRules.UpdateAllowsFetchAndMerge = nil
+	}
+	if r := rRules.RequireSecretScanningAlertResolution; r != nil {
+		r.SecretTypes = secretTypeSet(r.SecretTypes)
+	}
+
+	if rRules.RequiredDeployments != nil {
+		rRules.RequiredDeployments.Environments = util.SortAndReturn(util.DefaultToStringSlice(rRules.RequiredDeployments.Environments))
+	}
+	if rRules.PullRequest != nil {
+		pullRequestDefaults(rRules.PullRequest)
+	}
+	if rRules.RequiredStatusChecks != nil {
+		copyOfStatusChecks := make([]*v1alpha1.RulesRequiredStatusChecksParameters, len(rRules.RequiredStatusChecks.RequiredStatusChecks))
+		copy(copyOfStatusChecks, rRules.RequiredStatusChecks.RequiredStatusChecks)
+		util.SortRulesRequiredStatusChecks(copyOfStatusChecks)
+		rRules.RequiredStatusChecks.RequiredStatusChecks = copyOfStatusChecks
+		rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy = util.BoolDerefToPointer(rRules.RequiredStatusChecks.StrictRequiredStatusChecksPolicy, false)
+		rRules.RequiredStatusChecks.DoNotEnforceOnCreate = util.BoolDerefToPointer(rRules.RequiredStatusChecks.DoNotEnforceOnCreate, false)
+	}
+	for _, p := range []*v1alpha1.RulesPattern{rRules.CommitMessagePattern, rRules.CommitAuthorEmailPattern, rRules.CommitterEmailPattern, rRules.BranchNamePattern, rRules.TagNamePattern} {
+		if p != nil {
+			p.Name = util.StringDerefToPointer(p.Name, "")
+			p.Negate = util.BoolDerefToPointer(p.Negate, false)
+		}
+	}
+	if rRules.CodeCoverage != nil {
+		rRules.CodeCoverage.MinimumCoverage = canonicalDecimal(rRules.CodeCoverage.MinimumCoverage)
+		rRules.CodeCoverage.MaxCoverageDrop = canonicalDecimal(rRules.CodeCoverage.MaxCoverageDrop)
+	}
+	if rRules.CodeScanning != nil {
+		util.SortRulesCodeScanningTools(rRules.CodeScanning.CodeScanningTools)
+	}
+	if rRules.CopilotCodeReview != nil {
+		rRules.CopilotCodeReview.ReviewOnPush = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewOnPush, false)
+		rRules.CopilotCodeReview.ReviewDraftPullRequests = util.BoolDerefToPointer(rRules.CopilotCodeReview.ReviewDraftPullRequests, false)
+	}
+	if rRules.FileExtensionRestriction != nil {
+		rRules.FileExtensionRestriction.RestrictedFileExtensions = util.SortAndReturn(rRules.FileExtensionRestriction.RestrictedFileExtensions)
+	}
+	if rRules.FilePathRestriction != nil {
+		rRules.FilePathRestriction.RestrictedFilePaths = util.SortAndReturn(rRules.FilePathRestriction.RestrictedFilePaths)
+		rRules.FilePathRestriction.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.FilePathRestriction.IgnoredFilePaths))
+	}
+	if rRules.MaxFileSize != nil {
+		rRules.MaxFileSize.IgnoredFilePaths = util.SortAndReturn(util.DefaultToStringSlice(rRules.MaxFileSize.IgnoredFilePaths))
+	}
+	return *rCopy, nil
 }
 
 // getRepositoryRulesWithConfig returns the repository's rulesets in CR form, keyed by
@@ -2705,10 +2715,15 @@ func unmanagedRuleTypes(rules []*rulesets.Rule) []string {
 }
 
 // crRepoRulesToRulesConfig transforms a RepositoryRuleset object from the Crossplane resource
-// into a Ruleset object that can be used with the GitHub API.
+// into a Ruleset object that can be used with the GitHub API. It normalises the ruleset
+// first, so it takes the ruleset as declared or as getRepositoryRulesMapFromCr returns it.
 //
 //nolint:gocyclo
 func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) (*rulesets.Ruleset, error) {
+	rule, err := normalizeRuleset(rule)
+	if err != nil {
+		return nil, err
+	}
 	// Bypass actors and rules are always sent, as [] when empty, because an update keeps
 	// what GitHub holds for an omitted key.
 	githubRuleset := &rulesets.Ruleset{
