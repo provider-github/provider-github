@@ -55,3 +55,20 @@ func TestSortRulesRequiredStatusChecksSameContext(t *testing.T) {
 		t.Errorf("SortRulesRequiredStatusChecks: -want, +got:\n%s", diff)
 	}
 }
+
+// Code scanning entries for the same tool sort into one order from any input order, so
+// the CR and GitHub's copy compare equal whatever order each lists them in.
+func TestSortRulesCodeScanningToolsSameTool(t *testing.T) {
+	tool := func(alerts, securityAlerts string) *v1alpha1.RulesCodeScanningTool {
+		return &v1alpha1.RulesCodeScanningTool{Tool: "CodeQL", AlertsThreshold: alerts, SecurityAlertsThreshold: securityAlerts}
+	}
+	cr := []*v1alpha1.RulesCodeScanningTool{tool("errors", "all"), tool("all", "critical"), tool("all", "all")}
+	gh := []*v1alpha1.RulesCodeScanningTool{tool("all", "all"), tool("all", "critical"), tool("errors", "all")}
+
+	SortRulesCodeScanningTools(cr)
+	SortRulesCodeScanningTools(gh)
+
+	if diff := cmp.Diff(cr, gh); diff != "" {
+		t.Errorf("SortRulesCodeScanningTools: CR and GitHub orders differ: -cr, +gh:\n%s", diff)
+	}
+}

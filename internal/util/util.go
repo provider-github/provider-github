@@ -17,7 +17,9 @@
 package util
 
 import (
+	stdcmp "cmp"
 	"slices"
+
 	// nolint:gosec
 	"crypto/sha1"
 	"encoding/hex"
@@ -220,10 +222,14 @@ func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksP
 }
 
 // SortRulesCodeScanningTools sorts a slice of RulesCodeScanningTool pointers in-place
-// by the Tool field in ascending order.
+// by Tool, then AlertsThreshold, then SecurityAlertsThreshold.
 func SortRulesCodeScanningTools(tools []*v1alpha1.RulesCodeScanningTool) {
-	sort.Slice(tools, func(i, j int) bool {
-		return tools[i].Tool < tools[j].Tool
+	slices.SortFunc(tools, func(a, b *v1alpha1.RulesCodeScanningTool) int {
+		return stdcmp.Or(
+			strings.Compare(a.Tool, b.Tool),
+			strings.Compare(a.AlertsThreshold, b.AlertsThreshold),
+			strings.Compare(a.SecurityAlertsThreshold, b.SecurityAlertsThreshold),
+		)
 	})
 }
 
