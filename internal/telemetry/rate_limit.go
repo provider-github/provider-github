@@ -60,8 +60,8 @@ type RateLimitMetrics struct {
 	// Repository-unreconcilable gauge, per (org, repository, dimension).
 	repositoryUnreconcilable *prometheus.GaugeVec
 
-	// Ruleset-unmanaged-parameters counter, per (org, rule type).
-	rulesetUnmanagedParameters *prometheus.CounterVec
+	// Ruleset-unmanaged-parameters gauge, per (org, repository).
+	rulesetUnmanagedParameters *prometheus.GaugeVec
 }
 
 // Dimensions of declared repository state GitHub may refuse to apply.
@@ -141,12 +141,12 @@ func newRateLimitMetrics() *RateLimitMetrics {
 			},
 			[]string{"organization", "repository", "dimension"},
 		),
-		rulesetUnmanagedParameters: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "github_ruleset_unmanaged_parameters_total",
-				Help: "Observations of a ruleset rule carrying a parameter GitHub returns and the provider does not model, by rule type.",
+		rulesetUnmanagedParameters: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "github_ruleset_unmanaged_parameters",
+				Help: "1 while a managed ruleset of the repository carries a parameter GitHub returns and the provider does not model",
 			},
-			[]string{"organization", "rule_type"},
+			[]string{"organization", "repository"},
 		),
 	}
 }
@@ -207,8 +207,8 @@ func (m *RateLimitMetrics) RepositoryUnreconcilableForTest() *prometheus.GaugeVe
 	return m.repositoryUnreconcilable
 }
 
-// RulesetUnmanagedParametersForTest exposes the counter vec to cross-package tests.
-func (m *RateLimitMetrics) RulesetUnmanagedParametersForTest() *prometheus.CounterVec {
+// RulesetUnmanagedParametersForTest exposes the gauge vec to cross-package tests.
+func (m *RateLimitMetrics) RulesetUnmanagedParametersForTest() *prometheus.GaugeVec {
 	return m.rulesetUnmanagedParameters
 }
 
@@ -258,13 +258,20 @@ func (m *RateLimitMetrics) SetRepositoryUnreconcilable(org, repo, dimension stri
 	m.repositoryUnreconcilable.WithLabelValues(org, repo, dimension).Set(value)
 }
 
-// ForgetRepository deletes every github_repository_unreconcilable series of the repository.
+// ForgetRepository deletes every github_repository_unreconcilable and
+// github_ruleset_unmanaged_parameters series of the repository.
 func (m *RateLimitMetrics) ForgetRepository(org, repo string) {
-	m.repositoryUnreconcilable.DeletePartialMatch(prometheus.Labels{"organization": org, "repository": repo})
+	labels := prometheus.Labels{"organization": org, "repository": repo}
+	m.repositoryUnreconcilable.DeletePartialMatch(labels)
+	m.rulesetUnmanagedParameters.Delete(labels)
 }
 
-// RecordRulesetUnmanagedParameters increments the github_ruleset_unmanaged_parameters_total
-// counter for a rule of ruleType that carries parameters the provider does not model.
-func (m *RateLimitMetrics) RecordRulesetUnmanagedParameters(org, ruleType string) {
-	m.rulesetUnmanagedParameters.WithLabelValues(org, ruleType).Inc()
+// SetRulesetUnmanagedParameters publishes 1 while a managed ruleset of the repository
+// carries parameters the provider does not model, else 0.
+func (m *RateLimitMetrics) SetRulesetUnmanagedParameters(org, repo string, unmanaged bool) {
+	value := 0.0
+	if unmanaged {
+		value = 1
+	}
+	m.rulesetUnmanagedParameters.WithLabelValues(org, repo).Set(value)
 }

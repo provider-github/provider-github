@@ -114,7 +114,7 @@ Owns the provider's Prometheus metrics. The rate-limit and credential metrics ca
 
 `github_repository_unreconcilable{organization, repository, dimension}` is a gauge set by the repository controller: 1 while the `CollaboratorPartial` / `BranchProtectionPartial` / `ArchivedConfigFrozen` / `SettingsPartial` condition (dimension `collaborators` / `branch_protection` / `archived` / `settings`) is True, else 0. Its series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
 
-`github_ruleset_unmanaged_parameters_total{organization, rule_type}` is a counter the repository controller adds one to per affected rule type on each Observe, alongside the `UnmanagedRulesetParameters` Warning event: a rule of a managed ruleset carries a parameter GitHub returns and the provider does not model.
+`github_ruleset_unmanaged_parameters{organization, repository}` is a gauge the repository controller sets on each Observe: 1 while a managed ruleset carries a parameter GitHub returns and the provider does not model (the case the `UnmanagedRulesetParameters` Warning event names), else 0, with its series removed alongside the `github_repository_unreconcilable` ones.
 
 `app_id` and `app_installation_id` hold the real GitHub App ID / Installation ID parsed via `ExtractAppIDs` — not the cache-key hash. Metrics are initialized once in `main`, registered with the default Prometheus registry, and exposed on `:8081`/metrics. `newRateLimitMetrics()` (lowercase) and `NewForTest()` (exported) build the struct without registering — the former for in-package tests, the latter for cross-package wiring tests. See `RATE_LIMIT_TRACKING.md` for the full metric/alert reference.
 

@@ -329,22 +329,20 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		ghRepositoryRulesToConfig, unmanagedParameters, unmanagedParameterRuleTypes, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+		ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
 		if len(unmanagedParameters) > 0 && c.recorder != nil {
 			c.recorder.Event(cr, event.Warning(reasonUnmanagedRulesetParameters, errors.New(strings.Join(unmanagedParameters, "; "))))
 		}
-		if c.metrics != nil {
-			for _, ruleType := range unmanagedParameterRuleTypes {
-				c.metrics.RecordRulesetUnmanagedParameters(cr.Spec.ForProvider.Org, ruleType)
-			}
-		}
+		c.recordUnmanagedParameters(cr, len(unmanagedParameters) > 0)
 
 		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 			return notUpToDate, nil
 		}
+	} else {
+		c.recordUnmanagedParameters(cr, false)
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
@@ -428,6 +426,14 @@ func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension strin
 	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
 }
 
+// recordUnmanagedParameters publishes whether a managed ruleset carries parameters the provider does not model.
+func (c *external) recordUnmanagedParameters(cr *v1alpha1.Repository, unmanaged bool) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.SetRulesetUnmanagedParameters(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), unmanaged)
+}
+
 // observeArchived reports drift for an archived repo. Only team access, topics and
 // collaborator removals are reconcilable while archived; settings, branch protection,
 // rulesets, webhooks and collaborator additions are frozen and surfaced via a
@@ -458,6 +464,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
+	c.recordUnmanagedParameters(cr, false)
 
 	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)
@@ -2477,13 +2484,12 @@ func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRules
 // getRepositoryRulesWithConfig returns the repository's rulesets in CR form, keyed by
 // name. It fetches the rulesets the CR names; the others are listed by name only,
 // because they are going to be deleted. It also returns, sorted, one sentence per rule
-// of a fetched ruleset that holds parameters the provider does not manage, and, sorted
-// and once each, the types of those rules.
+// of a fetched ruleset that holds parameters the provider does not manage.
 //
 //nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, []string, []string, error) {
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, []string, error) {
 	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
-	var unmanagedParameters, unmanagedParameterRuleTypes []string
+	var unmanagedParameters []string
 
 	for _, rule := range ghRulesets {
 		if _, inCR := crRulesets[rule.Name]; !inCR {
@@ -2492,15 +2498,14 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 		rRuleset, _, err := gh.Rulesets.GetRuleset(ctx, owner, repo, *rule.ID, false)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
-			return nil, nil, nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+			return nil, nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
 		}
 		for _, r := range rRuleset.Rules {
 			if keys := rulesets.UnmanagedParameters(r); len(keys) > 0 {
 				unmanagedParameters = append(unmanagedParameters, unmanagedParametersSentence(rule.Name, r.Type, keys))
-				unmanagedParameterRuleTypes = append(unmanagedParameterRuleTypes, r.Type)
 			}
 		}
 		target := pointer.Deref(rule.Target, "")
@@ -2541,7 +2546,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if rRuleset.Rules != nil {
 			rules, err := rulesets.Decode(rRuleset.Rules)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, err
 			}
 			if rules.Creation != nil {
 				ruleset.Rules.Creation = util.ToBoolPtr(true)
@@ -2575,7 +2580,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 			}
 			if params := rules.PullRequest; params != nil {
 				if ruleset.Rules.PullRequest, err = pullRequestFromGitHub(params); err != nil {
-					return nil, nil, nil, fmt.Errorf("rule pull_request: %w", err)
+					return nil, nil, fmt.Errorf("rule pull_request: %w", err)
 				}
 			}
 			if params := rules.RequiredDeployments; params != nil {
@@ -2669,8 +2674,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 	}
 
 	slices.Sort(unmanagedParameters)
-	slices.Sort(unmanagedParameterRuleTypes)
-	return rulesToConfig, unmanagedParameters, slices.Compact(unmanagedParameterRuleTypes), nil
+	return rulesToConfig, unmanagedParameters, nil
 
 }
 
@@ -3178,7 +3182,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 		return err
 	}
 	// Generate a map of the repository rules from GitHub
-	ghRToConfig, _, _, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
+	ghRToConfig, _, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
 	if err != nil {
 		return err
 	}

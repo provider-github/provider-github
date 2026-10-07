@@ -4545,45 +4545,77 @@ func TestObserveSurplusRulesetRecordsNoEvent(t *testing.T) {
 	}
 }
 
-// Each Observe that finds unmanaged parameters adds one per affected rule type, with or
-// without an event recorder, so operators can alert on the parameters the next ruleset
-// update resets.
-func TestObserveCountsUnmanagedParameters(t *testing.T) {
+// Observe publishes 1 on every Observe while a managed ruleset carries parameters the
+// provider does not model, with or without an event recorder, and 0 once GitHub holds
+// only modelled ones, so an alert on it does not depend on the poll interval.
+func TestObservePublishesUnmanagedParameters(t *testing.T) {
 	metrics := telemetry.NewForTest()
-	counter := metrics.RulesetUnmanagedParametersForTest()
+	gauge := metrics.RulesetUnmanagedParametersForTest()
 	rs := upToDateRulesets()
 	rulesetWithRules(rs, pullRequestOnGitHub())
 	cr := repository(withPullRequestRule(2), withMergeQueueRule())
 	cr.Spec.ForProvider.Org = "acme"
 	e := external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}
 
-	for want := 1.0; want <= 2; want++ {
+	for observe := 1; observe <= 2; observe++ {
 		if _, err := e.Observe(context.Background(), cr); err != nil {
 			t.Fatalf("Observe: %v", err)
 		}
-		for _, ruleType := range []string{"merge_queue", "pull_request"} {
-			if got := testutil.ToFloat64(counter.WithLabelValues("acme", ruleType)); got != want {
-				t.Errorf("unmanaged_parameters_total{rule_type=%s} after %v Observe = %v, want %v", ruleType, want, got, want)
-			}
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo)); got != 1 {
+			t.Errorf("unmanaged_parameters after Observe %d = %v, want 1", observe, got)
 		}
+	}
+
+	modelled := upToDateRulesets()
+	rulesetHolding(t, modelled, func(m *rulesets.ModelledRules) {
+		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
+	})
+	cr = repository(withPullRequestRule(2))
+	cr.Spec.ForProvider.Org = "acme"
+	e = external{github: clientFor(upToDateRepositories(nil), modelled), metrics: metrics}
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo)); got != 0 {
+		t.Errorf("unmanaged_parameters with only modelled parameters = %v, want 0", got)
 	}
 }
 
-// A ruleset holding only parameters the provider manages leaves the counter without series.
-func TestObserveManagedParametersCountNothing(t *testing.T) {
-	metrics := telemetry.NewForTest()
-	rs := upToDateRulesets()
-	rulesetHolding(t, rs, func(m *rulesets.ModelledRules) {
-		m.PullRequest = &rulesets.PullRequestRuleParameters{DismissStaleReviewsOnPush: true, RequiredApprovingReviewCount: 2}
-	})
-	cr := repository(withPullRequestRule(2))
-	cr.Spec.ForProvider.Org = "acme"
-
-	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs), metrics: metrics}).Observe(context.Background(), cr); err != nil {
-		t.Fatalf("Observe: %v", err)
+// A repository whose rulesets the provider leaves alone publishes 0, so an earlier 1 does
+// not keep an alert firing: repositoryRules unset, or the repository archived.
+func TestObserveUnreadRulesetsPublishNoUnmanagedParameters(t *testing.T) {
+	archived := upToDateRepositories(nil)
+	archived.MockGet = func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
+		r := githubRepository()
+		r.Archived = github.Ptr(true)
+		return r, nil, nil
 	}
-	if got := testutil.CollectAndCount(metrics.RulesetUnmanagedParametersForTest()); got != 0 {
-		t.Errorf("unmanaged_parameters_total series = %d, want 0", got)
+	cases := map[string]struct {
+		repos *fake.MockRepositoriesClient
+		cr    *v1alpha1.Repository
+	}{
+		"RepositoryRulesUnset": {
+			repos: upToDateRepositories(nil),
+			cr:    repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = nil }),
+		},
+		"Archived": {
+			repos: archived,
+			cr:    repository(withArchived(true)),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			metrics.SetRulesetUnmanagedParameters("acme", repo, true)
+			tc.cr.Spec.ForProvider.Org = "acme"
+
+			if _, err := (&external{github: clientFor(tc.repos, rulesetsWithoutWrites(t)), metrics: metrics}).Observe(context.Background(), tc.cr); err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got := testutil.ToFloat64(metrics.RulesetUnmanagedParametersForTest().WithLabelValues("acme", repo)); got != 0 {
+				t.Errorf("unmanaged_parameters = %v, want 0", got)
+			}
+		})
 	}
 }
 

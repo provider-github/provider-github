@@ -54,9 +54,9 @@ Together `(app_id, app_installation_id)` uniquely identifies a credential. With 
   - Labels: `organization`, `repository`, `dimension`
   - Description: `1` while the repository has declared state GitHub will not apply, `0` otherwise. `dimension` is one of `collaborators` (pending invitations or a role GitHub enforces for an org owner), `branch_protection` (rules for missing branches or settings and actors GitHub did not apply), `archived` (the repository is archived, so its settings, branch protection, rulesets and webhooks are frozen) or `settings` (repository settings GitHub did not apply on the last push because they are not available on the repository's plan or type). Each value mirrors the Repository's `CollaboratorPartial`, `BranchProtectionPartial`, `ArchivedConfigFrozen` or `SettingsPartial` condition. A repository's series are removed when the resource's finalizer is removed, which covers both deletion policies, and when the provider finds the repository gone on GitHub.
 
-- `github_ruleset_unmanaged_parameters_total` (Counter)
-  - Labels: `organization`, `rule_type`
-  - Description: Observations of a ruleset rule carrying a parameter GitHub returns and the provider does not model, by rule type. Each Observe of a Repository adds one per affected rule type across the rulesets it manages, alongside the `UnmanagedRulesetParameters` Warning event that names the ruleset and the parameter. The next update of an affected ruleset resets the parameter.
+- `github_ruleset_unmanaged_parameters` (Gauge)
+  - Labels: `organization`, `repository`
+  - Description: `1` while a ruleset the Repository manages carries a parameter GitHub returns and the provider does not model, `0` otherwise. Each Observe that sees such a parameter also emits the `UnmanagedRulesetParameters` Warning event, which names the ruleset and the parameter. The next update of an affected ruleset resets the parameter. A repository's series is removed with its `github_repository_unreconcilable` series.
 
 ### A note on shared credentials across ProviderConfigs
 
@@ -221,11 +221,11 @@ groups:
       summary: "GitHub will not apply declared state for {{ $labels.repository }}"
       description: "Repository {{ $labels.repository }} in org {{ $labels.organization }} has had unapplied {{ $labels.dimension }} state for 1h. See the Repository's conditions for the details."
   - alert: GitHubRulesetUnmanagedParameters
-    expr: sum by (organization, rule_type) (increase(github_ruleset_unmanaged_parameters_total[1h])) > 0
+    expr: github_ruleset_unmanaged_parameters == 1
     labels:
       severity: warning
     annotations:
-      summary: "GitHub returns a {{ $labels.rule_type }} ruleset parameter the provider does not model ({{ $labels.organization }})"
+      summary: "A ruleset of {{ $labels.repository }} ({{ $labels.organization }}) holds a parameter the provider does not model"
       description: |
         The next update of an affected ruleset resets the parameter. Find it with:
         kubectl get events -A --field-selector reason=UnmanagedRulesetParameters
