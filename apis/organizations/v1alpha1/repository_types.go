@@ -683,7 +683,9 @@ type RulesPullRequest struct {
 	// +optional
 	DismissStaleReviewsOnPush *bool `json:"dismissStaleReviewsOnPush,omitempty"`
 	// RequireExtraApprovalForUnattributedChanges requires an additional approval for
-	// pull requests containing unattributed changes, such as those Copilot makes. Defaults to true, as on GitHub.
+	// pull requests containing unattributed changes, such as those Copilot makes. When
+	// unset, the provider sends true, GitHub's default, once GitHub returns the field for
+	// the rule, and sends the rule without it otherwise.
 	// +optional
 	RequireExtraApprovalForUnattributedChanges *bool `json:"requireExtraApprovalForUnattributedChanges,omitempty"`
 	// RequiredReviewers requires approvals from specific teams for changes to matching files. Unset means an empty list.

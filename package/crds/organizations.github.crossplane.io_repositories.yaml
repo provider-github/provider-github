@@ -1151,7 +1151,9 @@ spec:
                                 requireExtraApprovalForUnattributedChanges:
                                   description: |-
                                     RequireExtraApprovalForUnattributedChanges requires an additional approval for
-                                    pull requests containing unattributed changes, such as those Copilot makes. Defaults to true, as on GitHub.
+                                    pull requests containing unattributed changes, such as those Copilot makes. When
+                                    unset, the provider sends true, GitHub's default, once GitHub returns the field for
+                                    the rule, and sends the rule without it otherwise.
                                   type: boolean
                                 requireLastPushApproval:
                                   description: RequireLastPushApproval requires the

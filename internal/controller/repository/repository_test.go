@@ -3729,6 +3729,9 @@ type modelledRuleCase struct {
 	cr func(*v1alpha1.Rules)
 	// sent is the rule as the request carries it, with defaults filled in.
 	sent func(*rulesets.ModelledRules)
+	// sentNew, when set, is the rule as the request carries it while GitHub does not hold
+	// the rule yet; sent applies otherwise.
+	sentNew func(*rulesets.ModelledRules)
 	// onGitHub lists forms GitHub may return for the declared rule.
 	onGitHub []func(*rulesets.ModelledRules)
 	// differs holds, per field, a change to onGitHub[0] that is real drift.
@@ -3794,8 +3797,12 @@ func modelledRuleCases() map[string]modelledRuleCase {
 
 	cases := map[string]modelledRuleCase{
 		"pull_request": {
-			cr:       func(r *v1alpha1.Rules) { r.PullRequest = &v1alpha1.RulesPullRequest{} },
-			sent:     func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestSent() },
+			cr:   func(r *v1alpha1.Rules) { r.PullRequest = &v1alpha1.RulesPullRequest{} },
+			sent: func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestSent() },
+			sentNew: func(r *rulesets.ModelledRules) {
+				r.PullRequest = pullRequestSent()
+				r.PullRequest.RequireExtraApprovalForUnattributedChanges = nil
+			},
 			onGitHub: []func(*rulesets.ModelledRules){func(r *rulesets.ModelledRules) { r.PullRequest = pullRequestDefaults() }},
 			differs: map[string]func(*rulesets.ModelledRules){
 				"allowedMergeMethods":  func(r *rulesets.ModelledRules) { r.PullRequest.AllowedMergeMethods = []string{"squash"} },
@@ -4305,7 +4312,11 @@ func TestUpdateSendsModelledRules(t *testing.T) {
 			got := updatedRules(t, upToDateRulesets(), repository(withRules(tc.cr)))
 
 			want := githubRules()
-			tc.sent(want)
+			if tc.sentNew != nil {
+				tc.sentNew(want)
+			} else {
+				tc.sent(want)
+			}
 			if diff := cmp.Diff(want, got); diff != "" {
 				t.Errorf("UpdateRuleset rules: -want, +got:\n%s", diff)
 			}
@@ -4432,6 +4443,122 @@ func withPullRequestRule(approvingReviews int) repositoryModifier {
 			RequiredApprovingReviewCount: github.Ptr(approvingReviews),
 		}
 	})
+}
+
+// requireExtraApprovalForUnattributedChanges is undocumented, so an update carries it
+// only when the CR sets it or GitHub returns it. An unset field means GitHub's default,
+// true: once GitHub returns the field, a false there is drift and the update sends true.
+func TestRequireExtraApprovalForUnattributedChanges(t *testing.T) {
+	const (
+		withTrue  = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_extra_approval_for_unattributed_changes":true,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+		withFalse = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_extra_approval_for_unattributed_changes":false,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+		without   = `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":true,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_last_push_approval":false,"required_approving_review_count":1,"required_review_thread_resolution":false,"required_reviewers":[]}`
+	)
+	cases := map[string]struct {
+		cr           *bool
+		onGitHub     *bool
+		wantUpToDate bool
+		wantSent     string
+	}{
+		"CRTrueGitHubFalse":   {cr: github.Ptr(true), onGitHub: github.Ptr(false), wantSent: withTrue},
+		"CRFalseGitHubAbsent": {cr: github.Ptr(false), wantSent: withFalse},
+		"CRUnsetGitHubTrue":   {onGitHub: github.Ptr(true), wantUpToDate: true, wantSent: withTrue},
+		"CRUnsetGitHubFalse":  {onGitHub: github.Ptr(false), wantSent: withTrue},
+		"CRUnsetGitHubAbsent": {wantUpToDate: true, wantSent: without},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cr := repository(withRules(func(r *v1alpha1.Rules) {
+				r.PullRequest = &v1alpha1.RulesPullRequest{
+					DismissStaleReviewsOnPush:                  github.Ptr(true),
+					RequiredApprovingReviewCount:               github.Ptr(1),
+					RequireExtraApprovalForUnattributedChanges: tc.cr,
+				}
+			}))
+			onGitHub := func(dismissStale bool) func(*rulesets.ModelledRules) {
+				return func(m *rulesets.ModelledRules) {
+					m.PullRequest = &rulesets.PullRequestRuleParameters{
+						AllowedMergeMethods:          []string{"merge", "squash", "rebase"},
+						DismissStaleReviewsOnPush:    dismissStale,
+						DismissalRestriction:         &rulesets.DismissalRestriction{AllowedActors: []*rulesets.Actor{}},
+						RequiredApprovingReviewCount: 1,
+						RequiredReviewers:            []*rulesets.RequiredReviewer{},
+
+						RequireExtraApprovalForUnattributedChanges: tc.onGitHub,
+					}
+				}
+			}
+
+			rs := upToDateRulesets()
+			rulesetHolding(t, rs, onGitHub(true))
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr.DeepCopy())
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.wantUpToDate)
+			}
+
+			// dismiss_stale_reviews_on_push differs too, so every case sends an update.
+			rs = upToDateRulesets()
+			rulesetHolding(t, rs, onGitHub(false))
+			if got := sentParameters(t, sentRules(t, rs, cr.DeepCopy()), "pull_request"); got != tc.wantSent {
+				t.Errorf("pull_request parameters sent:\nwant %s\n got %s", tc.wantSent, got)
+			}
+		})
+	}
+}
+
+// A new ruleset with the field unset is created without it, by the update and with the
+// repository, and GitHub applies its default, true.
+func TestRequireExtraApprovalForUnattributedChangesUnsetOnCreate(t *testing.T) {
+	want := `{"allowed_merge_methods":["merge","rebase","squash"],"dismiss_stale_reviews_on_push":false,"dismissal_restriction":{"allowed_actors":[],"enabled":false},"require_code_owner_review":false,"require_last_push_approval":false,"required_approving_review_count":0,"required_review_thread_resolution":false,"required_reviewers":[]}`
+	var created []rulesets.Ruleset
+	rs := upToDateRulesets()
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		created = append(created, r)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	withPullRequest := withRules(func(r *v1alpha1.Rules) { r.PullRequest = &v1alpha1.RulesPullRequest{} })
+
+	if err := updateRepositoryRules(context.Background(), repository(withPullRequest), clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+		t.Fatalf("updateRepositoryRules: %v", err)
+	}
+	repos := &fake.MockRepositoriesClient{
+		MockCreate: func(ctx context.Context, owner string, r *github.Repository) (*github.Repository, *github.Response, error) {
+			return r, fake.GenerateEmptyResponse(), nil
+		},
+		MockAddCollaborator: func(ctx context.Context, owner, r, user string, opts *github.RepositoryAddCollaboratorOptions) (*github.CollaboratorInvitation, *github.Response, error) {
+			return nil, fake.GenerateEmptyResponse(), nil
+		},
+		MockReplaceAllTopics: func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+			return topics, fake.GenerateEmptyResponse(), nil
+		},
+	}
+	teams := &fake.MockTeamsClient{
+		MockAddTeamRepoBySlug: func(ctx context.Context, org, slug, owner, r string, opts *github.TeamAddTeamRepoOptions) (*github.Response, error) {
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+	cr := repository(withPullRequest)
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
+	e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rs}}}
+	if _, err := e.Create(context.Background(), cr); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if len(created) != 2 {
+		t.Fatalf("CreateRuleset calls = %d, want 2", len(created))
+	}
+	for i, path := range []string{"update", "create"} {
+		if got := sentParameters(t, created[i].Rules, "pull_request"); got != want {
+			t.Errorf("pull_request parameters sent by %s:\nwant %s\n got %s", path, want, got)
+		}
+	}
 }
 
 // An update sends only the parameters built from the CR, so it resets unmodelled

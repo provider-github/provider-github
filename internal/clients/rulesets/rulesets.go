@@ -137,7 +137,7 @@ type RequiredDeploymentsRuleParameters struct {
 }
 
 // PullRequestRuleParameters are the modelled parameters of the pull_request rule.
-// RequireExtraApprovalForUnattributedChanges is undocumented and may be nil.
+// RequireExtraApprovalForUnattributedChanges is undocumented; it is sent only when set.
 type PullRequestRuleParameters struct {
 	AllowedMergeMethods                        []string              `json:"allowed_merge_methods"`
 	DismissStaleReviewsOnPush                  bool                  `json:"dismiss_stale_reviews_on_push"`

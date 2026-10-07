@@ -3037,7 +3037,9 @@ func secretTypeSet(types []v1alpha1.RulesSecretType) []v1alpha1.RulesSecretType 
 
 // withoutUndeclared gives gh, GitHub's form of the ruleset, the CR's values for fields
 // GitHub fills in by itself: OrganizationAdmin and DeployKey actor IDs and a missing
-// update_allows_fetch_and_merge.
+// update_allows_fetch_and_merge. It gives cr's rules, which the caller's map shares,
+// GitHub's default true for an unset requireExtraApprovalForUnattributedChanges that
+// GitHub returns, so the update sends it and a false on GitHub is drift.
 func withoutUndeclared(gh *v1alpha1.RepositoryRuleset, cr v1alpha1.RepositoryRuleset) {
 	for _, actor := range gh.BypassActors {
 		if !actorIDIgnored(actor.ActorType) {
@@ -3058,6 +3060,9 @@ func withoutUndeclared(gh *v1alpha1.RepositoryRuleset, cr v1alpha1.RepositoryRul
 	if gh.Rules.UpdateAllowsFetchAndMerge == nil && *gh.Rules.Update {
 		gh.Rules.UpdateAllowsFetchAndMerge = cr.Rules.UpdateAllowsFetchAndMerge
 	}
+	if c, g := cr.Rules.PullRequest, gh.Rules.PullRequest; c != nil && g != nil && c.RequireExtraApprovalForUnattributedChanges == nil && g.RequireExtraApprovalForUnattributedChanges != nil {
+		c.RequireExtraApprovalForUnattributedChanges = pointer.To(true)
+	}
 }
 
 // pullRequestDefaults fills a pull_request rule's unset parameters with GitHub's defaults
@@ -3069,7 +3074,6 @@ func pullRequestDefaults(p *v1alpha1.RulesPullRequest) {
 	p.RequireLastPushApproval = util.BoolDerefToPointer(p.RequireLastPushApproval, false)
 	p.RequiredReviewThreadResolution = util.BoolDerefToPointer(p.RequiredReviewThreadResolution, false)
 	p.RequiredApprovingReviewCount = util.IntDerefToPointer(p.RequiredApprovingReviewCount, 0)
-	p.RequireExtraApprovalForUnattributedChanges = util.BoolDerefToPointer(p.RequireExtraApprovalForUnattributedChanges, true)
 
 	if len(p.AllowedMergeMethods) == 0 {
 		p.AllowedMergeMethods = []v1alpha1.RulesMergeMethod{"merge", "squash", "rebase"}
