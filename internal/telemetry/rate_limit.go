@@ -63,10 +63,12 @@ type RateLimitMetrics struct {
 
 // Dimensions of declared repository state GitHub may refuse to apply.
 const (
-	DimensionCollaborators    = "collaborators"
-	DimensionBranchProtection = "branch_protection"
-	DimensionArchived         = "archived"
-	DimensionSettings         = "settings"
+	DimensionCollaborators     = "collaborators"
+	DimensionBranchProtection  = "branch_protection"
+	DimensionArchived          = "archived"
+	DimensionSettings          = "settings"
+	DimensionRulesets          = "rulesets"
+	DimensionRulesetParameters = "ruleset_parameters"
 )
 
 // labels carried by every rate-limit metric:
@@ -134,7 +136,7 @@ func newRateLimitMetrics() *RateLimitMetrics {
 		repositoryUnreconcilable: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "github_repository_unreconcilable",
-				Help: "1 while the repository has declared state GitHub will not apply, per dimension (collaborators, branch_protection, archived)",
+				Help: "1 while the repository has declared state GitHub will not apply, per dimension (collaborators, branch_protection, archived, settings, rulesets, ruleset_parameters)",
 			},
 			[]string{"organization", "repository", "dimension"},
 		),

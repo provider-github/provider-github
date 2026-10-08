@@ -157,6 +157,8 @@ func TestForgetRepository_RemovesOnlyThatRepository(t *testing.T) {
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionCollaborators, true)
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionBranchProtection, false)
 	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionArchived, false)
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionRulesets, true)
+	m.SetRepositoryUnreconcilable("acme", "widgets", DimensionRulesetParameters, true)
 	m.SetRepositoryUnreconcilable("acme", "gadgets", DimensionCollaborators, true)
 
 	m.ForgetRepository("acme", "widgets")

@@ -27,6 +27,8 @@ import (
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v90/github"
+
+	"github.com/crossplane/provider-github/internal/clients/rulesets"
 )
 
 // ServicesCache caches *Services keyed by credential hash so that
@@ -137,6 +139,7 @@ func createNewServices(creds string) (*Services, error) {
 		Users:         ghclient.Users,
 		Teams:         ghclient.Teams,
 		Repositories:  ghclient.Repositories,
+		Rulesets:      rulesets.NewService(ghclient),
 	}, nil
 }
 
