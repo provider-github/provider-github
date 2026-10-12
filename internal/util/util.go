@@ -25,8 +25,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	pointer "k8s.io/utils/ptr"
 )
 
@@ -216,26 +216,9 @@ func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksP
 // by the ActorId field in ascending order.
 func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 	sort.Slice(actors, func(i, j int) bool {
-		return *actors[i].ActorId < *actors[j].ActorId
+		return *actors[i].ActorID < *actors[j].ActorID
 	})
 
-}
-
-// ToBoolPtr converts a boolean value to a pointer to a boolean value.
-func ToBoolPtr(b bool) *bool {
-	return &b
-}
-
-// ToIntPtr is a helper function that takes an integer 'i' as input and returns a pointer to 'i'.
-// This can be useful when you want to create a pointer to an integer value.
-func ToIntPtr(i int) *int {
-	return &i
-}
-
-// ToStringPtr is a helper function that takes a string 's' as input and returns a pointer to 's'.
-// This can be useful when you want to create a pointer to a string value.
-func ToStringPtr(s string) *string {
-	return &s
 }
 
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',

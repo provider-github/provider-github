@@ -44,6 +44,96 @@ implements the following resources with partial functionality:
 * **Membership** — organization membership
   * role
 
+## Releases and support
+
+See [RELEASES.md](./RELEASES.md) for the release and support policy: which
+releases receive fixes, what each version number means, and what to expect when
+upgrading or downgrading.
+
+## Verifying this package
+
+Every release publishes an image signature plus a full ladder of OCI 1.1
+attestations — two SBOMs, two VEX statements, SLSA provenance, and a
+vens risk-scoring context document — using [Sigstore
+cosign](https://github.com/sigstore/cosign) keyless signing. There is no key
+to manage or rotate: the signing identity is the GitHub Actions OIDC token
+for the release workflow run.
+
+**Requires cosign >= 3.0.6.** cosign v3.x attaches
+attestations as OCI 1.1 referrers, not the legacy `.sig`/`.att` tag scheme —
+`crane ls` on the image shows only the version tag and the digest tag. An
+older cosign, and some Kyverno / policy-controller configurations expecting
+the legacy tags, report "no signatures found" on an image that is correctly
+signed. Install a current cosign before running the commands below.
+
+Every referrer currently carries the same
+`dev.sigstore.bundle.predicateType: https://sigstore.dev/cosign/sign/v1`
+annotation, including the SBOMs — this is upstream cosign behavior, not
+specific to this project, so do not filter referrers on that annotation.
+Select the one you want with `--type` on `cosign verify-attestation`, as the
+commands below do.
+
+```bash
+UP_ORG=atarax
+GITHUB_ORG=provider-github
+PROJECT_NAME=provider-github
+VERSION=vX.Y.Z                     # the release you are verifying
+ISSUER="https://token.actions.githubusercontent.com"
+
+# The repository segment, unlike the org segment, is a naming rule that
+# binds every provider: releases are only ever cut upstream, never from a
+# fork, so the repository's name is always ${PROJECT_NAME} -- read from a
+# recorded rule, not guessed. The identity also stays pinned to the org,
+# the workflow path and the exact tag.
+# VERSION is regexp-escaped before interpolation -- an unescaped '.'
+# is a wildcard that would let a tag differing from VERSION only at a '.'
+# position verify here too.
+VERSION_RE="${VERSION//./\\.}"
+IDENTITY_REGEXP="^https://github\.com/${GITHUB_ORG}/${PROJECT_NAME}/\.github/workflows/release\.yaml@refs/tags/${VERSION_RE}\$"
+IMAGE="docker.io/${UP_ORG}/${PROJECT_NAME}"
+
+DIGEST=$(crane digest "${IMAGE}:${VERSION}")
+SUBJECT="${IMAGE}@${DIGEST}"
+
+# Signature
+cosign verify \
+  --certificate-identity-regexp "$IDENTITY_REGEXP" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$SUBJECT"
+
+# SBOMs
+cosign verify-attestation --type spdxjson  --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+cosign verify-attestation --type cyclonedx --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# VEX
+cosign verify-attestation --type openvex                    --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+cosign verify-attestation --type https://cyclonedx.org/vex  --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# SLSA provenance
+cosign verify-attestation --type slsaprovenance1 --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+
+# vens risk-scoring context
+cosign verify-attestation --type https://vens.dev/risk-context/v1 --certificate-identity-regexp "$IDENTITY_REGEXP" --certificate-oidc-issuer "$ISSUER" "$SUBJECT"
+```
+
+Or run the whole ladder non-interactively, including the cross-check that
+every attestation's subject digest matches what the tag currently resolves
+to:
+
+```bash
+hack/verify-release.sh vX.Y.Z
+```
+
+### SBOM identity
+
+The Go-module SBOM's `metadata.component.name` is this project's module
+path, `github.com/provider-github/provider-github`. A module path and the
+name of the git repository hosting this project are independent
+identifiers, and are allowed to disagree — this is not a substitution or a
+mismatch: the module path names who publishes this project, while a
+repository name is only a hostname path segment, free to differ from it.
+
+
 ## GitHub App permissions
 
 See [PERMISSIONS.md](./PERMISSIONS.md) for the GitHub App permissions
@@ -139,6 +229,200 @@ Earlier releases enforced this only intermittently; it now applies
 on every reconcile. Before upgrading, make sure each `Repository`
 CR declares the description you want — otherwise the next reconcile
 will clear it.
+
+
+### Namespaced API scope
+
+Every managed resource exists in two API groups with the same Kind and the same
+`forProvider` and `atProvider` schema:
+
+| Scope | Group | Provider config it references |
+|---|---|---|
+| cluster-scoped | `organizations.github.crossplane.io` | `ProviderConfig` in `github.crossplane.io` |
+| namespaced | `organizations.github.m.crossplane.io` | `ProviderConfig` (same namespace) or `ClusterProviderConfig` in `github.m.crossplane.io` |
+
+The existing cluster-scoped resources are unchanged. For the namespaced variants:
+
+* `spec.providerConfigRef` takes a `kind` (`ProviderConfig` or
+  `ClusterProviderConfig`) and a `name`. It defaults to the
+  `ClusterProviderConfig` named `default`. A namespaced `ProviderConfig` is only
+  reachable from managed resources in its own namespace.
+* The credentials Secret of a namespaced `ProviderConfig` is always read from
+  that namespace, whatever `secretRef.namespace` says. A `ClusterProviderConfig`
+  names its Secret by an explicit namespace.
+* `spec.writeConnectionSecretToRef` takes a name only; the Secret is written to
+  the resource's namespace.
+* `spec.deletionPolicy` does not exist. Use `spec.managementPolicies` without
+  `Delete` to keep the external object.
+* Cross-resource references (`orgRef`, `repoRef`, ...) and selectors resolve to
+  resources in the referencing resource's namespace unless the reference names
+  another one.
+* `secretKeyRef` on `Repository` webhooks and on `OrganizationWebhook` is always
+  read from the resource's own namespace, whatever `secretKeyRef.namespace`
+  says.
+
+Examples for both scopes are in `examples/`; the namespaced ones end in
+`-namespaced.yaml`.
+
+One GitHub object is managed by exactly one managed resource, in exactly one
+scope. A cluster-scoped and a namespaced resource that name the same object both
+reconcile it and overwrite each other, as two cluster-scoped resources naming one
+object always have; Crossplane has never guarded that configuration. Migrate one
+scope at a time: delete the old-scope object with `deletionPolicy: Orphan` (or
+drop it to `managementPolicies: ["Observe"]`) before the new-scope object takes
+management.
+
+### Safe start and Secret reads
+
+The provider declares the `safe-start` capability in its package metadata. On
+Crossplane v2 the package manager then installs only the CRDs that the
+`ManagedResourceActivationPolicy` objects in the cluster activate, and the
+provider starts the controller of a kind once that kind's CRD exists. Activate
+the kinds you use, for example with a `ManagedResourceActivationPolicy` whose
+`activate` list names `*.organizations.github.crossplane.io` and
+`*.organizations.github.m.crossplane.io` (or individual kinds such as
+`repositories.organizations.github.crossplane.io`). A kind that is not
+activated has no CRD and no controller; the provider does not need a restart
+when you activate one later. The `ProviderConfig`, `ClusterProviderConfig` and
+`ProviderConfigUsage` controllers always start.
+
+At startup the provider checks, for up to 30 seconds, that its service account
+may get, list and watch `CustomResourceDefinitions`. If it may not (some
+Crossplane distributions grant no CRD access), it logs a warning and starts all
+controllers immediately, without the CRD gate. The provider's cache of
+`CustomResourceDefinitions` holds only the fields the gate reads, not their
+OpenAPI schemas.
+
+Secrets are point-read, not cached: the credentials Secret of a
+`ProviderConfig`, and the Secrets that repository and organization webhook
+settings reference, are fetched from the API server when a reconcile needs them
+rather than served from a cluster-wide Secret informer. The provider therefore
+needs `get` on Secrets but does not list or watch them, and its memory use does
+not grow with the number of Secrets in the cluster.
+
+### Drift Detection
+
+Every managed resource, in both API scopes, accepts an optional
+`spec.driftDetection` block next to `spec.forProvider`:
+
+```yaml
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Team
+metadata:
+  name: sample-team
+spec:
+  driftDetection:
+    mode: warn        # enabled (default) | warn | disabled
+  forProvider:
+    description: This is a sample team
+    orgRef:
+      name: pgh-sample-organization
+```
+
+A resource without the block reconciles exactly as before, which is the same as
+`mode: enabled`.
+
+| Mode | Behavior |
+|---|---|
+| `enabled` | Drift between the spec and GitHub is detected and corrected. This is the default. |
+| `warn` | Drift is detected and reported on the `DriftDetected` condition (`reason: Drifted`), and is **not** corrected. Use it to see what actually drifts before deciding what to do about it. |
+| `disabled` | Drift is neither detected nor corrected. The resource is still created, deleted and its connection details published. |
+
+`DriftDetected` is `True` while drift is present and not being corrected, and
+`False` (`reason: InSync`) when `mode: warn` finds none. It reports that drift
+occurred, not which fields differ.
+
+#### Ready while drift is corrected
+
+When the provider finds a resource that exists on GitHub but differs from the
+spec, it sets `Ready=False` (`reason: Unavailable`) until a later poll finds it
+in sync. With `mode: enabled` that is about one poll cycle per correction: the
+update runs, and the next reconcile sets `Ready=True`. Resources that already
+report their own `Ready=False` reason (for example `SecretNotFound` or
+`VisibilityMismatch` on `ActionsSecretAccess` and `DependabotSecretAccess`) keep
+that reason.
+
+`mode: warn` and `mode: disabled` stop the correction but do not clear this
+condition. While drift is left uncorrected, `Ready` therefore **stays `False`**
+for as long as the drift lasts, not for one poll cycle. It returns to `True`
+once the spec and GitHub agree again.
+
+#### Ignoring fields owned elsewhere
+
+`spec.driftDetection.ignore[].paths` names `forProvider` fields that something
+other than Crossplane owns. For such a field the value observed on GitHub is
+carried forward instead of the spec value, both when comparing and when an
+update is sent, so correcting another field does not revert it. Paths use the
+field path notation of Composition patches (`forProvider.description`, or the
+JSON Pointer form `/forProvider/description`); list indices and wildcards are
+rejected, so a whole list is ignored or not.
+
+An ignore path is accepted only if the provider can read the field back from
+`status.atProvider`. Most of this provider's resources publish little or nothing
+under `status.atProvider`, and the provider does not currently populate a
+counterpart for any `forProvider` field, so **every ignore path is rejected
+today**: the resource reports the reason on its `Synced` condition and is not
+reconciled until the path is removed. The organization, `url` and the reference
+fields that address a resource (`org`, `orgRef`, `orgSelector`) can never be
+ignored. `mode: warn` and `mode: disabled` need no ignore paths and work on
+every kind.
+
+### Observe-only import
+
+`spec.managementPolicies: ["Observe"]` adopts an existing GitHub object without
+managing it. An Observe-only resource may leave out the create-time fields that
+are otherwise required, and the provider does not compare a field it is not
+given:
+
+| Kind | Fields that may be omitted |
+|---|---|
+| `ActionsSecretAccess`, `DependabotSecretAccess`, `RunnerGroup` | `visibility` |
+| `OrganizationVariable` | `visibility`, `value` |
+| `Membership` | `role` |
+| `Organization` | `description` |
+| `OrganizationWebhook` | `url`, `contentType`, `events` |
+
+These fields are required again as soon as `managementPolicies` contains `*` (the
+default), `Create` or `Update`; the API server rejects the resource without
+them. The object is addressed by its external name
+(`crossplane.io/external-name`). An `OrganizationWebhook` with a numeric
+external name is read by that ID; without one it is found by `url`, so an
+Observe-only webhook needs one of the two.
+
+`status.atProvider.id` holds the external name on `ActionsSecretAccess`,
+`DependabotSecretAccess`, `Membership`, `Organization`, `OrganizationVariable`,
+`Repository` and `Team`. `OrganizationWebhook` and `RunnerGroup` keep the
+numeric GitHub ID they already report there.
+
+### crossplane-runtime v2: removed features and always-on management policies
+
+The provider is built on crossplane-runtime v2. Compared with earlier releases:
+
+* **External Secret Stores are gone.** The `StoreConfig` kind, the
+  `--enable-external-secret-stores` flag and every managed resource's
+  `spec.publishConnectionDetailsTo` field are removed. Connection details are
+  published only through `spec.writeConnectionSecretToRef`. Remove
+  `publishConnectionDetailsTo` from existing manifests and delete any
+  `StoreConfig` objects before upgrading.
+* **Management policies are always on.** `spec.managementPolicies` is honored
+  on every managed resource, and the `--enable-management-policies` flag (and
+  its `ENABLE_MANAGEMENT_POLICIES` environment variable) no longer exists.
+  Remove the flag from any `DeploymentRuntimeConfig` or Deployment arguments,
+  because an unknown flag stops the provider from starting. The same holds for
+  `--enable-external-secret-stores` and `--namespace`.
+* **The deprecated `spec.providerRef` field is gone** from every managed
+  resource. Use `spec.providerConfigRef`.
+* Managed resources report `status.observedGeneration` and
+  `status.lastHandledReconcileAt`, and `status.conditions` entries report
+  `observedGeneration`.
+* `ProviderConfig` carries the `crossplane`, `provider` and `github`
+  categories, so `kubectl get crossplane` also lists it.
+* The Go API packages moved to `apis/cluster/...`
+  (`github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1`
+  and `.../apis/cluster/v1alpha1`) and four exported fields were renamed to Go
+  initialism style: `Url` to `URL`, `InsecureSsl` to `InsecureSSL`, `ActorId`
+  to `ActorID` and `IntegrationId` to `IntegrationID`. Their JSON names are
+  unchanged.
 
 
 ## Developing

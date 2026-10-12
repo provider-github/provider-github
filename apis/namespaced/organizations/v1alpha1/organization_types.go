@@ -1,0 +1,231 @@
+/*
+Copyright 2022 The Crossplane Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	"reflect"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+
+	"github.com/provider-github/provider-github/apis/common/driftdetection"
+)
+
+// ActionsConfiguration are the configurable fields of an Organization Actions.
+type ActionsConfiguration struct {
+	// EnabledRepos is the set of repositories allowed to run GitHub
+	// Actions at the organization level (equivalent to GitHub's
+	// "selected_repository_ids" list when the org's Actions permission
+	// policy is "selected"). The provider reconciles the org's enabled
+	// list to match this field via a single atomic PUT.
+	//
+	// The field is tri-state:
+	//   - omitted / nil: the provider does not manage the enabled list;
+	//     whatever is already configured on GitHub is left untouched.
+	//   - empty slice ([]): the provider sets the enabled list to empty,
+	//     disabling Actions for every repository in the org.
+	//   - non-empty: the provider sets the enabled list to exactly these
+	//     repositories, adding any missing and removing any extras.
+	//
+	// To stop managing the list, remove the field. Setting it to [] is
+	// an explicit "wipe" and will affect every repo in the org.
+	// +optional
+	EnabledRepos []ActionEnabledRepo `json:"enabledRepos"`
+}
+
+type ActionEnabledRepo struct {
+	// Name of the repository
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Repository
+	Repo string `json:"repo,omitempty"`
+
+	// RepoRef is a reference to the Repositories
+	// +optional
+	RepoRef *xpv2.NamespacedReference `json:"repoRef,omitempty"`
+
+	// RepoSelector selects a reference to an Repositories
+	// +optional
+	RepoSelector *xpv2.NamespacedSelector `json:"repoSelector,omitempty"`
+}
+
+type SecretSelectedRepo struct {
+	// Name of the repository
+	// +crossplane:generate:reference:type=github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1.Repository
+	Repo string `json:"repo,omitempty"`
+
+	// RepoRef is a reference to the Repositories
+	// +optional
+	RepoRef *xpv2.NamespacedReference `json:"repoRef,omitempty"`
+
+	// RepoSelector selects a reference to a Repository
+	// +optional
+	RepoSelector *xpv2.NamespacedSelector `json:"repoSelector,omitempty"`
+}
+
+type OrgSecret struct {
+	// Name of the GitHub secret
+	Name string `json:"name"`
+
+	// List of repositories that have access to the secret.
+	// +optional
+	RepositoryAccessList []SecretSelectedRepo `json:"repositoryAccessList"`
+}
+
+type SecretConfiguration struct {
+	// List of GitHub Actions secrets
+	//
+	// DEPRECATED, use ActionsSecretAccess instead.
+	// +optional
+	ActionsSecrets []OrgSecret `json:"actionsSecrets"`
+
+	// List of Dependabot secrets
+	//
+	// DEPRECATED, use DependabotSecretAccess instead.
+	// +optional
+	DependabotSecrets []OrgSecret `json:"dependabotSecrets"`
+}
+
+// ActionEnabledRepoObservation is a repository enabled for GitHub Actions.
+type ActionEnabledRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// ActionsConfigurationObservation is the observed Actions configuration of an Organization.
+type ActionsConfigurationObservation struct {
+	// EnabledRepos lists the repositories enabled to run GitHub Actions at
+	// the organization level. GitHub is queried for the list only while
+	// forProvider.actions.enabledRepos is set, so the field is empty otherwise.
+	// +optional
+	EnabledRepos []ActionEnabledRepoObservation `json:"enabledRepos"`
+}
+
+// SecretSelectedRepoObservation is a repository that has access to a secret.
+type SecretSelectedRepoObservation struct {
+	// Repo is the name of the repository.
+	Repo string `json:"repo,omitempty"`
+}
+
+// OrgSecretObservation is an organization secret and the repositories that have access to it.
+type OrgSecretObservation struct {
+	// Name of the GitHub secret.
+	Name string `json:"name,omitempty"`
+
+	// RepositoryAccessList lists the repositories that have access to the secret.
+	// +optional
+	RepositoryAccessList []SecretSelectedRepoObservation `json:"repositoryAccessList"`
+}
+
+// SecretConfigurationObservation is the observed state of the organization
+// secrets listed in forProvider.secrets. Secret values are never returned by
+// GitHub and are not part of the observation.
+type SecretConfigurationObservation struct {
+	// ActionsSecrets lists the GitHub Actions secrets named in
+	// forProvider.secrets.actionsSecrets and their repository access.
+	// +optional
+	ActionsSecrets []OrgSecretObservation `json:"actionsSecrets"`
+
+	// DependabotSecrets lists the Dependabot secrets named in
+	// forProvider.secrets.dependabotSecrets and their repository access.
+	// +optional
+	DependabotSecrets []OrgSecretObservation `json:"dependabotSecrets"`
+}
+
+// OrganizationParameters are the configurable fields of a Organization.
+type OrganizationParameters struct {
+	// +optional
+	Description string               `json:"description"`
+	Actions     ActionsConfiguration `json:"actions,omitempty"`
+
+	// Configuration for Organization Secrets.
+	// +optional
+	Secrets *SecretConfiguration `json:"secrets,omitempty"`
+}
+
+// OrganizationObservation are the observable fields of a Organization.
+type OrganizationObservation struct {
+	// ID is the external name of the organization on GitHub.
+	ID string `json:"id,omitempty"`
+
+	Description string `json:"description,omitempty"`
+
+	// Actions is the observed GitHub Actions configuration of the organization.
+	Actions ActionsConfigurationObservation `json:"actions,omitempty"`
+
+	// Secrets is the observed state of the organization secrets named in
+	// forProvider.secrets. GitHub is queried for them only while that field is set.
+	Secrets *SecretConfigurationObservation `json:"secrets,omitempty"`
+}
+
+// A OrganizationSpec defines the desired state of a Organization.
+type OrganizationSpec struct {
+	xpv2.ManagedResourceSpec `json:",inline"`
+	ForProvider              OrganizationParameters `json:"forProvider"`
+
+	// DriftDetection configures which forProvider fields are owned outside
+	// Crossplane and how drift in those fields is detected and corrected.
+	// Absent configuration means drift detection is enabled with no ignored
+	// paths.
+	// +optional
+	DriftDetection *driftdetection.DriftDetection `json:"driftDetection,omitempty"`
+}
+
+// A OrganizationStatus represents the observed state of a Organization.
+type OrganizationStatus struct {
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 OrganizationObservation `json:"atProvider,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// A Organization is an example API type.
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
+// +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Namespaced,categories={crossplane,managed,github}
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || !has(self.spec.managementPolicies) || !('*' in self.spec.managementPolicies || 'Create' in self.spec.managementPolicies || 'Update' in self.spec.managementPolicies) || has(self.spec.forProvider.description)",message="description is required unless managementPolicies is Observe-only"
+type Organization struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   OrganizationSpec   `json:"spec"`
+	Status OrganizationStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// OrganizationList contains a list of Organization
+type OrganizationList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Organization `json:"items"`
+}
+
+// Organization type metadata.
+var (
+	OrganizationKind             = reflect.TypeOf(Organization{}).Name()
+	OrganizationGroupKind        = schema.GroupKind{Group: Group, Kind: OrganizationKind}.String()
+	OrganizationKindAPIVersion   = OrganizationKind + "." + SchemeGroupVersion.String()
+	OrganizationGroupVersionKind = SchemeGroupVersion.WithKind(OrganizationKind)
+)
+
+func init() {
+	SchemeBuilder.Register(&Organization{}, &OrganizationList{})
+}

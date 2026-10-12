@@ -18,8 +18,8 @@ package clients
 
 import (
 	"context"
-	"errors"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/google/go-github/v90/github"
 )
 

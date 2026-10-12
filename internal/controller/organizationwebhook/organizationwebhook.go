@@ -18,32 +18,24 @@ package organizationwebhook
 
 import (
 	"context"
+	"slices"
 	"strconv"
-	"time"
 
 	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
-	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/util"
 )
 
 const (
@@ -58,79 +50,14 @@ const (
 	connectionSecretKey = "secret"
 )
 
-// Setup adds a controller that reconciles OrganizationWebhook managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0)
-}
-
-// SetupWithTimeout adds a controller that reconciles OrganizationWebhook managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.OrganizationWebhookGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-	}
-
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.OrganizationWebhookGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.OrganizationWebhook{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.OrganizationWebhook)
-	if !ok {
-		return nil, errors.New(errNotOrganizationWebhook)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{github: gh, kube: c.kube}, nil
-}
-
 type external struct {
 	github *ghclient.Client
 	kube   client.Client
+
+	// secretNamespace, when set, is the only namespace the webhook secret is
+	// read from, whatever namespace the spec names. Namespaced resources set it
+	// to their own namespace.
+	secretNamespace string
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -152,6 +79,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cr.Status.AtProvider.ID = h.GetID()
+	mirrorHook(&cr.Status.AtProvider, h, p.Org)
 
 	// Persist the adopted hook ID as the external name.
 	id := strconv.FormatInt(h.GetID(), 10)
@@ -161,6 +89,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	if !configUpToDate(h, p) {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false, ResourceLateInitialized: lateInit}, nil
 	}
 	secretOK, err := c.secretUpToDate(ctx, cr, h)
@@ -168,20 +97,42 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 	if !secretOK {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false, ResourceLateInitialized: lateInit}, nil
 	}
 
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true, ResourceLateInitialized: lateInit}, nil
 }
 
-// configUpToDate compares every hook field except the secret.
+// mirrorHook records in status.atProvider what GitHub reports for the hook h,
+// which was read under org. The webhook secret is never returned by GitHub.
+func mirrorHook(ap *v1alpha1.OrganizationWebhookObservation, h *github.Hook, org string) {
+	ap.Org = org
+	ap.URL = h.Config.GetURL()
+	ap.ContentType = h.Config.GetContentType()
+	// An empty answer is an empty list, not an absent one.
+	ap.Events = slices.Sorted(slices.Values(h.Events))
+	if ap.Events == nil {
+		ap.Events = []string{}
+	}
+	ap.Active = nil
+	if h.Active != nil {
+		active := h.GetActive()
+		ap.Active = &active
+	}
+	insecure := h.Config.GetInsecureSSL() == "1"
+	ap.InsecureSSL = &insecure
+}
+
+// configUpToDate compares every hook field except the secret. A url,
+// contentType or events the spec omits (an Observe-only import) is not compared.
 func configUpToDate(h *github.Hook, p v1alpha1.OrganizationWebhookParameters) bool {
-	return h.Config.GetURL() == p.Url &&
-		h.Config.GetContentType() == p.ContentType &&
-		util.EqualUnordered(h.Events, p.Events) &&
+	return (p.URL == "" || h.Config.GetURL() == p.URL) &&
+		(p.ContentType == "" || h.Config.GetContentType() == p.ContentType) &&
+		(len(p.Events) == 0 || util.EqualUnordered(h.Events, p.Events)) &&
 		h.GetActive() == pointer.Deref(p.Active, true) &&
-		(h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSsl, false)
+		(h.Config.GetInsecureSSL() == "1") == pointer.Deref(p.InsecureSSL, false)
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
@@ -228,22 +179,22 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{ConnectionDetails: connectionDetails(secret)}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.OrganizationWebhook)
 	if !ok {
-		return errors.New(errNotOrganizationWebhook)
+		return managed.ExternalDelete{}, errors.New(errNotOrganizationWebhook)
 	}
 
 	id, ok := hookID(cr)
 	if !ok {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
 	_, err := c.github.Organizations.DeleteHook(ctx, cr.Spec.ForProvider.Org, id)
 	if err != nil && !ghclient.Is404(err) {
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return nil
+	return managed.ExternalDelete{}, nil
 }
 
 // findHook gets the hook by the ID in the external name, or else
@@ -258,6 +209,11 @@ func (c *external) findHook(ctx context.Context, cr *v1alpha1.OrganizationWebhoo
 		return h, err
 	}
 
+	// Without a url there is nothing to match a hook by.
+	if cr.Spec.ForProvider.URL == "" {
+		return nil, nil
+	}
+
 	opts := &github.ListOptions{PerPage: 100}
 	for {
 		hooks, resp, err := c.github.Organizations.ListHooks(ctx, org, opts)
@@ -265,7 +221,7 @@ func (c *external) findHook(ctx context.Context, cr *v1alpha1.OrganizationWebhoo
 			return nil, err
 		}
 		for _, h := range hooks {
-			if h.Config.GetURL() == cr.Spec.ForProvider.Url {
+			if h.Config.GetURL() == cr.Spec.ForProvider.URL {
 				return h, nil
 			}
 		}
@@ -303,14 +259,14 @@ func (c *external) secretUpToDate(ctx context.Context, cr *v1alpha1.Organization
 func (c *external) desiredHook(ctx context.Context, cr *v1alpha1.OrganizationWebhook) (*github.Hook, string, error) {
 	p := cr.Spec.ForProvider
 	insecureSsl := "0"
-	if pointer.Deref(p.InsecureSsl, false) {
+	if pointer.Deref(p.InsecureSSL, false) {
 		insecureSsl = "1"
 	}
 	hook := &github.Hook{
 		Config: &github.HookConfig{
 			ContentType: github.Ptr(p.ContentType),
 			InsecureSSL: github.Ptr(insecureSsl),
-			URL:         github.Ptr(p.Url),
+			URL:         github.Ptr(p.URL),
 		},
 		Events: p.Events,
 		Active: github.Ptr(pointer.Deref(p.Active, true)),
@@ -326,21 +282,25 @@ func (c *external) desiredHook(ctx context.Context, cr *v1alpha1.OrganizationWeb
 	return hook, secret, nil
 }
 
-func (c *external) desiredSecret(ctx context.Context, ref *xpv1.SecretKeySelector) (string, error) {
+func (c *external) desiredSecret(ctx context.Context, ref *xpv2.SecretKeySelector) (string, error) {
+	ns := ref.Namespace
+	if c.secretNamespace != "" {
+		ns = c.secretNamespace
+	}
 	s := &corev1.Secret{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, s); err != nil {
-		return "", errors.Wrapf(err, "cannot get secret `%s/%s`", ref.Namespace, ref.Name)
+	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, s); err != nil {
+		return "", errors.Wrapf(err, "cannot get secret `%s/%s`", ns, ref.Name)
 	}
 	data, ok := s.Data[ref.Key]
 	if !ok {
-		return "", errors.Errorf("secret key `%s` not found in secret `%s/%s`", ref.Key, ref.Namespace, ref.Name)
+		return "", errors.Errorf("secret key `%s` not found in secret `%s/%s`", ref.Key, ns, ref.Name)
 	}
 	return string(data), nil
 }
 
 // appliedSecret reads the last applied secret from the connection
 // secret, which may not exist yet.
-func (c *external) appliedSecret(ctx context.Context, ref *xpv1.SecretReference) (string, error) {
+func (c *external) appliedSecret(ctx context.Context, ref *xpv2.SecretReference) (string, error) {
 	s := &corev1.Secret{}
 	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, s); resource.IgnoreNotFound(err) != nil {
 		return "", errors.Wrapf(err, "cannot get connection secret `%s/%s`", ref.Namespace, ref.Name)
@@ -360,4 +320,10 @@ func connectionDetails(secret string) managed.ConnectionDetails {
 func hookID(cr *v1alpha1.OrganizationWebhook) (int64, bool) {
 	id, err := strconv.ParseInt(meta.GetExternalName(cr), 10, 64)
 	return id, err == nil
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
+	return nil
 }

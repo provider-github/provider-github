@@ -1,0 +1,118 @@
+for: organizations.github.m.crossplane.io/v1alpha1/Repository
+meta.upbound.io/example-id: organizations/v1alpha1/repository
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-repository-namespaced.sh
+crossplane.io/update-test: |
+  - field: description
+    value: Crossplane provider-github updated repository description
+  - field: topics
+    value:
+      - crossplane
+      - updated
+  - field: hasIssues
+    value: false
+  - field: hasProjects
+    value: true
+  - field: hasWiki
+    value: true
+  - field: hasDiscussions
+    value: true
+  - field: deleteBranchOnMerge
+    value: false
+  - field: allowUpdateBranch
+    value: false
+  - field: allowAutoMerge
+    value: true
+  - field: mergeCommitMessage
+    value: BLANK
+  - field: mergeCommitTitle
+    value: MERGE_MESSAGE
+    withValues:
+      mergeCommitMessage: PR_TITLE
+  - field: squashMergeCommitMessage
+    value: COMMIT_MESSAGES
+  - field: squashMergeCommitTitle
+    value: COMMIT_OR_PR_TITLE
+  - field: allowRebaseMerge
+    value: true
+  - field: allowMergeCommit
+    value: false
+  - field: allowSquashMerge
+    value: false
+  - field: isTemplate
+    value: true
+  - field: private
+    value: false
+  - field: permissions.teams
+    value:
+      - team: developers
+        role: pull
+  - field: permissions.teams
+    value: []
+  - field: webhooks
+    value:
+      - url: https://example.com/pgh-e2e-repository-ns-hook
+        contentType: json
+        events:
+          - push
+        active: true
+        insecureSsl: false
+  - field: webhooks
+    value: []
+  - field: repositoryRules
+    value:
+      - name: pgh-e2e-ruleset
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          deletion: true
+    expect:
+      - name: pgh-e2e-ruleset
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          creation: false
+          update: false
+          deletion: true
+          requiredLinearHistory: false
+          requiredSignatures: false
+          nonFastForward: false
+    ignoreListElementKeys:
+      - bypassActors
+  - field: archived
+    value: true
+  - field: permissions.users
+    skip:
+      reason: fixture-missing
+      evidence: "the test organization has no collaborator login set aside for the suite, and adding a person to a repository notifies them"
+  - field: branchProtectionRules
+    skip:
+      reason: covered-elsewhere
+      by: ../repository-branches/repository-branches-namespaced.yaml#branchProtectionRules
+  - field: defaultBranch
+    skip:
+      reason: covered-elsewhere
+      by: ../repository-branches/repository-branches-namespaced.yaml#defaultBranch
+  - field: createFromTemplate
+    skip:
+      reason: fixture-missing
+      evidence: "create-time only: the repository is created empty, and a template cannot be applied to an existing repository"
+  - field: createFork
+    skip:
+      reason: fixture-missing
+      evidence: "create-time only: the repository is created empty, and an existing repository cannot be turned into a fork"
+  - field: forceDelete
+    skip:
+      reason: write-only
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"

@@ -23,20 +23,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/google/go-cmp/cmp"
-
 	pointer "k8s.io/utils/ptr"
 
-	"github.com/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,21 +41,17 @@ import (
 	"github.com/google/go-github/v90/github"
 	"github.com/gosimple/slug"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
-	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	namespacedv1alpha1 "github.com/provider-github/provider-github/apis/namespaced/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/driftcmp"
+	"github.com/provider-github/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/internal/util"
 )
 
 const (
@@ -69,52 +61,6 @@ const (
 
 	errNewClient = "cannot create new Service"
 )
-
-// Setup adds a controller that reconciles Repository managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
-}
-
-// SetupWithTimeout adds a controller that reconciles Repository managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.RepositoryGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-		managed.WithFinalizer(&forgettingFinalizer{
-			inner:   resource.NewAPIFinalizer(mgr.GetClient(), managed.FinalizerName),
-			metrics: metrics,
-		}),
-	}
-
-	// Add timeout if specified
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.RepositoryGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.Repository{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
 
 // forgettingFinalizer deletes a repository's gauge series once its finalizer is removed, since the Orphan policy never calls Delete.
 type forgettingFinalizer struct {
@@ -131,52 +77,28 @@ func (f *forgettingFinalizer) RemoveFinalizer(ctx context.Context, obj resource.
 		return err
 	}
 
-	cr, ok := obj.(*v1alpha1.Repository)
-	if !ok || f.metrics == nil {
+	if f.metrics == nil {
 		return nil
 	}
 
-	f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	switch cr := obj.(type) {
+	case *v1alpha1.Repository:
+		f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	case *namespacedv1alpha1.Repository:
+		f.metrics.ForgetRepository(cr.Spec.ForProvider.Org, meta.GetExternalName(cr))
+	}
 	return nil
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.Repository)
-	if !ok {
-		return nil, errors.New(errNotRepository)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{
-		github:  gh,
-		kube:    c.kube,
-		metrics: c.metrics,
-	}, nil
 }
 
 type external struct {
 	kube    client.Client
 	github  *ghclient.Client
 	metrics *telemetry.RateLimitMetrics
+
+	// secretNamespace, when set, is the only namespace webhook secrets are read
+	// from, whatever namespace the spec names. Namespaced resources set it to
+	// their own namespace.
+	secretNamespace string
 }
 
 //nolint:gocyclo
@@ -199,21 +121,21 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, err
 	}
 
-	notUpToDate := managed.ExternalObservation{
-		ResourceExists:   true,
-		ResourceUpToDate: false,
-	}
+	cr.Status.AtProvider.ID = name
+	mirrorRepository(&cr.Status.AtProvider, repo, cr.Spec.ForProvider.Org)
 
 	// Archived repos freeze settings, branch protection, rulesets and webhooks on
 	// GitHub; only team access, topics and collaborator removals stay writable. They
 	// reconcile on a separate path so frozen drift can't loop, and the freeze is
 	// surfaced on the CR rather than ignored silently.
-	archivedCr := pointer.Deref(cr.Spec.ForProvider.Archived, false)
-	if archivedCr != pointer.Deref(repo.Archived, false) {
-		return notUpToDate, nil
-	}
-	if archivedCr {
-		return c.observeArchived(ctx, cr, repo, name)
+	//
+	// Observe reads and mirrors every section before it reports a difference, so
+	// status.atProvider shows what GitHub holds for the sections after the first
+	// one that differs; drift records only that a section differed. The read path
+	// follows GitHub's archived state, not the spec's.
+	drift := pointer.Deref(cr.Spec.ForProvider.Archived, false) != pointer.Deref(repo.Archived, false)
+	if pointer.Deref(repo.Archived, false) {
+		return c.observeArchived(ctx, cr, repo, name, drift)
 	}
 	setArchivedCondition(cr, false, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
@@ -224,19 +146,17 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 	setCollaboratorPartialCondition(cr, collaborators.pendingInvite, collaborators.roleEnforced)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
-	if collaborators.hasDrift() {
-		return notUpToDate, nil
-	}
+	cr.Status.AtProvider.Permissions.Users = mirrorUsers(collaborators.observed)
+	drift = drift || collaborators.hasDrift()
 
 	crTToPermission := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTToPermission, err := getRepoTeamsWithPermissions(ctx, c.github, cr.Spec.ForProvider.Org, name)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTToPermission)
 
-	if !reflect.DeepEqual(util.SortByKey(ghTToPermission), util.SortByKey(crTToPermission)) {
-		return notUpToDate, nil
-	}
+	drift = drift || !driftcmp.Equal(ghTToPermission, crTToPermission)
 
 	if cr.Spec.ForProvider.Webhooks != nil {
 		ghRepoWebhooks, err := getRepoWebhooks(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -253,10 +173,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-
-		if !reflect.DeepEqual(ghWToConfig, crWToConfig) {
-			return notUpToDate, nil
+		if cr.Status.AtProvider.Webhooks, err = mirrorWebhooks(ghWToConfig); err != nil {
+			return managed.ExternalObservation{}, err
 		}
+
+		drift = drift || !driftcmp.Equal(ghWToConfig, crWToConfig)
+	} else {
+		cr.Status.AtProvider.Webhooks = nil
 	}
 
 	if cr.Spec.ForProvider.BranchProtectionRules != nil {
@@ -275,6 +198,9 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}
 		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, protectedBranches)
 		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		if cr.Status.AtProvider.BranchProtectionRules, err = mirrorBranchProtection(ghBPRToConfig); err != nil {
 			return managed.ExternalObservation{}, err
 		}
 
@@ -300,11 +226,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		dropped := slices.Concat(enforced, remembered)
 		crBPRWithoutDropped := withoutBranchProtectionActors(crBPRToConfig, dropped)
 		applyRememberedForcePushes(crBPRWithoutDropped, ghBPRToConfig, records)
-		if !cmp.Equal(crBPRWithoutDropped, ghBPRToConfig) {
-			return notUpToDate, nil
-		}
+		drift = drift || !driftcmp.Equal(crBPRWithoutDropped, ghBPRToConfig)
 	} else {
 		cr.Status.AtProvider.UnappliedBranchProtection = nil
+		cr.Status.AtProvider.BranchProtectionRules = nil
 		setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 		c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
 	}
@@ -317,10 +242,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-
-		if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-			return notUpToDate, nil
+		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
+			return managed.ExternalObservation{}, err
 		}
+
+		drift = drift || !driftcmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig)
+	} else {
+		cr.Status.AtProvider.RepositoryRules = nil
 	}
 
 	remembered := rememberedSettings(cr.Status.AtProvider.UnappliedSettings)
@@ -334,7 +262,8 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			continue
 		}
 		if setting.requested != setting.echoed {
-			return notUpToDate, nil
+			drift = true
+			break
 		}
 	}
 
@@ -343,12 +272,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		crTopics := util.SortAndReturn(cr.Spec.ForProvider.Topics)
 		ghTopics := util.SortAndReturn(repo.Topics)
 
-		if !reflect.DeepEqual(crTopics, ghTopics) {
-			return notUpToDate, nil
-		}
+		drift = drift || !driftcmp.Equal(crTopics, ghTopics)
 	}
 
-	cr.SetConditions(xpv1.Available())
+	if drift {
+		return drifted(cr), nil
+	}
+
+	cr.SetConditions(xpv2.Available())
 
 	return managed.ExternalObservation{
 		ResourceExists:   true,
@@ -356,14 +287,22 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}, nil
 }
 
+// drifted reports an existing Repository that differs from its spec. Ready is
+// False until a later poll finds it in sync; the update that corrects the drift
+// runs in the meantime.
+func drifted(cr *v1alpha1.Repository) managed.ExternalObservation {
+	cr.SetConditions(xpv2.Unavailable())
+	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}
+}
+
 // Condition surfaced when a repo is archived. GitHub makes archived repos
 // read-only for settings, branch protection, rulesets, webhooks and collaborator
 // additions, so the controller cannot reconcile those; the condition states this
 // rather than letting the skipped reconciliation go unnoticed on the CR.
 const (
-	typeArchivedConfigFrozen xpv1.ConditionType   = "ArchivedConfigFrozen"
-	reasonRepositoryArchived xpv1.ConditionReason = "RepositoryArchived"
-	reasonNotArchived        xpv1.ConditionReason = "NotArchived"
+	typeArchivedConfigFrozen xpv2.ConditionType   = "ArchivedConfigFrozen"
+	reasonRepositoryArchived xpv2.ConditionReason = "RepositoryArchived"
+	reasonNotArchived        xpv2.ConditionReason = "NotArchived"
 )
 
 // setArchivedCondition reports the frozen dimensions while archived, listing any
@@ -372,7 +311,7 @@ const (
 func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []string) {
 	if !archived {
 		if cr.GetCondition(typeArchivedConfigFrozen).Status == corev1.ConditionTrue {
-			cr.SetConditions(xpv1.Condition{
+			cr.SetConditions(xpv2.Condition{
 				Type:               typeArchivedConfigFrozen,
 				Status:             corev1.ConditionFalse,
 				Reason:             reasonNotArchived,
@@ -386,7 +325,7 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 		sort.Strings(skippedAdds)
 		msg += "; collaborators cannot be added while archived: " + strings.Join(skippedAdds, ", ")
 	}
-	cr.SetConditions(xpv1.Condition{
+	cr.SetConditions(xpv2.Condition{
 		Type:               typeArchivedConfigFrozen,
 		Status:             corev1.ConditionTrue,
 		Reason:             reasonRepositoryArchived,
@@ -396,7 +335,7 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 }
 
 // recordUnreconcilable publishes the dimension's gauge from its condition's current status.
-func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv1.ConditionType) {
+func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension string, conditionType xpv2.ConditionType) {
 	if c.metrics == nil {
 		return
 	}
@@ -404,11 +343,69 @@ func (c *external) recordUnreconcilable(cr *v1alpha1.Repository, dimension strin
 	c.metrics.SetRepositoryUnreconcilable(cr.Spec.ForProvider.Org, meta.GetExternalName(cr), dimension, unreconcilable)
 }
 
+// mirrorFrozenSections reads webhooks, branch protection and rulesets, which
+// GitHub refuses to write while the repository is archived but still returns, and
+// mirrors them into status.atProvider. Each section is read only while the spec
+// declares it, as when the repository is not archived, and cleared otherwise.
+// None of them takes part in drift: they cannot be reconciled while archived.
+func (c *external) mirrorFrozenSections(ctx context.Context, cr *v1alpha1.Repository, name string) error {
+	org := cr.Spec.ForProvider.Org
+
+	cr.Status.AtProvider.Webhooks = nil
+	if cr.Spec.ForProvider.Webhooks != nil {
+		hooks, err := getRepoWebhooks(ctx, c.github, org, name)
+		if err != nil {
+			return err
+		}
+		ghWToConfig, err := c.getRepoWebhooksWithConfig(ctx, hooks, cr)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.Webhooks, err = mirrorWebhooks(ghWToConfig); err != nil {
+			return err
+		}
+	}
+
+	cr.Status.AtProvider.BranchProtectionRules = nil
+	if cr.Spec.ForProvider.BranchProtectionRules != nil {
+		protectedBranches, err := listProtectedBranches(ctx, c.github, org, name)
+		if err != nil {
+			return err
+		}
+		ghBPRToConfig, err := getBPRWithConfig(ctx, c.github, org, name, protectedBranches)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.BranchProtectionRules, err = mirrorBranchProtection(ghBPRToConfig); err != nil {
+			return err
+		}
+	}
+
+	cr.Status.AtProvider.RepositoryRules = nil
+	if cr.Spec.ForProvider.RepositoryRules != nil {
+		// As when not archived, a failed list reads as no rulesets: an organization
+		// whose plan has no rulesets answers the list with an error.
+		ghRulesets, _ := getRepositoryRules(ctx, c.github, org, name)
+		// No ruleset is named here, so rule types this provider does not manage are
+		// mirrored rather than rejected: only a write needs them rejected.
+		ghRepositoryRulesToConfig, err := getRepositoryRulesWithConfig(ctx, c.github, org, name, ghRulesets, nil)
+		if err != nil {
+			return err
+		}
+		if cr.Status.AtProvider.RepositoryRules, err = mirrorRulesets(ghRepositoryRulesToConfig); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // observeArchived reports drift for an archived repo. Only team access, topics and
 // collaborator removals are reconcilable while archived; settings, branch protection,
 // rulesets, webhooks and collaborator additions are frozen and surfaced via a
-// condition. The frozen dimensions aren't even read here.
-func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string) (managed.ExternalObservation, error) {
+// condition. The frozen sections are read and mirrored, but never compared. drift
+// is true when an earlier check, the spec's archived flag against GitHub's, already
+// differed.
+func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository, repo *github.Repository, name string, drift bool) (managed.ExternalObservation, error) {
 	org := cr.Spec.ForProvider.Org
 
 	crUsers := getUserPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Users)
@@ -416,6 +413,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Permissions.Users = mirrorUsers(ghUsers)
 	removable, toAdd, toUpdate := util.DiffPermissions(ghUsers, crUsers)
 	skippedAdds := make([]string, 0, len(toAdd)+len(toUpdate))
 	for u := range util.MergeMaps(toAdd, toUpdate) {
@@ -425,33 +423,40 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	// Neither is reconciled while archived; skipped adds are named in the archived condition.
 	setCollaboratorPartialCondition(cr, nil, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionCollaborators, typeCollaboratorPartial)
+	// The unapplied records hold writes that were attempted and not applied, not
+	// what GitHub has. Nothing is written while archived, so both stay empty.
 	cr.Status.AtProvider.UnappliedBranchProtection = nil
+	cr.Status.AtProvider.UnappliedSettings = nil
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{})
 	c.recordUnreconcilable(cr, telemetry.DimensionBranchProtection, typeBranchProtectionPartial)
-	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
 
 	setArchivedCondition(cr, true, skippedAdds)
 	c.recordUnreconcilable(cr, telemetry.DimensionArchived, typeArchivedConfigFrozen)
 
+	if err := c.mirrorFrozenSections(ctx, cr, name); err != nil {
+		return managed.ExternalObservation{}, err
+	}
+
 	crTeams := getTeamPermissionMapFromCr(cr.Spec.ForProvider.Permissions.Teams)
 	ghTeams, err := getRepoTeamsWithPermissions(ctx, c.github, org, name)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	teamsDrift := !reflect.DeepEqual(util.SortByKey(ghTeams), util.SortByKey(crTeams))
+	cr.Status.AtProvider.Permissions.Teams = mirrorTeams(ghTeams)
+	teamsDrift := !driftcmp.Equal(ghTeams, crTeams)
 
 	topicsDrift := false
 	if cr.Spec.ForProvider.Topics != nil {
-		topicsDrift = !reflect.DeepEqual(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
+		topicsDrift = !driftcmp.Equal(util.SortAndReturn(cr.Spec.ForProvider.Topics), util.SortAndReturn(repo.Topics))
 	}
 
-	if len(removable) > 0 || teamsDrift || topicsDrift {
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+	if drift || len(removable) > 0 || teamsDrift || topicsDrift {
+		return drifted(cr), nil
 	}
 
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
@@ -482,7 +487,7 @@ func (c *external) getRepoWebhooksMapFromCr(ctx context.Context, webhooks []v1al
 	for i := range webhooks {
 		webhook := webhooks[i]
 		// handle optional *bool fields
-		insecureSsl := util.BoolDerefToPointer(webhook.InsecureSsl, false)
+		insecureSsl := util.BoolDerefToPointer(webhook.InsecureSSL, false)
 		active := util.BoolDerefToPointer(webhook.Active, true)
 
 		secret, err := c.getRepoWebhookSecretFromRef(ctx, &webhook)
@@ -493,9 +498,9 @@ func (c *external) getRepoWebhooksMapFromCr(ctx context.Context, webhooks []v1al
 		// sort events to aid comparison between desired and actual state
 		sort.Strings(webhook.Events)
 
-		crWToConfig[webhook.Url] = v1alpha1.RepositoryWebhook{
-			Url:         webhook.Url,
-			InsecureSsl: insecureSsl,
+		crWToConfig[webhook.URL] = v1alpha1.RepositoryWebhook{
+			URL:         webhook.URL,
+			InsecureSSL: insecureSsl,
 			ContentType: webhook.ContentType,
 			Events:      webhook.Events,
 			Active:      active,
@@ -513,6 +518,9 @@ func (c *external) getRepoWebhookSecretFromRef(ctx context.Context, webhook *v1a
 	secretKey := webhook.SecretKeyRef.Key
 	secretName := webhook.SecretKeyRef.Name
 	secretNamespace := webhook.SecretKeyRef.Namespace
+	if c.secretNamespace != "" {
+		secretNamespace = c.secretNamespace
+	}
 
 	nn := types.NamespacedName{
 		Name:      secretName,
@@ -679,8 +687,8 @@ func (c *external) getRepoWebhooksWithConfig(ctx context.Context, hooks []*githu
 			secret = &secretValue
 		}
 		wToConfig[url] = v1alpha1.RepositoryWebhook{
-			Url:         url,
-			InsecureSsl: &insecureSslBool,
+			URL:         url,
+			InsecureSSL: &insecureSslBool,
 			ContentType: contentType,
 			Events:      h.Events,
 			Active:      h.Active,
@@ -700,7 +708,7 @@ func getRepoWebhookId(hooks []*github.Hook, webhookUrl string) (*int64, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("cannot find repository webhook id for %s", webhookUrl)
+	return nil, errors.Errorf("cannot find repository webhook id for %s", webhookUrl)
 }
 
 func getRepoTeamsWithPermissions(ctx context.Context, gh *ghclient.Client, org, name string) (map[string]string, error) {
@@ -747,15 +755,15 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 			perms := m.GetPermissions()
 			switch {
 			case perms.GetAdmin():
-				uToPermission[username] = "admin"
+				uToPermission[username] = repoPermissionAdmin
 			case perms.GetMaintain():
-				uToPermission[username] = "maintain"
+				uToPermission[username] = repoPermissionMaintain
 			case perms.GetPush():
-				uToPermission[username] = "push"
+				uToPermission[username] = repoPermissionPush
 			case perms.GetTriage():
-				uToPermission[username] = "triage"
+				uToPermission[username] = repoPermissionTriage
 			default:
-				uToPermission[username] = "pull"
+				uToPermission[username] = repoPermissionPull
 			}
 		}
 
@@ -772,7 +780,9 @@ func getRepoUsersWithPermissions(ctx context.Context, gh *ghclient.Client, org, 
 // iterating pages. The Protected=true filter on GitHub keeps the
 // page count tiny (typically 1 page) regardless of how many feature
 // branches the repo has, so per-Observe pagination cost stays
-// constant even on monorepos with thousands of branches.
+// constant even on monorepos with thousands of branches. The filter also
+// matches branches protected only by a ruleset, so a listed branch may have
+// no classic protection (see getBPRWithConfig).
 func listProtectedBranches(ctx context.Context, gh *ghclient.Client, org, repoName string) ([]*github.Branch, error) {
 	opts := &github.BranchListOptions{
 		Protected:   github.Ptr(true),
@@ -849,9 +859,9 @@ func protectedBranchSet(branches []*github.Branch) map[string]bool {
 
 // One condition for every declared branch protection item GitHub did not apply.
 const (
-	typeBranchProtectionPartial xpv1.ConditionType   = "BranchProtectionPartial"
-	reasonNotFullyApplied       xpv1.ConditionReason = "NotFullyApplied"
-	reasonFullyApplied          xpv1.ConditionReason = "FullyApplied"
+	typeBranchProtectionPartial xpv2.ConditionType   = "BranchProtectionPartial"
+	reasonNotFullyApplied       xpv2.ConditionReason = "NotFullyApplied"
+	reasonFullyApplied          xpv2.ConditionReason = "FullyApplied"
 )
 
 // branchProtectionReport lists the declared branch protection GitHub did not apply.
@@ -894,7 +904,7 @@ func setBranchProtectionPartialCondition(cr *v1alpha1.Repository, report branchP
 		segments = append(segments, "force pushes stay enabled because a per-actor force-push allowance is set in the GitHub UI, which the REST API cannot change: "+strings.Join(report.forcePushKept, ", "))
 	}
 
-	c := xpv1.Condition{
+	c := xpv2.Condition{
 		Type:               typeBranchProtectionPartial,
 		LastTransitionTime: metav1.Now(),
 	}
@@ -1033,7 +1043,15 @@ func enforcedBranchProtectionActors(ctx context.Context, gh *ghclient.Client, ow
 	return enforced, nil
 }
 
-const repoPermissionAdmin = "admin"
+// Repository permission levels reported by the GitHub API.
+const (
+	repoPermissionAdmin    = "admin"
+	repoPermissionMaintain = "maintain"
+	repoPermissionWrite    = "write"
+	repoPermissionPush     = "push"
+	repoPermissionTriage   = "triage"
+	repoPermissionPull     = "pull"
+)
 
 // 404 (not a collaborator) counts as no access.
 func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, user string) (bool, error) {
@@ -1045,7 +1063,7 @@ func userHasWriteAccess(ctx context.Context, gh *ghclient.Client, owner, repo, u
 		return false, err
 	}
 	permission := level.GetPermission()
-	return permission == repoPermissionAdmin || permission == "write", nil
+	return permission == repoPermissionAdmin || permission == repoPermissionWrite, nil
 }
 
 // Probed because a team inheriting access from its parent is absent from the repo team list.
@@ -1136,10 +1154,91 @@ func removeActorsPtr(actors *[]string, branch, field string, dropSet map[branchP
 const itemAllowForcePushes = "allowForcePushes"
 
 // ruleHash fingerprints a declared rule so a record only applies to the rule it was observed against.
+// The fingerprint is taken over hashedRule rather than the rule itself, so that it stays what it was
+// when a record written by an earlier release was hashed.
 func ruleHash(rule v1alpha1.BranchProtectionRule) string {
-	encoded, _ := json.Marshal(rule) // a plain struct always encodes
+	encoded, _ := json.Marshal(newHashedRule(rule)) // a plain struct always encodes
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:8])
+}
+
+// hashedRule is the encoding of a BranchProtectionRule that ruleHash fingerprints: the rule as it
+// was encoded before its actor lists were encoded as null when unset. Do not add fields or change
+// tags, or every stored fingerprint stops matching.
+type hashedRule struct {
+	Branch                         string                         `json:"branch"`
+	RequiredStatusChecks           *v1alpha1.RequiredStatusChecks `json:"requiredStatusChecks,omitempty"`
+	RequiredPullRequestReviews     *hashedReviews                 `json:"requiredPullRequestReviews,omitempty"`
+	BranchProtectionRestrictions   *hashedRestrictions            `json:"branchProtectionRestrictions,omitempty"`
+	EnforceAdmins                  bool                           `json:"enforceAdmins"`
+	RequireLinearHistory           *bool                          `json:"requireLinearHistory,omitempty"`
+	AllowForcePushes               *bool                          `json:"allowForcePushes,omitempty"`
+	AllowDeletions                 *bool                          `json:"allowDeletions,omitempty"`
+	RequiredConversationResolution *bool                          `json:"requiredConversationResolution,omitempty"`
+	LockBranch                     *bool                          `json:"lockBranch,omitempty"`
+	AllowForkSyncing               *bool                          `json:"allowForkSyncing,omitempty"`
+	RequireSignedCommits           *bool                          `json:"requireSignedCommits,omitempty"`
+}
+
+type hashedReviews struct {
+	DismissStaleReviews          bool             `json:"dismissStaleReviews"`
+	RequireCodeOwnerReviews      bool             `json:"requireCodeOwnerReviews"`
+	RequiredApprovingReviewCount int              `json:"requiredApprovingReviewCount"`
+	RequireLastPushApproval      *bool            `json:"requireLastPushApproval,omitempty"`
+	BypassPullRequestAllowances  *hashedActors    `json:"bypassPullRequestAllowances,omitempty"`
+	DismissalRestrictions        *hashedDismissal `json:"dismissalRestrictions,omitempty"`
+}
+
+type hashedActors struct {
+	Users []string `json:"users,omitempty"`
+	Teams []string `json:"teams,omitempty"`
+	Apps  []string `json:"apps,omitempty"`
+}
+
+type hashedDismissal struct {
+	Users *[]string `json:"users,omitempty"`
+	Teams *[]string `json:"teams,omitempty"`
+	Apps  *[]string `json:"apps,omitempty"`
+}
+
+type hashedRestrictions struct {
+	BlockCreations *bool    `json:"blockCreations,omitempty"`
+	Users          []string `json:"users,omitempty"`
+	Teams          []string `json:"teams,omitempty"`
+	Apps           []string `json:"apps,omitempty"`
+}
+
+func newHashedRule(r v1alpha1.BranchProtectionRule) hashedRule {
+	h := hashedRule{
+		Branch:                         r.Branch,
+		RequiredStatusChecks:           r.RequiredStatusChecks,
+		EnforceAdmins:                  r.EnforceAdmins,
+		RequireLinearHistory:           r.RequireLinearHistory,
+		AllowForcePushes:               r.AllowForcePushes,
+		AllowDeletions:                 r.AllowDeletions,
+		RequiredConversationResolution: r.RequiredConversationResolution,
+		LockBranch:                     r.LockBranch,
+		AllowForkSyncing:               r.AllowForkSyncing,
+		RequireSignedCommits:           r.RequireSignedCommits,
+	}
+	if rr := r.BranchProtectionRestrictions; rr != nil {
+		h.BranchProtectionRestrictions = &hashedRestrictions{BlockCreations: rr.BlockCreations, Users: rr.Users, Teams: rr.Teams, Apps: rr.Apps}
+	}
+	if pr := r.RequiredPullRequestReviews; pr != nil {
+		h.RequiredPullRequestReviews = &hashedReviews{
+			DismissStaleReviews:          pr.DismissStaleReviews,
+			RequireCodeOwnerReviews:      pr.RequireCodeOwnerReviews,
+			RequiredApprovingReviewCount: pr.RequiredApprovingReviewCount,
+			RequireLastPushApproval:      pr.RequireLastPushApproval,
+		}
+		if b := pr.BypassPullRequestAllowances; b != nil {
+			h.RequiredPullRequestReviews.BypassPullRequestAllowances = &hashedActors{Users: b.Users, Teams: b.Teams, Apps: b.Apps}
+		}
+		if d := pr.DismissalRestrictions; d != nil {
+			h.RequiredPullRequestReviews.DismissalRestrictions = &hashedDismissal{Users: d.Users, Teams: d.Teams, Apps: d.Apps}
+		}
+	}
+	return h
 }
 
 func isAppField(field string) bool {
@@ -1324,12 +1423,18 @@ func getBPRMapFromCr(rules []v1alpha1.BranchProtectionRule) map[string]v1alpha1.
 // getBPRWithConfig creates a map of BranchProtectionRules for a GitHub repository based on its branches' current protection settings.
 // It fetches each branch's protection settings from GitHub and maps them to BranchProtectionRule objects.
 // Any lists of users, teams, or apps in the rules are sorted.
-// It returns the BranchProtectionRules map, and any error encountered during the process.
+// GitHub's protected-branch listing also returns branches guarded only by a ruleset; the classic
+// endpoint answers those with "Branch not protected". Such a branch has no classic rule, so it is
+// left out of the map (like an unprotected branch) rather than failing the whole read. Any other
+// error is returned.
 func getBPRWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, branches []*github.Branch) (map[string]v1alpha1.BranchProtectionRule, error) {
 	bprToConfig := make(map[string]v1alpha1.BranchProtectionRule, len(branches))
 
 	for _, branch := range branches {
 		protection, _, err := gh.Repositories.GetBranchProtection(ctx, owner, repo, branch.GetName())
+		if errors.Is(err, github.ErrBranchNotProtected) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1349,9 +1454,9 @@ func protectionToRule(branch string, protection *github.Protection) v1alpha1.Bra
 		AllowForcePushes:               &protection.GetAllowForcePushes().Enabled,
 		AllowDeletions:                 &protection.GetAllowDeletions().Enabled,
 		RequiredConversationResolution: &protection.GetRequiredConversationResolution().Enabled,
-		LockBranch:                     util.ToBoolPtr(protection.GetLockBranch().GetEnabled()),
-		AllowForkSyncing:               util.ToBoolPtr(protection.GetAllowForkSyncing().GetEnabled()),
-		RequireSignedCommits:           util.ToBoolPtr(protection.GetRequiredSignatures().GetEnabled()),
+		LockBranch:                     pointer.To(protection.GetLockBranch().GetEnabled()),
+		AllowForkSyncing:               pointer.To(protection.GetAllowForkSyncing().GetEnabled()),
+		RequireSignedCommits:           pointer.To(protection.GetRequiredSignatures().GetEnabled()),
 	}
 
 	rChecks := protection.GetRequiredStatusChecks()
@@ -1437,7 +1542,7 @@ func protectionToRule(branch string, protection *github.Protection) v1alpha1.Bra
 	restr := protection.GetRestrictions()
 	if restr != nil {
 		bpr.BranchProtectionRestrictions = &v1alpha1.BranchProtectionRestrictions{}
-		bpr.BranchProtectionRestrictions.BlockCreations = util.ToBoolPtr(protection.GetBlockCreations().GetEnabled())
+		bpr.BranchProtectionRestrictions.BlockCreations = pointer.To(protection.GetBlockCreations().GetEnabled())
 		if len(restr.Users) > 0 {
 			users := make([]string, len(restr.Users))
 			for i, user := range restr.Users {
@@ -1537,7 +1642,7 @@ const (
 )
 
 // Condition surfaced when GitHub answers a settings push with 200 but keeps other values (plan or repository type).
-const typeSettingsPartial xpv1.ConditionType = "SettingsPartial"
+const typeSettingsPartial xpv2.ConditionType = "SettingsPartial"
 
 // editRequest builds the settings Edit Update sends; Observe compares the same request against GitHub.
 func editRequest(cr *v1alpha1.Repository, repo *github.Repository, name string) *github.Repository {
@@ -1657,7 +1762,7 @@ func currentUnappliedSettings(remembered map[string]string, settings []pushedSet
 
 // Idempotent: SetConditions ignores writes whose (Status, Reason, Message) are unchanged.
 func setSettingsPartialCondition(cr *v1alpha1.Repository, records []v1alpha1.UnappliedSetting) {
-	c := xpv1.Condition{Type: typeSettingsPartial, LastTransitionTime: metav1.Now()}
+	c := xpv2.Condition{Type: typeSettingsPartial, LastTransitionTime: metav1.Now()}
 	if len(records) == 0 {
 		c.Status = corev1.ConditionFalse
 		c.Reason = reasonFullyApplied
@@ -1756,7 +1861,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 				return managed.ExternalCreation{}, err
 			}
 			if hookConfig.Config.Secret != nil {
-				err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
+				err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.URL), webhookSecretState{
 					WebhookUrl:    *hookConfig.Config.URL,
 					WebhookSecret: *hookConfig.Config.Secret,
 				})
@@ -1809,7 +1914,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 	}
 
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 
 	return managed.ExternalCreation{}, nil
 }
@@ -1819,10 +1924,10 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 // (unaccepted) repository invitation. Kept quiet like BranchProtectionPartial:
 // SetConditions only writes when (Status, Reason, Message) actually change.
 const (
-	typeCollaboratorPartial       xpv1.ConditionType   = "CollaboratorPartial"
-	reasonPendingInvitation       xpv1.ConditionReason = "PendingInvitation"
-	reasonRoleEnforcedByOrg       xpv1.ConditionReason = "RoleEnforcedByOrg"
-	reasonAllCollaboratorsPresent xpv1.ConditionReason = "AllCollaboratorsPresent"
+	typeCollaboratorPartial       xpv2.ConditionType   = "CollaboratorPartial"
+	reasonPendingInvitation       xpv2.ConditionReason = "PendingInvitation"
+	reasonRoleEnforcedByOrg       xpv2.ConditionReason = "RoleEnforcedByOrg"
+	reasonAllCollaboratorsPresent xpv2.ConditionReason = "AllCollaboratorsPresent"
 )
 
 // setCollaboratorPartialCondition reports declared collaborators the controller can't
@@ -1830,7 +1935,7 @@ const (
 // whose declared role GitHub overrides with admin. Keeps the skips visible on the CR
 // instead of looping silently.
 func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite, roleEnforced []string) {
-	c := xpv1.Condition{Type: typeCollaboratorPartial, LastTransitionTime: metav1.Now()}
+	c := xpv2.Condition{Type: typeCollaboratorPartial, LastTransitionTime: metav1.Now()}
 	if len(pendingInvite) == 0 && len(roleEnforced) == 0 {
 		c.Status = corev1.ConditionFalse
 		c.Reason = reasonAllCollaboratorsPresent
@@ -1858,6 +1963,7 @@ func setCollaboratorPartialCondition(cr *v1alpha1.Repository, pendingInvite, rol
 
 // collaboratorCategorization buckets the union of declared and actual direct collaborators.
 type collaboratorCategorization struct {
+	observed      map[string]string // direct collaborators GitHub lists, with their roles
 	toRemove      map[string]string // direct collaborators absent from the CR
 	toUpsert      map[string]string // declared collaborators to add or change role
 	pendingInvite []string          // declared collaborators with an unaccepted invitation
@@ -1880,6 +1986,7 @@ func categorizeCollaborators(ctx context.Context, gh *ghclient.Client, org, repo
 	}
 
 	cc := &collaboratorCategorization{
+		observed: ghM,
 		toRemove: make(map[string]string),
 		toUpsert: make(map[string]string),
 	}
@@ -2052,14 +2159,14 @@ func updateRepoTeams(ctx context.Context, cr *v1alpha1.Repository, gh *ghclient.
 // crRepoHookToHookConfig converts a RepositoryWebhook object to a *github.Hook object and returns it.
 func crRepoHookToHookConfig(hook v1alpha1.RepositoryWebhook) *github.Hook {
 	insecureSsl := "0"
-	if hook.InsecureSsl != nil && *hook.InsecureSsl {
+	if hook.InsecureSSL != nil && *hook.InsecureSSL {
 		insecureSsl = "1"
 	}
 	return &github.Hook{
 		Config: &github.HookConfig{
 			ContentType: &hook.ContentType,
 			InsecureSSL: &insecureSsl,
-			URL:         &hook.Url,
+			URL:         &hook.URL,
 			Secret:      hook.Secret,
 		},
 		Events: hook.Events,
@@ -2085,7 +2192,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 	toDelete, toAdd, toUpdate := util.DiffRepoWebhooks(ghWToConfig, crWToConfig)
 
 	for _, hook := range toDelete {
-		id, err := getRepoWebhookId(ghRepoWebhooks, hook.Url)
+		id, err := getRepoWebhookId(ghRepoWebhooks, hook.URL)
 		if err != nil {
 			return err
 		}
@@ -2094,7 +2201,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 			return err
 		}
 		if hook.Secret != nil {
-			err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url))
+			err = c.deleteConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.URL))
 			if err != nil {
 				return err
 			}
@@ -2108,7 +2215,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 			return err
 		}
 		if hookConfig.Config.Secret != nil {
-			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
+			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.URL), webhookSecretState{
 				WebhookUrl:    *hookConfig.Config.URL,
 				WebhookSecret: *hookConfig.Config.Secret,
 			})
@@ -2119,7 +2226,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 	}
 
 	for _, hook := range toUpdate {
-		id, err := getRepoWebhookId(ghRepoWebhooks, hook.Url)
+		id, err := getRepoWebhookId(ghRepoWebhooks, hook.URL)
 		if err != nil {
 			return err
 		}
@@ -2137,7 +2244,7 @@ func updateRepoWebhooks(c *external, ctx context.Context, cr *v1alpha1.Repositor
 
 		// Add updated connection secret entry, if needed
 		if hookConfig.Config.Secret != nil {
-			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.Url), webhookSecretState{
+			err = c.updateConnectionSecretEntry(ctx, cr, util.GenerateSHA1Hash(hook.URL), webhookSecretState{
 				WebhookUrl:    *hookConfig.Config.URL,
 				WebhookSecret: *hookConfig.Config.Secret,
 			})
@@ -2167,7 +2274,11 @@ func editProtectedBranch(ctx context.Context, rule *v1alpha1.BranchProtectionRul
 	}
 
 	if rule.RequiredStatusChecks != nil {
+		// checks stays nil when there are no checks so the request body is unchanged.
 		var checks []*github.RequiredStatusCheck
+		if n := len(rule.RequiredStatusChecks.Checks); n > 0 {
+			checks = make([]*github.RequiredStatusCheck, 0, n)
+		}
 		for _, check := range rule.RequiredStatusChecks.Checks {
 			// if nil, allow any app to set the status of a check
 			appId := pointer.Deref(check.AppID, -1)
@@ -2373,7 +2484,7 @@ func getRepositoryRulesMapFromCr(rules []v1alpha1.RepositoryRuleset) map[string]
 				actor := rBActors[a] // Make a copy of the actor
 
 				// Set ActorId, ActorType, and BypassMode fields
-				actor.ActorId = rBActors[a].ActorId
+				actor.ActorID = rBActors[a].ActorID
 				actor.ActorType = rBActors[a].ActorType
 				actor.BypassMode = rBActors[a].BypassMode
 
@@ -2434,11 +2545,11 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 		if _, inCR := crRulesets[rule.Name]; inCR {
 			if types := unmanagedRuleTypes(rRuleset.GetRules()); len(types) > 0 {
-				return nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+				return nil, errors.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
 			}
 		}
 		ruleset := v1alpha1.RepositoryRuleset{
-			Target:      util.ToStringPtr(string(pointer.Deref(rule.Target, ""))),
+			Target:      pointer.To(string(pointer.Deref(rule.Target, ""))),
 			Enforcement: (*string)(&rule.Enforcement),
 			Name:        rule.Name,
 
@@ -2450,13 +2561,13 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 			},
 			BypassActors: nil,
 			Rules: &v1alpha1.Rules{
-				Creation:              util.ToBoolPtr(false),
-				Update:                util.ToBoolPtr(false),
-				Deletion:              util.ToBoolPtr(false),
-				RequiredLinearHistory: util.ToBoolPtr(false),
+				Creation:              pointer.To(false),
+				Update:                pointer.To(false),
+				Deletion:              pointer.To(false),
+				RequiredLinearHistory: pointer.To(false),
 				RequiredDeployments:   nil,
-				RequiredSignatures:    util.ToBoolPtr(false),
-				NonFastForward:        util.ToBoolPtr(false),
+				RequiredSignatures:    pointer.To(false),
+				NonFastForward:        pointer.To(false),
 				PullRequest:           nil,
 				RequiredStatusChecks:  nil,
 			},
@@ -2477,7 +2588,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 				for i, actor := range rRuleset.BypassActors {
 					ruleset.BypassActors[i] = &v1alpha1.RulesetByPassActors{
 						ActorType:  (*string)(actor.ActorType),
-						ActorId:    actor.ActorID,
+						ActorID:    actor.ActorID,
 						BypassMode: (*string)(actor.BypassMode),
 					}
 				}
@@ -2488,30 +2599,30 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if rRuleset != nil && rRuleset.Rules != nil {
 			rules := rRuleset.Rules
 			if rules.Creation != nil {
-				ruleset.Rules.Creation = util.ToBoolPtr(true)
+				ruleset.Rules.Creation = pointer.To(true)
 			}
 			if rules.Deletion != nil {
-				ruleset.Rules.Deletion = util.ToBoolPtr(true)
+				ruleset.Rules.Deletion = pointer.To(true)
 			}
 			if rules.RequiredLinearHistory != nil {
-				ruleset.Rules.RequiredLinearHistory = util.ToBoolPtr(true)
+				ruleset.Rules.RequiredLinearHistory = pointer.To(true)
 			}
 			if rules.RequiredSignatures != nil {
-				ruleset.Rules.RequiredSignatures = util.ToBoolPtr(true)
+				ruleset.Rules.RequiredSignatures = pointer.To(true)
 			}
 			if rules.NonFastForward != nil {
-				ruleset.Rules.NonFastForward = util.ToBoolPtr(true)
+				ruleset.Rules.NonFastForward = pointer.To(true)
 			}
 			if rules.Update != nil {
-				ruleset.Rules.Update = util.ToBoolPtr(true)
+				ruleset.Rules.Update = pointer.To(true)
 			}
 			if params := rules.PullRequest; params != nil {
 				ruleset.Rules.PullRequest = &v1alpha1.RulesPullRequest{
-					RequireCodeOwnerReview:         util.ToBoolPtr(params.RequireCodeOwnerReview),
-					RequireLastPushApproval:        util.ToBoolPtr(params.RequireLastPushApproval),
-					RequiredReviewThreadResolution: util.ToBoolPtr(params.RequiredReviewThreadResolution),
-					RequiredApprovingReviewCount:   util.ToIntPtr(params.RequiredApprovingReviewCount),
-					DismissStaleReviewsOnPush:      util.ToBoolPtr(params.DismissStaleReviewsOnPush),
+					RequireCodeOwnerReview:         pointer.To(params.RequireCodeOwnerReview),
+					RequireLastPushApproval:        pointer.To(params.RequireLastPushApproval),
+					RequiredReviewThreadResolution: pointer.To(params.RequiredReviewThreadResolution),
+					RequiredApprovingReviewCount:   pointer.To(params.RequiredApprovingReviewCount),
+					DismissStaleReviewsOnPush:      pointer.To(params.DismissStaleReviewsOnPush),
 				}
 			}
 			if params := rules.RequiredDeployments; params != nil {
@@ -2524,13 +2635,13 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 				for i, statusCheck := range params.RequiredStatusChecks {
 					requiredStatusChecksParameters[i] = &v1alpha1.RulesRequiredStatusChecksParameters{
 						Context:       statusCheck.Context,
-						IntegrationId: statusCheck.IntegrationID,
+						IntegrationID: statusCheck.IntegrationID,
 					}
 				}
 				util.SortRulesRequiredStatusChecks(requiredStatusChecksParameters)
 
 				ruleset.Rules.RequiredStatusChecks = &v1alpha1.RulesRequiredStatusChecks{
-					StrictRequiredStatusChecksPolicy: util.ToBoolPtr(params.StrictRequiredStatusChecksPolicy),
+					StrictRequiredStatusChecksPolicy: pointer.To(params.StrictRequiredStatusChecksPolicy),
 					RequiredStatusChecks:             requiredStatusChecksParameters,
 				}
 			}
@@ -2591,7 +2702,7 @@ func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Repositor
 		githubBypassActors := make([]*github.BypassActor, len(rule.BypassActors))
 		for i, actor := range rule.BypassActors {
 			githubBypassActors[i] = &github.BypassActor{
-				ActorID:    actor.ActorId,
+				ActorID:    actor.ActorID,
 				ActorType:  (*github.BypassActorType)(actor.ActorType),
 				BypassMode: (*github.BypassMode)(actor.BypassMode),
 			}
@@ -2620,7 +2731,7 @@ func crRepoRulesToRulesConfig(rule v1alpha1.RepositoryRuleset) *github.Repositor
 			for i, statusCheck := range rule.Rules.RequiredStatusChecks.RequiredStatusChecks {
 				requiredStatusChecks[i] = &github.RuleStatusCheck{
 					Context:       statusCheck.Context,
-					IntegrationID: statusCheck.IntegrationId,
+					IntegrationID: statusCheck.IntegrationID,
 				}
 			}
 			params.RequiredStatusChecks = requiredStatusChecks
@@ -2725,7 +2836,7 @@ func findRulesetIDByName(rulesets []*github.RepositoryRuleset, name string) (int
 			return *ruleset.ID, nil
 		}
 	}
-	return 0, fmt.Errorf("ruleset with name %s not found", name)
+	return 0, errors.Errorf("ruleset with name %s not found", name)
 }
 
 //nolint:gocyclo
@@ -2823,27 +2934,33 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.Repository)
 	if !ok {
-		return errors.New(errNotRepository)
+		return managed.ExternalDelete{}, errors.New(errNotRepository)
 	}
 
 	name := meta.GetExternalName(cr)
 
 	forceDelete := pointer.Deref(cr.Spec.ForProvider.ForceDelete, false)
 	if !forceDelete {
-		return errors.New("You can only delete repositories by setting `forceDelete: true`")
+		return managed.ExternalDelete{}, errors.New("You can only delete repositories by setting `forceDelete: true`")
 	}
 
 	_, err := c.github.Repositories.Delete(ctx, cr.Spec.ForProvider.Org, name)
 	if err != nil {
-		return err
+		return managed.ExternalDelete{}, err
 	}
 
 	if c.metrics != nil {
 		c.metrics.ForgetRepository(cr.Spec.ForProvider.Org, name)
 	}
 
+	return managed.ExternalDelete{}, nil
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
 	return nil
 }

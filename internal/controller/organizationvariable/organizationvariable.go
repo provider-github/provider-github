@@ -19,28 +19,19 @@ package organizationvariable
 import (
 	"context"
 	"slices"
-	"time"
+	"strings"
 
 	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
 )
 
 const (
@@ -51,76 +42,6 @@ const (
 
 	visibilitySelected = "selected"
 )
-
-// Setup adds a controller that reconciles OrganizationVariable managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0)
-}
-
-// SetupWithTimeout adds a controller that reconciles OrganizationVariable managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.OrganizationVariableGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-	}
-
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.OrganizationVariableGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.OrganizationVariable{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.OrganizationVariable)
-	if !ok {
-		return nil, errors.New(errNotOrganizationVariable)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{github: gh}, nil
-}
 
 type external struct {
 	github *ghclient.Client
@@ -147,28 +68,53 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if v.Visibility != nil {
 		ghVisibility = *v.Visibility
 	}
-	if v.Value != cr.Spec.ForProvider.Value || ghVisibility != cr.Spec.ForProvider.Visibility {
+
+	cr.Status.AtProvider.ID = name
+	cr.Status.AtProvider.Org = org
+	cr.Status.AtProvider.Value = v.Value
+	cr.Status.AtProvider.Visibility = ghVisibility
+	cr.Status.AtProvider.SelectedRepositories = nil
+	// Every section is read and mirrored before a difference is reported, so
+	// status.atProvider shows the repositories GitHub gives access to even when
+	// the value or the visibility before them differs.
+	// An omitted visibility, or an omitted value under an Observe-only policy,
+	// is not compared.
+	p := cr.Spec.ForProvider
+	valueDrift := v.Value != p.Value && (p.Value != "" || mgmtpolicy.WritesDeclared(cr.GetManagementPolicies()))
+	visibilityDrift := p.Visibility != "" && ghVisibility != p.Visibility
+	drift := valueDrift || visibilityDrift
+
+	// The list exists on GitHub's side while GitHub's visibility is selected,
+	// whatever the spec says.
+	if ghVisibility == visibilitySelected {
+		ghRepos, err := listSelectedRepos(ctx, c.github, org, name)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+		cr.Status.AtProvider.SelectedRepositories = repoObservations(ghRepos)
+
+		if !drift && p.Visibility == visibilitySelected {
+			resolver := ghclient.NewRepoIDResolver(c.github, org)
+			crIDs, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(p.SelectedRepositories))
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			ghIDs := make([]int64, 0, len(ghRepos))
+			for _, r := range ghRepos {
+				ghIDs = append(ghIDs, r.GetID())
+			}
+			ghclient.SortInt64(crIDs)
+			ghclient.SortInt64(ghIDs)
+			drift = !slices.Equal(crIDs, ghIDs)
+		}
+	}
+
+	if drift {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
-	if cr.Spec.ForProvider.Visibility == visibilitySelected {
-		resolver := ghclient.NewRepoIDResolver(c.github, org)
-		crIDs, err := resolver.BatchGetIDs(ctx, repoNamesFromCR(cr.Spec.ForProvider.SelectedRepositories))
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
-		ghIDs, err := listSelectedRepoIDs(ctx, c.github, org, name)
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
-		ghclient.SortInt64(crIDs)
-		ghclient.SortInt64(ghIDs)
-		if !slices.Equal(crIDs, ghIDs) {
-			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
-		}
-	}
-
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
@@ -215,18 +161,18 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.OrganizationVariable)
 	if !ok {
-		return errors.New(errNotOrganizationVariable)
+		return managed.ExternalDelete{}, errors.New(errNotOrganizationVariable)
 	}
 
 	name := meta.GetExternalName(cr)
 	_, err := c.github.Actions.DeleteOrgVariable(ctx, cr.Spec.ForProvider.Org, name)
 	if err != nil && !ghclient.Is404(err) {
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return nil
+	return managed.ExternalDelete{}, nil
 }
 
 // buildActionsVariable produces the payload for CreateOrgVariable /
@@ -260,23 +206,37 @@ func repoNamesFromCR(refs []v1alpha1.VariableSelectedRepo) []string {
 	return names
 }
 
-// listSelectedRepoIDs paginates through all repositories that have
-// access to the variable on GitHub's side, returning their numeric IDs.
-func listSelectedRepoIDs(ctx context.Context, gh *ghclient.Client, org, name string) ([]int64, error) {
+// listSelectedRepos paginates through all repositories that have
+// access to the variable on GitHub's side.
+func listSelectedRepos(ctx context.Context, gh *ghclient.Client, org, name string) ([]*github.Repository, error) {
 	opts := &github.ListOptions{PerPage: 100}
-	var ids []int64
+	var repos []*github.Repository
 	for {
 		list, resp, err := gh.Actions.ListSelectedReposForOrgVariable(ctx, org, name, opts)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range list.Repositories {
-			ids = append(ids, r.GetID())
-		}
+		repos = append(repos, list.Repositories...)
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
 	}
-	return ids, nil
+	return repos, nil
+}
+
+// repoObservations lists the names of repos, sorted.
+func repoObservations(repos []*github.Repository) []v1alpha1.VariableSelectedRepoObservation {
+	out := make([]v1alpha1.VariableSelectedRepoObservation, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, v1alpha1.VariableSelectedRepoObservation{Repo: r.GetName()})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.VariableSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
+	return nil
 }

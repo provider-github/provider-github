@@ -29,16 +29,16 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/telemetry"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/google/go-github/v90/github"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
@@ -260,10 +260,10 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 
 	cr.Spec.ForProvider.Webhooks = []v1alpha1.RepositoryWebhook{
 		{
-			Url:         webhook1url,
+			URL:         webhook1url,
 			ContentType: webhook1ContentType,
 			Events:      []string{webhook1event1, webhook1event2},
-			InsecureSsl: &webhook1InsecureSsl,
+			InsecureSSL: &webhook1InsecureSsl,
 			Active:      &webhook1active,
 		},
 	}
@@ -337,7 +337,7 @@ func repository(m ...repositoryModifier) *v1alpha1.Repository {
 			},
 			BypassActors: []*v1alpha1.RulesetByPassActors{
 				{
-					ActorId:    &rr1actorId,
+					ActorID:    &rr1actorId,
 					ActorType:  &rr1actorType,
 					BypassMode: &rr1bypassMode,
 				},
@@ -589,10 +589,13 @@ func TestObserve(t *testing.T) {
 							return githubTeams(), fake.GenerateEmptyResponse(), nil
 						},
 						MockListHooks: func(ctx context.Context, owner, repo string, opts *github.ListOptions) ([]*github.Hook, *github.Response, error) {
-							return []*github.Hook{}, fake.GenerateEmptyResponse(), nil
+							return githubWebhooks(), fake.GenerateEmptyResponse(), nil
 						},
 						MockListBranches: func(ctx context.Context, owner, repo string, opts *github.BranchListOptions) ([]*github.Branch, *github.Response, error) {
-							return []*github.Branch{}, fake.GenerateEmptyResponse(), nil
+							return githubBranches(), fake.GenerateEmptyResponse(), nil
+						},
+						MockGetBranchProtection: func(ctx context.Context, owner, repo, branch string) (*github.Protection, *github.Response, error) {
+							return githubProtectedBranch(), fake.GenerateEmptyResponse(), nil
 						},
 						MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*github.RepositoryRuleset, *github.Response, error) {
 							return githubRuleset(), fake.GenerateEmptyResponse(), nil
@@ -780,27 +783,11 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		// An archived repo with matching teams, collaborators and topics is up to
-		// date. Branch protection, rulesets and webhooks are frozen while archived,
-		// so no mocks are wired for them — a call would be a nil-func panic, proving
-		// Observe does not read the frozen dimensions.
+		// date. Branch protection, rulesets and webhooks are frozen for writing while
+		// archived, not for reading, so they are read for the mirror and compared
+		// with nothing.
 		"ArchivedUpToDate": {
-			fields: fields{github: &ghclient.Client{
-				Services: &ghclient.Services{
-					Repositories: &fake.MockRepositoriesClient{
-						MockGet: func(ctx context.Context, owner, repo string) (*github.Repository, *github.Response, error) {
-							r := githubRepository()
-							r.Archived = github.Ptr(true)
-							return r, nil, nil
-						},
-						MockListCollaborators: func(ctx context.Context, owner, repo string, opts *github.ListCollaboratorsOptions) ([]*github.User, *github.Response, error) {
-							return githubCollaborators(), fake.GenerateEmptyResponse(), nil
-						},
-						MockListTeams: func(ctx context.Context, owner string, repo string, opts *github.ListOptions) ([]*github.Team, *github.Response, error) {
-							return githubTeams(), fake.GenerateEmptyResponse(), nil
-						},
-					},
-				},
-			}},
+			fields: fields{github: clientFor(archivedRepositories())},
 			args: args{
 				mg: repository(withArchived(true)),
 			},
@@ -1104,7 +1091,7 @@ func TestSetCollaboratorPartialCondition(t *testing.T) {
 		pending      []string
 		roleEnforced []string
 		wantStatus   corev1.ConditionStatus
-		wantReason   xpv1.ConditionReason
+		wantReason   xpv2.ConditionReason
 	}{
 		"None":         {wantStatus: corev1.ConditionFalse, wantReason: reasonAllCollaboratorsPresent},
 		"Pending":      {pending: []string{"bob", "alice"}, wantStatus: corev1.ConditionTrue, wantReason: reasonPendingInvitation},
@@ -1389,7 +1376,7 @@ func TestSetBranchProtectionPartialCondition(t *testing.T) {
 	cases := map[string]struct {
 		report      branchProtectionReport
 		wantStatus  corev1.ConditionStatus
-		wantReason  xpv1.ConditionReason
+		wantReason  xpv2.ConditionReason
 		wantMessage string
 	}{
 		"OnlyMissingBranches": {
@@ -1464,7 +1451,7 @@ func TestSetBranchProtectionPartialCondition(t *testing.T) {
 }
 
 // An identical report must not append a duplicate, or every reconcile grows status.conditions.
-func TestSetBranchProtectionPartialCondition_Idempotent(t *testing.T) {
+func TestSetBranchProtectionPartialConditionIdempotent(t *testing.T) {
 	cr := &v1alpha1.Repository{}
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})
 	setBranchProtectionPartialCondition(cr, branchProtectionReport{missingBranches: []string{"develop"}})
@@ -2556,7 +2543,7 @@ func TestDeleteForgetsRepositoryUnreconcilable(t *testing.T) {
 		},
 	}
 	e := external{github: gh, metrics: metrics}
-	if err := e.Delete(context.Background(), cr); err != nil {
+	if _, err := e.Delete(context.Background(), cr); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -2602,10 +2589,10 @@ func TestObserveArchivedPublishesUnreconcilable(t *testing.T) {
 	}
 	cr := repository(withArchived(true))
 	cr.Spec.ForProvider.Org = "acme"
-	cr.SetConditions(xpv1.Condition{Type: typeCollaboratorPartial, Status: corev1.ConditionTrue, Reason: reasonPendingInvitation})
-	cr.SetConditions(xpv1.Condition{Type: typeBranchProtectionPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
+	cr.SetConditions(xpv2.Condition{Type: typeCollaboratorPartial, Status: corev1.ConditionTrue, Reason: reasonPendingInvitation})
+	cr.SetConditions(xpv2.Condition{Type: typeBranchProtectionPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
 	cr.Status.AtProvider.UnappliedBranchProtection = []v1alpha1.UnappliedBranchProtection{{Branch: "main", Items: []string{"allowForcePushes"}}}
-	cr.SetConditions(xpv1.Condition{Type: typeSettingsPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
+	cr.SetConditions(xpv2.Condition{Type: typeSettingsPartial, Status: corev1.ConditionTrue, Reason: reasonNotFullyApplied})
 	cr.Status.AtProvider.UnappliedSettings = []v1alpha1.UnappliedSetting{{Field: "hasWiki", Declared: "true"}}
 
 	e := external{github: clientFor(repos), metrics: metrics}
@@ -3203,7 +3190,7 @@ func TestCrRepoRulesToRulesConfig(t *testing.T) {
 		return r
 	}
 	allRules := func(r *v1alpha1.RepositoryRuleset) {
-		r.BypassActors = []*v1alpha1.RulesetByPassActors{{ActorId: &rr1actorId, ActorType: github.Ptr(rr1actorType), BypassMode: github.Ptr(rr1bypassMode)}}
+		r.BypassActors = []*v1alpha1.RulesetByPassActors{{ActorID: &rr1actorId, ActorType: github.Ptr(rr1actorType), BypassMode: github.Ptr(rr1bypassMode)}}
 		r.Rules = &v1alpha1.Rules{
 			Creation:              github.Ptr(true),
 			Deletion:              github.Ptr(true),
