@@ -24,7 +24,10 @@ PLATFORMS ?= linux_amd64 linux_arm64
 # Note: ROOT_DIR is not yet set (common.mk sets it), so we use CURDIR.
 ifneq (,$(wildcard $(CURDIR)/../.env))
   include $(CURDIR)/../.env
-  export
+  DOTENV_KEYS := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[:?+]*=.*/\1/p' $(CURDIR)/../.env)
+  ifneq (,$(strip $(DOTENV_KEYS)))
+    export $(DOTENV_KEYS)
+  endif
 endif
 GOLANGCILINT_VERSION ?= 2.12.2
 # VERSION guard: reachability, not just existence, of git tags.
@@ -225,15 +228,19 @@ reviewable: check-breaking-changes
 # ====================================================================================
 # Tool tests
 #
-# Standalone tool modules (their own go.mod, kept out of GO_SUBDIRS so `make
-# test`/`make reviewable` never pull them into the provider's module graph)
-# and shell guardrail tests under test/hooks/ and hack/ have no runner
+# test/sealedbox is a package of the main module, but GO_SUBDIRS stops at the
+# product code (cmd internal apis), so `make test` never reaches it; this
+# target runs it. Standalone tool modules (their own go.mod, kept out of
+# GO_SUBDIRS so `make test`/`make reviewable` never pull them into the
+# provider's module graph) and shell guardrail tests under test/hooks/ and hack/ have no runner
 # otherwise. Discovers modules rather than naming them, and skips package-less
 # ones -- a stub module holding only go.mod/go.sum makes `go test ./...` exit 1
 # ("no packages to test") even though there is nothing to test. Any failing
 # iteration fails the target.
-test.tools: ## Run unit tests for tools/*/ modules and the shell guardrail tests
-	@rc=0; for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \; 2>/dev/null); do \
+test.tools: ## Run unit tests for tools/*/ modules, test/sealedbox and the shell guardrail tests
+	@rc=0; $(INFO) go test ./test/sealedbox; \
+	go test ./test/sealedbox/... -count=1 || rc=1; \
+	for d in $$(find tools -name go.mod -not -path '*/vendor/*' -exec dirname {} \; 2>/dev/null); do \
 		[ -n "$$(cd $$d && go list ./... 2>/dev/null)" ] || continue; \
 		$(INFO) go test $$d; \
 		(cd $$d && go test ./... -count=1) || rc=1; \
@@ -274,25 +281,43 @@ xpkg.build.provider-github: do.build.images
 #
 # k8s_tools.mk's own $(TOOLS_HOST_DIR)/uptest-$(UPTEST_VERSION) recipe stays
 # untouched -- overriding UPTEST_VERSION alone 404s, because its download rule
-# hardcodes the upstream org. This block instead points UPTEST at a NEW filename
+# hardcodes the upstream org. This block instead installs the fork under a NEW filename
 # under the same $(TOOLS_HOST_DIR) and supplies its own download recipe for that
 # filename, so the two never collide on one make target. $(TOOLS_HOST_DIR) can be
 # hardlinked from a shared cross-worktree tool cache, so reusing the stock
 # uptest-$(UPTEST_VERSION) path here would swap the binary under another
 # worktree's concurrently-running E2E.
 #
+# `make e2e` runs this binary with live credentials exported, so the download is
+# verified against a SHA256 pinned below, per platform, before it is made
+# executable; a mismatch fails the target and installs nothing. Bumping the fork
+# changes UPTEST_FORK_REF and every UPTEST_FORK_SHA256_* line together.
+#
 # Retirement: delete this block and revert to plain UPTEST_VERSION the moment
 # upstream ships a release containing #52, #60 and #65.
 UPTEST_FORK_REPO := kaessert/uptest
 UPTEST_FORK_REF  := v2.3.0-fork.e21896e
-UPTEST           := $(TOOLS_HOST_DIR)/uptest-fork-$(UPTEST_FORK_REF)
+UPTEST_FORK_SHA256_linux-amd64  := 2f7618fceeda82bca2749042db6d578c0f1edf94515f4020be79c1969a17c2d9
+UPTEST_FORK_SHA256_linux-arm64  := 72a4bfa4514c82eb43ace0a55cec1d7466cb720f6967d9b2d2221bc8f66c66bf
+UPTEST_FORK_SHA256_darwin-amd64 := 3e852c8aaff8f415003fc4b3f1d17c2106c25bdc9d36c830351dab6c6100561e
+UPTEST_FORK_SHA256_darwin-arm64 := b16cb13119a3ad185ab753e67985f59aaccae721659830a0b4e3d0c26a55e104
+UPTEST_FORK_SHA256 = $(UPTEST_FORK_SHA256_$(SAFEHOSTPLATFORM))
+UPTEST_FORK_SHA256SUM := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
+UPTEST_BIN       := $(TOOLS_HOST_DIR)/uptest-fork-$(UPTEST_FORK_REF)
 
-$(UPTEST):
+$(UPTEST_BIN):
 	@$(INFO) installing uptest fork $(UPTEST_FORK_REF)
 	@mkdir -p $(TOOLS_HOST_DIR)
-	@curl -fsSLo $(UPTEST) https://github.com/$(UPTEST_FORK_REPO)/releases/download/$(UPTEST_FORK_REF)/uptest_$(SAFEHOSTPLATFORM) || $(FAIL)
-	@chmod +x $(UPTEST)
+	@test -n "$(UPTEST_FORK_SHA256)" || { echo "no pinned SHA256 for uptest fork $(UPTEST_FORK_REF) on $(SAFEHOSTPLATFORM)"; $(FAIL); }
+	@tmp=$(UPTEST_BIN).tmp.$$$$; \
+	{ curl $(CURL_RETRY_FLAGS) -fsSLo $$tmp https://github.com/$(UPTEST_FORK_REPO)/releases/download/$(UPTEST_FORK_REF)/uptest_$(SAFEHOSTPLATFORM) \
+	  && echo "$(UPTEST_FORK_SHA256)  $$tmp" | $(UPTEST_FORK_SHA256SUM) -c - >/dev/null \
+	  && chmod +x $$tmp \
+	  && mv $$tmp $(UPTEST_BIN); } \
+	|| { rm -f $$tmp; echo "uptest fork download or SHA256 check failed for $(SAFEHOSTPLATFORM)"; $(FAIL); }
 	@$(OK) installing uptest fork $(UPTEST_FORK_REF)
+
+UPTEST := $(UPTEST_BIN)
 
 UPTEST_LOCAL_DEPLOY_TARGET = local-deploy
 # uptest's built-in default process budget is 1200s, which is shorter than a
@@ -512,6 +537,14 @@ build: $(if $(filter e2e e2e.%,$(MAKECMDGOALS)),e2e-preflight,)
 # otherwise the provider hangs at Installed=False reason=UnpackingPackage.
 e2e e2e.%: VERSION := v0.0.0-e2e
 
+.PHONY: e2e-wait-crds
+e2e-wait-crds: $(KUBECTL) ## Wait until every CRD the package owns is Established and served
+	@$(INFO) waiting for every package CRD to be Established and served
+	@KUBECTL=$(KUBECTL) hack/e2e-wait-crds.sh || $(FAIL)
+	@$(OK) every package CRD is Established and served
+
+uptest: e2e-wait-crds
+
 # Per-resource E2E target blocks, sorted alphabetically by resource name.
 
 e2e.actions-secret-access: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ACTIONS_SECRET_ACCESS)
@@ -536,16 +569,9 @@ e2e.organization-webhook: e2e
 # deleted. Both scopes manage that one organization, so they run as two sequential
 # passes instead of a comma pair.
 e2e.organization: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_ORGANIZATION)
-# The namespaced pass is a sub-make, and the bare `export` near the top of this
-# file (active whenever ../.env exists) hands it every variable of this make as an
-# environment variable. Two of them corrupt a second pass: IMAGE_TEMP_DIR (made by
-# imagelight.mk, deleted by the first pass's img.done, then recreated as a regular
-# file by the second pass's `cp`) and UPTEST_ARGS (an environment value that the
-# sub-make's `+=` lines append to a second time, so uptest rejects the repeated
-# --teardown-script flag). The sub-make gets its own temp dir and no inherited
-# UPTEST_ARGS.
+# The namespaced pass runs as a sub-make after the cluster pass.
 e2e.organization: e2e
-	@env -u UPTEST_ARGS $(MAKE) e2e IMAGE_TEMP_DIR=$$(mktemp -d) UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
+	@$(MAKE) e2e UPTEST_INPUT_MANIFESTS=$(UPTEST_MANIFESTS_ORGANIZATION_NS)
 
 e2e.repository-branches: UPTEST_INPUT_MANIFESTS = $(UPTEST_MANIFESTS_REPOSITORY_BRANCHES)
 e2e.repository-branches: e2e
