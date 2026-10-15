@@ -388,6 +388,8 @@ type BranchProtectionRestrictions struct {
 }
 
 // RepositoryRuleset represents the rules for a repository
+// +kubebuilder:validation:XValidation:rule="(has(self.target) && self.target == 'push') || !has(self.rules) || !(has(self.rules.fileExtensionRestriction) || has(self.rules.filePathRestriction) || has(self.rules.maxFilePathLength) || has(self.rules.maxFileSize))",message="fileExtensionRestriction, filePathRestriction, maxFilePathLength and maxFileSize apply to a push ruleset"
+// +kubebuilder:validation:XValidation:rule="!(has(self.target) && self.target == 'push') || !has(self.conditions)",message="conditions apply to a branch or tag ruleset"
 type RepositoryRuleset struct {
 	// Name is the name of the ruleset
 	// +kubebuilder:validation:MaxLength=255
@@ -422,6 +424,7 @@ type RulesetByPassActors struct {
 	// +optional
 	ActorId *int64 `json:"actorId,omitempty"`
 	// ActorType is the type of the actor, one of: Integration, OrganizationAdmin, RepositoryRole, Team, DeployKey, User
+	// +kubebuilder:validation:Enum=Integration;OrganizationAdmin;RepositoryRole;Team;DeployKey;User
 	// +optional
 	ActorType *string `json:"actorType,omitempty"`
 	// BypassMode is the bypass mode of the actor, one of: "always", "pull_request", "exempt"
