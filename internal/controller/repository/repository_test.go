@@ -5301,18 +5301,14 @@ func withDuplicateRefPattern(cr *v1alpha1.Repository) {
 }
 
 // GitHub refuses rulesets on a private repository whose plan has none. Observe reports
-// that on RulesetsPartial and the rulesets gauge and lets the other blocks decide
-// ResourceUpToDate, with repositoryRules empty or not, so the rest of the repository
-// keeps reconciling.
+// that on RulesetsPartial and the rulesets gauge while the repository declares rulesets,
+// and lets the other blocks decide ResourceUpToDate, so the rest of the repository keeps
+// reconciling.
 func TestObserveRulesetListForbidden(t *testing.T) {
 	cases := map[string]struct {
 		cr           *v1alpha1.Repository
 		wantUpToDate bool
 	}{
-		"EmptyRepositoryRules": {
-			cr:           repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{} }),
-			wantUpToDate: true,
-		},
 		"DeclaredRulesets": {
 			cr:           repository(),
 			wantUpToDate: true,
@@ -5346,6 +5342,44 @@ func TestObserveRulesetListForbidden(t *testing.T) {
 			}
 			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
 				t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0: nothing was fetched", got)
+			}
+		})
+	}
+}
+
+// repositoryRules: [] asks for a repository without rulesets, which a plan refusing
+// rulesets already gives. Observe reports RulesetsPartial False and the rulesets gauge 0
+// on the 403, also after an earlier report, so a Free-plan private repository declaring
+// no rulesets keeps no alert firing.
+func TestObserveRulesetListForbiddenWithoutDeclaredRulesets(t *testing.T) {
+	cases := map[string]struct {
+		forbiddenBefore bool
+	}{
+		"FirstObserve":   {forbiddenBefore: false},
+		"AfterForbidden": {forbiddenBefore: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			cr := repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{} })
+			cr.Spec.ForProvider.Org = "acme"
+			if tc.forbiddenBefore {
+				metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
+				cr.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
+			}
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsForbidden(t)), metrics: metrics}).Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || !got.ResourceUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate true", got)
+			}
+			if condition := cr.GetCondition(typeRulesetsPartial); condition.Status != corev1.ConditionFalse || condition.Reason != reasonRulesetsReconciled || condition.Message != "" {
+				t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", condition.Status, condition.Reason, condition.Message, reasonRulesetsReconciled)
+			}
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
+				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
 			}
 		})
 	}

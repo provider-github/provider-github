@@ -326,7 +326,13 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				return managed.ExternalObservation{}, err
 			}
 			if err != nil {
-				setRulesetsPartialCondition(cr, nil, err, nil)
+				// The refusal leaves the declared rulesets unapplied; a repository that declares
+				// none already has the state it asks for.
+				if len(*cr.Spec.ForProvider.RepositoryRules) > 0 {
+					setRulesetsPartialCondition(cr, nil, err, nil)
+				} else {
+					setRulesetsPartialCondition(cr, nil, nil, nil)
+				}
 				c.recordRulesetsUnreconcilable(cr)
 			} else {
 				ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
@@ -419,10 +425,10 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 }
 
 // Condition surfaced while a ruleset in the spec lists the same ref pattern or bypass
-// actor twice, while GitHub answers the ruleset list with 403, such as on a private
-// repository whose plan has no rulesets, or while a managed ruleset holds parameters the
-// provider does not model. An invalid spec leaves the list unread and a 403 leaves
-// nothing fetched, so one reason at a time applies.
+// actor twice, while GitHub answers the ruleset list with 403 on a repository that
+// declares rulesets, such as a private one whose plan has no rulesets, or while a
+// managed ruleset holds parameters the provider does not model. An invalid spec leaves
+// the list unread and a 403 leaves nothing fetched, so one reason at a time applies.
 const (
 	typeRulesetsPartial       xpv1.ConditionType   = "RulesetsPartial"
 	reasonInvalidRulesets     xpv1.ConditionReason = "InvalidRulesets"
