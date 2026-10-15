@@ -342,10 +342,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				setRulesetsPartialCondition(cr, nil, nil, report)
 				c.recordRulesetsUnreconcilable(cr)
 
-				// Rulesets left as they are drop out of the compare.
-				for _, name := range report.skipped {
-					delete(crRepositoryRulesToConfig, name)
-				}
+				applyRulesetReport(crRepositoryRulesToConfig, report)
 				if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 					return notUpToDate, nil
 				}
@@ -447,11 +444,30 @@ const (
 // rulesetReport lists, sorted, one sentence per managed ruleset left as it is because
 // it holds rule types the provider does not model, and one per rule holding
 // parameters the provider does not model. skipped holds the names of those rulesets
-// left as they are, sorted.
+// left as they are, sorted. extraApprovalReturned holds, sorted, the names of the
+// rulesets whose pull_request rule GitHub answered with
+// requireExtraApprovalForUnattributedChanges while the CR leaves it unset; the desired
+// value is GitHub's default, true.
 type rulesetReport struct {
-	unmanagedTypes      []string
-	unmanagedParameters []string
-	skipped             []string
+	unmanagedTypes        []string
+	unmanagedParameters   []string
+	skipped               []string
+	extraApprovalReturned []string
+}
+
+// applyRulesetReport brings the CR's rulesets, as getRepositoryRulesMapFromCr returns
+// them, to the desired state compared with and sent to GitHub: the rulesets in
+// report.skipped drop out, and the pull_request rule of the rulesets in
+// report.extraApprovalReturned gets requireExtraApprovalForUnattributedChanges true.
+// Rules.PullRequest is a pointer held by the map entry, so the value set through it is
+// in crRulesets.
+func applyRulesetReport(crRulesets map[string]v1alpha1.RepositoryRuleset, report rulesetReport) {
+	for _, name := range report.skipped {
+		delete(crRulesets, name)
+	}
+	for _, name := range report.extraApprovalReturned {
+		crRulesets[name].Rules.PullRequest.RequireExtraApprovalForUnattributedChanges = pointer.To(true)
+	}
 }
 
 // setRulesetsPartialCondition carries the message from invalid, the error naming the
@@ -2560,7 +2576,10 @@ func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRules
 // provider does not model is left out of the result, and its name is in
 // report.skipped, so the callers drop it from their CR map as well and compare and
 // diff leave it as it is. The report names those rulesets and the rules of the other
-// fetched rulesets that hold parameters the provider does not manage.
+// fetched rulesets that hold parameters the provider does not manage, and lists in
+// extraApprovalReturned the rulesets whose desired
+// requireExtraApprovalForUnattributedChanges is GitHub's default; the callers apply
+// both lists to their CR map with applyRulesetReport.
 //
 //nolint:gocyclo
 func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, rulesetReport, error) {
@@ -2748,12 +2767,16 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 
 		withoutUndeclared(&ruleset, crRulesets[rule.Name])
+		if c, g := crRulesets[rule.Name].Rules, ruleset.Rules.PullRequest; c != nil && c.PullRequest != nil && c.PullRequest.RequireExtraApprovalForUnattributedChanges == nil && g != nil && g.RequireExtraApprovalForUnattributedChanges != nil {
+			report.extraApprovalReturned = append(report.extraApprovalReturned, rule.Name)
+		}
 		rulesToConfig[rule.Name] = ruleset
 	}
 
 	slices.Sort(report.unmanagedTypes)
 	slices.Sort(report.unmanagedParameters)
 	slices.Sort(report.skipped)
+	slices.Sort(report.extraApprovalReturned)
 	return rulesToConfig, report, nil
 
 }
@@ -3073,9 +3096,7 @@ func secretTypeSet(types []v1alpha1.RulesSecretType) []v1alpha1.RulesSecretType 
 
 // withoutUndeclared gives gh, GitHub's form of the ruleset, the CR's values for fields
 // GitHub fills in by itself: OrganizationAdmin and DeployKey actor IDs and a missing
-// update_allows_fetch_and_merge. It gives cr's rules, which the caller's map shares,
-// GitHub's default true for an unset requireExtraApprovalForUnattributedChanges that
-// GitHub returns, so the update sends it and a false on GitHub is drift.
+// update_allows_fetch_and_merge. It sorts gh's bypass actors.
 func withoutUndeclared(gh *v1alpha1.RepositoryRuleset, cr v1alpha1.RepositoryRuleset) {
 	for _, actor := range gh.BypassActors {
 		if !actorIDIgnored(actor.ActorType) {
@@ -3095,9 +3116,6 @@ func withoutUndeclared(gh *v1alpha1.RepositoryRuleset, cr v1alpha1.RepositoryRul
 	}
 	if gh.Rules.UpdateAllowsFetchAndMerge == nil && *gh.Rules.Update {
 		gh.Rules.UpdateAllowsFetchAndMerge = cr.Rules.UpdateAllowsFetchAndMerge
-	}
-	if c, g := cr.Rules.PullRequest, gh.Rules.PullRequest; c != nil && g != nil && c.RequireExtraApprovalForUnattributedChanges == nil && g.RequireExtraApprovalForUnattributedChanges != nil {
-		c.RequireExtraApprovalForUnattributedChanges = pointer.To(true)
 	}
 }
 
@@ -3272,10 +3290,7 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	if err != nil {
 		return err
 	}
-	// Rulesets left as they are drop out of the diff.
-	for _, name := range report.skipped {
-		delete(crRToConfig, name)
-	}
+	applyRulesetReport(crRToConfig, report)
 	// Determine which rules need to be deleted, added, or updated
 	toDelete, toAdd, toUpdate := util.DiffRepositoryRulesets(ghRToConfig, crRToConfig)
 

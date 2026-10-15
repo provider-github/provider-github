@@ -3667,6 +3667,61 @@ func TestGetRepositoryRulesWithConfigReportsSkippedRulesets(t *testing.T) {
 	}
 }
 
+// Reading the rulesets leaves the caller's CR map as it is when GitHub returns
+// requireExtraApprovalForUnattributedChanges for a ruleset whose CR leaves it unset: the
+// ruleset is named in report.extraApprovalReturned, and Observe and Update set the
+// desired true themselves.
+func TestGetRepositoryRulesWithConfigReportsExtraApprovalReturned(t *testing.T) {
+	rules := *repository(withPullRequestRule(1)).Spec.ForProvider.RepositoryRules
+	crMap := crRulesets(t, rules)
+	want := crRulesets(t, rules)
+	rs := upToDateRulesets()
+	rulesetHolding(t, rs, func(m *rulesets.ModelledRules) {
+		m.PullRequest = &rulesets.PullRequestRuleParameters{RequireExtraApprovalForUnattributedChanges: github.Ptr(false)}
+	})
+	gh := clientFor(upToDateRepositories(nil), rs)
+	ghRulesets, err := getRepositoryRules(context.Background(), gh, "acme", repo)
+	if err != nil {
+		t.Fatalf("getRepositoryRules: %v", err)
+	}
+
+	_, report, err := getRepositoryRulesWithConfig(context.Background(), gh, "acme", repo, ghRulesets, crMap)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesWithConfig: %v", err)
+	}
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets after the call: -want, +got:\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{rr1name}, report.extraApprovalReturned); diff != "" {
+		t.Errorf("report.extraApprovalReturned: -want, +got:\n%s", diff)
+	}
+}
+
+// applyRulesetReport turns the CR's rulesets into the desired state: a ruleset left as it
+// is drops out of the compare and the diff, and a ruleset whose CR leaves
+// requireExtraApprovalForUnattributedChanges unset while GitHub returns it wants GitHub's
+// default, true, so a false on GitHub is drift. A ruleset the report does not name keeps
+// the field unset, and the update omits it.
+func TestApplyRulesetReport(t *testing.T) {
+	pullRequest := func(v *bool) *v1alpha1.Rules {
+		return &v1alpha1.Rules{PullRequest: &v1alpha1.RulesPullRequest{RequireExtraApprovalForUnattributedChanges: v}}
+	}
+	crMap := map[string]v1alpha1.RepositoryRuleset{
+		"skipped":  {Name: "skipped", Rules: pullRequest(nil)},
+		"returned": {Name: "returned", Rules: pullRequest(nil)},
+		"absent":   {Name: "absent", Rules: pullRequest(nil)},
+	}
+	want := map[string]v1alpha1.RepositoryRuleset{
+		"returned": {Name: "returned", Rules: pullRequest(github.Ptr(true))},
+		"absent":   {Name: "absent", Rules: pullRequest(nil)},
+	}
+
+	applyRulesetReport(crMap, rulesetReport{skipped: []string{"skipped"}, extraApprovalReturned: []string{"returned"}})
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets: -want, +got:\n%s", diff)
+	}
+}
+
 // Unmanaged rule types and unmanaged parameters on different rulesets are both named:
 // the reason is UnmanagedRuleTypes, the rule-type sentences come first, and the
 // ruleset_parameters gauge is 1.
