@@ -4812,7 +4812,7 @@ func TestObserveBypassActorsWithoutID(t *testing.T) {
 
 // A bypass actor without a mode is sent as "always" and matches what GitHub stores.
 // Listed again with mode "always", it is the same actor twice, which Observe reports
-// as an error before it writes any ruleset.
+// on RulesetsPartial before it reads any ruleset.
 func TestBypassActorModeDefaultAndDuplicates(t *testing.T) {
 	cr := repository(withBypassActors(
 		&v1alpha1.RulesetByPassActors{ActorId: github.Ptr(rr1actorId), ActorType: github.Ptr("Team")},
@@ -4840,10 +4840,12 @@ func TestBypassActorModeDefaultAndDuplicates(t *testing.T) {
 		&v1alpha1.RulesetByPassActors{ActorId: github.Ptr(rr1actorId), ActorType: github.Ptr("Team")},
 		&v1alpha1.RulesetByPassActors{ActorId: github.Ptr(rr1actorId), ActorType: github.Ptr("Team"), BypassMode: github.Ptr("always")},
 	))
-	_, err = (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutWrites(t))}).Observe(context.Background(), twice)
-	wantErr := fmt.Sprintf("ruleset %s lists bypass actor Team %d twice with bypassMode always", rr1name, rr1actorId)
-	if err == nil || err.Error() != wantErr {
-		t.Errorf("Observe error = %v, want %q", err, wantErr)
+	if _, err = (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), twice); err != nil {
+		t.Fatalf("Observe with the actor twice: %v", err)
+	}
+	wantMsg := fmt.Sprintf("ruleset %s lists bypass actor Team %d twice with bypassMode always", rr1name, rr1actorId)
+	if c := twice.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || c.Message != wantMsg {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
 	}
 }
 
@@ -5276,6 +5278,28 @@ func rulesetsForbidden(t *testing.T) *fake.MockRulesetsClient {
 
 const planWithoutRulesets = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 
+// rulesetsWithoutCalls fails the test on any ruleset call, the list included.
+func rulesetsWithoutCalls(t *testing.T) *fake.MockRulesetsClient {
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetAllRulesets called")
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("GetRuleset called")
+		return nil, fake.GenerateEmptyResponse(), nil
+	}
+	return rs
+}
+
+// withDuplicateRefPattern lists refs/heads/main twice in the first ruleset's include.
+func withDuplicateRefPattern(cr *v1alpha1.Repository) {
+	(*cr.Spec.ForProvider.RepositoryRules)[0].Conditions = &v1alpha1.RulesetConditions{RefName: &v1alpha1.RulesetRefName{
+		Include: []string{"refs/heads/main", "refs/heads/main"},
+		Exclude: []string{},
+	}}
+}
+
 // GitHub refuses rulesets on a private repository whose plan has none. Observe reports
 // that on RulesetsPartial and the rulesets gauge and lets the other blocks decide
 // ResourceUpToDate, with repositoryRules empty or not, so the rest of the repository
@@ -5348,6 +5372,76 @@ func TestObserveRulesetListAllowedClearsRulesetsPartial(t *testing.T) {
 	}
 }
 
+// A ruleset listing a ref pattern twice is a mistake in the spec. Observe reports it on
+// RulesetsPartial and the ruleset_spec gauge without reading the rulesets, and lets the
+// other blocks decide ResourceUpToDate, so the rest of the repository keeps reconciling.
+func TestObserveInvalidRulesetsSetRulesetsPartial(t *testing.T) {
+	cases := map[string]struct {
+		cr           *v1alpha1.Repository
+		wantUpToDate bool
+	}{
+		"OtherBlocksUpToDate": {
+			cr:           repository(withDuplicateRefPattern),
+			wantUpToDate: true,
+		},
+		"TopicsDrift": {
+			cr:           repository(withDuplicateRefPattern, withDifferentTopics()),
+			wantUpToDate: false,
+		},
+	}
+	wantMsg := fmt.Sprintf("ruleset %s lists ref pattern refs/heads/main twice in include", rr1name)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			metrics := telemetry.NewForTest()
+			tc.cr.Spec.ForProvider.Org = "acme"
+
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t)), metrics: metrics}).Observe(context.Background(), tc.cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if !got.ResourceExists || got.ResourceUpToDate != tc.wantUpToDate {
+				t.Errorf("Observe = %+v, want ResourceExists true, ResourceUpToDate %v", got, tc.wantUpToDate)
+			}
+			condition := tc.cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonInvalidRulesets || condition.Message != wantMsg {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonInvalidRulesets, wantMsg)
+			}
+			gauge := metrics.RepositoryUnreconcilableForTest()
+			if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetSpec)); got != 1 {
+				t.Errorf("unreconcilable{dimension=ruleset_spec} = %v, want 1", got)
+			}
+			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters} {
+				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != 0 {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want 0: nothing was read", dimension, got)
+				}
+			}
+		})
+	}
+}
+
+// Once the spec lists each ref pattern once, RulesetsPartial turns False and the
+// ruleset_spec gauge 0.
+func TestObserveFixedRulesetsClearRulesetsPartial(t *testing.T) {
+	metrics := telemetry.NewForTest()
+	cr := repository(withDuplicateRefPattern)
+	cr.Spec.ForProvider.Org = "acme"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t)), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(invalid): %v", err)
+	}
+	cr.Spec.ForProvider.RepositoryRules = repository().Spec.ForProvider.RepositoryRules
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), upToDateRulesets()), metrics: metrics}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe(fixed): %v", err)
+	}
+
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsReconciled || got.Message != "" {
+		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsReconciled)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetSpec)); got != 0 {
+		t.Errorf("unreconcilable{dimension=ruleset_spec} = %v, want 0", got)
+	}
+}
+
 // Any other failure of the ruleset list fails Observe, so a transient error is retried
 // instead of being reported as a refusal: a 500, and a 403 that is GitHub's rate limit.
 func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
@@ -5375,7 +5469,7 @@ func TestObserveRulesetListErrorOtherThan403Fails(t *testing.T) {
 }
 
 // A repository whose rulesets the provider leaves alone publishes rulesets=0,
-// ruleset_parameters=0 and RulesetsPartial False, so an earlier report does not keep
+// ruleset_parameters=0, ruleset_spec=0 and RulesetsPartial False, so an earlier report does not keep
 // an alert firing:
 // repositoryRules unset, the repository archived, or the CR being deleted.
 func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
@@ -5410,6 +5504,7 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 			metrics := telemetry.NewForTest()
 			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
 			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetParameters, true)
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetSpec, true)
 			tc.cr.Spec.ForProvider.Org = "acme"
 			tc.cr.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
 
@@ -5419,7 +5514,7 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 			if got := tc.cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
 				t.Errorf("RulesetsPartial = %v, want False", got)
 			}
-			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters} {
+			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters, telemetry.DimensionRulesetSpec} {
 				if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, dimension)); got != 0 {
 					t.Errorf("unreconcilable{dimension=%s} = %v, want 0", dimension, got)
 				}
@@ -5614,25 +5709,32 @@ func TestConditionsRefOrder(t *testing.T) {
 }
 
 // GitHub stores OrganizationAdmin and DeployKey with a null ID, so two of them with the
-// same mode are the same actor whatever their IDs: Observe, Create and Update report the
-// error and write no ruleset.
+// same mode are the same actor whatever their IDs: Observe reports the duplicate on
+// RulesetsPartial, and Observe, Create and Update make no ruleset call.
 func TestBypassActorsDuplicateIgnoredIDTypes(t *testing.T) {
 	for _, typ := range []string{"OrganizationAdmin", "DeployKey"} {
 		withDuplicate := withBypassActors(
 			&v1alpha1.RulesetByPassActors{ActorId: github.Ptr(int64(1)), ActorType: github.Ptr(typ), BypassMode: github.Ptr("exempt")},
 			&v1alpha1.RulesetByPassActors{ActorId: github.Ptr(int64(2)), ActorType: github.Ptr(typ), BypassMode: github.Ptr("exempt")},
 		)
-		wantErr := fmt.Sprintf("ruleset %s lists bypass actor %s twice with bypassMode exempt", rr1name, typ)
+		wantMsg := fmt.Sprintf("ruleset %s lists bypass actor %s twice with bypassMode exempt", rr1name, typ)
 		check := func(t *testing.T, err error) {
 			t.Helper()
-			if err == nil || !strings.Contains(err.Error(), wantErr) {
-				t.Errorf("error = %v, want one containing %q", err, wantErr)
+			if err != nil {
+				t.Errorf("error = %v, want nil: the rest of the repository keeps reconciling", err)
 			}
 		}
 
 		t.Run(typ+"/Observe", func(t *testing.T) {
-			_, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutWrites(t))}).Observe(context.Background(), repository(withDuplicate))
+			cr := repository(withDuplicate)
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), cr)
 			check(t, err)
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: the other blocks are up to date")
+			}
+			if c := cr.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || !strings.Contains(c.Message, wantMsg) {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v containing %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
+			}
 		})
 		t.Run(typ+"/Update", func(t *testing.T) {
 			repos := upToDateRepositories(nil)
@@ -5644,7 +5746,7 @@ func TestBypassActorsDuplicateIgnoredIDTypes(t *testing.T) {
 			}
 			cr := settingsOnlyRepository()
 			cr.Spec.ForProvider.RepositoryRules = repository(withDuplicate).Spec.ForProvider.RepositoryRules
-			_, err := (&external{github: clientFor(repos, rulesetsWithoutWrites(t))}).Update(context.Background(), cr)
+			_, err := (&external{github: clientFor(repos, rulesetsWithoutCalls(t))}).Update(context.Background(), cr)
 			check(t, err)
 		})
 		t.Run(typ+"/Create", func(t *testing.T) {
@@ -5667,40 +5769,17 @@ func TestBypassActorsDuplicateIgnoredIDTypes(t *testing.T) {
 			cr := repository(withDuplicate)
 			cr.Spec.ForProvider.Webhooks = nil
 			cr.Spec.ForProvider.BranchProtectionRules = nil
-			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rulesetsWithoutWrites(t)}}}
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rulesetsWithoutCalls(t)}}}
 			_, err := e.Create(context.Background(), cr)
 			check(t, err)
 		})
 	}
 }
 
-// A ref pattern listed twice in include or exclude stops Observe, Update and Create with
-// an error naming it, before any ruleset call, because GitHub stores each pattern once.
+// A ref pattern listed twice in include or exclude is reported on RulesetsPartial with
+// a message naming it, because GitHub stores each pattern once. Observe, Update and
+// Create make no ruleset call and go on with the rest of the repository.
 func TestRefPatternDuplicates(t *testing.T) {
-	noCalls := func(t *testing.T) *fake.MockRulesetsClient {
-		return &fake.MockRulesetsClient{
-			MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("GetAllRulesets called")
-				return nil, fake.GenerateEmptyResponse(), nil
-			},
-			MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("GetRuleset called")
-				return nil, fake.GenerateEmptyResponse(), nil
-			},
-			MockCreateRuleset: func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("CreateRuleset called")
-				return &r, fake.GenerateEmptyResponse(), nil
-			},
-			MockUpdateRuleset: func(ctx context.Context, owner, repo string, id int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("UpdateRuleset called")
-				return &r, fake.GenerateEmptyResponse(), nil
-			},
-			MockDeleteRuleset: func(ctx context.Context, owner, repo string, id int64) (*github.Response, error) {
-				t.Errorf("DeleteRuleset called")
-				return fake.GenerateEmptyResponse(), nil
-			},
-		}
-	}
 	cases := map[string]v1alpha1.RulesetRefName{
 		"include": {Include: []string{"refs/heads/main", "~DEFAULT_BRANCH", "refs/heads/main"}, Exclude: []string{"refs/heads/x"}},
 		"exclude": {Include: []string{"refs/heads/main"}, Exclude: []string{"refs/heads/y", "refs/heads/x", "refs/heads/y"}},
@@ -5713,17 +5792,24 @@ func TestRefPatternDuplicates(t *testing.T) {
 		if list == "exclude" {
 			pattern = "refs/heads/y"
 		}
-		wantErr := fmt.Sprintf("ruleset %s lists ref pattern %s twice in %s", rr1name, pattern, list)
+		wantMsg := fmt.Sprintf("ruleset %s lists ref pattern %s twice in %s", rr1name, pattern, list)
 		check := func(t *testing.T, err error) {
 			t.Helper()
-			if err == nil || err.Error() != wantErr {
-				t.Errorf("error = %v, want %q", err, wantErr)
+			if err != nil {
+				t.Errorf("error = %v, want nil: the rest of the repository keeps reconciling", err)
 			}
 		}
 
 		t.Run(list+"/Observe", func(t *testing.T) {
-			_, err := (&external{github: clientFor(upToDateRepositories(nil), noCalls(t))}).Observe(context.Background(), repository(withDuplicate))
+			cr := repository(withDuplicate)
+			got, err := (&external{github: clientFor(upToDateRepositories(nil), rulesetsWithoutCalls(t))}).Observe(context.Background(), cr)
 			check(t, err)
+			if !got.ResourceUpToDate {
+				t.Errorf("ResourceUpToDate = false, want true: the other blocks are up to date")
+			}
+			if c := cr.GetCondition(typeRulesetsPartial); c.Status != corev1.ConditionTrue || c.Reason != reasonInvalidRulesets || c.Message != wantMsg {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", c.Status, c.Reason, c.Message, reasonInvalidRulesets, wantMsg)
+			}
 		})
 		t.Run(list+"/Update", func(t *testing.T) {
 			repos := upToDateRepositories(nil)
@@ -5735,7 +5821,7 @@ func TestRefPatternDuplicates(t *testing.T) {
 			}
 			cr := settingsOnlyRepository()
 			cr.Spec.ForProvider.RepositoryRules = repository(withDuplicate).Spec.ForProvider.RepositoryRules
-			_, err := (&external{github: clientFor(repos, noCalls(t))}).Update(context.Background(), cr)
+			_, err := (&external{github: clientFor(repos, rulesetsWithoutCalls(t))}).Update(context.Background(), cr)
 			check(t, err)
 		})
 		t.Run(list+"/Create", func(t *testing.T) {
@@ -5758,7 +5844,7 @@ func TestRefPatternDuplicates(t *testing.T) {
 			cr := repository(withDuplicate)
 			cr.Spec.ForProvider.Webhooks = nil
 			cr.Spec.ForProvider.BranchProtectionRules = nil
-			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: noCalls(t)}}}
+			e := external{github: &ghclient.Client{Services: &ghclient.Services{Repositories: repos, Teams: teams, Rulesets: rulesetsWithoutCalls(t)}}}
 			_, err := e.Create(context.Background(), cr)
 			check(t, err)
 		})

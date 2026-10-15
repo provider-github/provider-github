@@ -314,33 +314,35 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Rulesets are skipped while the CR is being deleted, so the deletion goes ahead even
 	// when the ruleset endpoint fails (403 on plans without private-repository rulesets).
 	if cr.Spec.ForProvider.RepositoryRules != nil && !meta.WasDeleted(cr) {
-		crRepositoryRulesToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
-
-		ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
-		// A 403 is GitHub refusing rulesets on this repository; the other blocks still decide ResourceUpToDate.
-		if err != nil && !ghclient.Is403(err) {
-			return managed.ExternalObservation{}, err
-		}
-		if err != nil {
-			setRulesetsPartialCondition(cr, err, nil)
+		crRepositoryRulesToConfig, invalid := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
+		// An invalid spec leaves the rulesets unread; the other blocks still decide ResourceUpToDate.
+		if invalid != nil {
+			setRulesetsPartialCondition(cr, invalid, nil, nil)
 			c.recordRulesetsUnreconcilable(cr)
 		} else {
-			ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
-			if err != nil {
+			ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
+			// A 403 is GitHub refusing rulesets on this repository; the other blocks still decide ResourceUpToDate.
+			if err != nil && !ghclient.Is403(err) {
 				return managed.ExternalObservation{}, err
 			}
-			setRulesetsPartialCondition(cr, nil, unmanagedParameters)
-			c.recordRulesetsUnreconcilable(cr)
+			if err != nil {
+				setRulesetsPartialCondition(cr, nil, err, nil)
+				c.recordRulesetsUnreconcilable(cr)
+			} else {
+				ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+				if err != nil {
+					return managed.ExternalObservation{}, err
+				}
+				setRulesetsPartialCondition(cr, nil, nil, unmanagedParameters)
+				c.recordRulesetsUnreconcilable(cr)
 
-			if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
-				return notUpToDate, nil
+				if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
+					return notUpToDate, nil
+				}
 			}
 		}
 	} else {
-		setRulesetsPartialCondition(cr, nil, nil)
+		setRulesetsPartialCondition(cr, nil, nil, nil)
 		c.recordRulesetsUnreconcilable(cr)
 	}
 
@@ -416,23 +418,30 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 	})
 }
 
-// Condition surfaced while GitHub answers the ruleset list with 403, such as on a
-// private repository whose plan has no rulesets, or while a managed ruleset holds
-// parameters the provider does not model. A 403 leaves nothing fetched, so one reason
-// at a time applies.
+// Condition surfaced while a ruleset in the spec lists the same ref pattern or bypass
+// actor twice, while GitHub answers the ruleset list with 403, such as on a private
+// repository whose plan has no rulesets, or while a managed ruleset holds parameters the
+// provider does not model. An invalid spec leaves the list unread and a 403 leaves
+// nothing fetched, so one reason at a time applies.
 const (
 	typeRulesetsPartial       xpv1.ConditionType   = "RulesetsPartial"
+	reasonInvalidRulesets     xpv1.ConditionReason = "InvalidRulesets"
 	reasonRulesetsForbidden   xpv1.ConditionReason = "RulesetsForbidden"
 	reasonUnmanagedParameters xpv1.ConditionReason = "UnmanagedParameters"
 	reasonRulesetsReconciled  xpv1.ConditionReason = "RulesetsReconciled"
 )
 
-// setRulesetsPartialCondition carries GitHub's message from forbidden, the 403 of the
-// ruleset list, or the sentences naming unmanaged parameters, and reports False when
-// there are neither.
-func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error, unmanagedParameters []string) {
+// setRulesetsPartialCondition carries the message from invalid, the error naming the
+// duplicate in the spec, GitHub's message from forbidden, the 403 of the ruleset list,
+// or the sentences naming unmanaged parameters, in that order, and reports False when
+// there are none.
+func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden error, unmanagedParameters []string) {
 	c := xpv1.Condition{Type: typeRulesetsPartial, LastTransitionTime: metav1.Now()}
 	switch {
+	case invalid != nil:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonInvalidRulesets
+		c.Message = invalid.Error()
 	case forbidden != nil:
 		msg := forbidden.Error()
 		var errResp *github.ErrorResponse
@@ -453,9 +462,10 @@ func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error, unman
 	cr.SetConditions(c)
 }
 
-// recordRulesetsUnreconcilable publishes the rulesets and ruleset_parameters dimensions,
-// each from its reason of the RulesetsPartial condition.
+// recordRulesetsUnreconcilable publishes the ruleset_spec, rulesets and ruleset_parameters
+// dimensions, each from its reason of the RulesetsPartial condition.
 func (c *external) recordRulesetsUnreconcilable(cr *v1alpha1.Repository) {
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetSpec, typeRulesetsPartial, reasonInvalidRulesets)
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial, reasonRulesetsForbidden)
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedParameters)
 }
@@ -498,7 +508,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
-	setRulesetsPartialCondition(cr, nil, nil)
+	setRulesetsPartialCondition(cr, nil, nil, nil)
 	c.recordRulesetsUnreconcilable(cr)
 
 	setArchivedCondition(cr, true, skippedAdds)
@@ -1858,10 +1868,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 	}
 	if cr.Spec.ForProvider.RepositoryRules != nil {
-		rulesMap, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
-		if err != nil {
-			return managed.ExternalCreation{}, err
-		}
+		// An invalid spec returns no rulesets to create; Observe reports it through RulesetsPartial.
+		rulesMap, _ := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 		for key := range rulesMap {
 			// avoid "G601: Implicit memory aliasing in for loop"
 			rule := rulesMap[key]
@@ -3212,7 +3220,8 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	// Generate a map of the repository rules from the Crossplane resource
 	crRToConfig, err := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 	if err != nil {
-		return err
+		// The spec is invalid; Observe reports it through RulesetsPartial.
+		return nil
 	}
 	// Fetch the current repository rules from GitHub
 	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
