@@ -509,7 +509,7 @@ func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden err
 // dimensions, each from its reasons of the RulesetsPartial condition.
 func (c *external) recordRulesetsUnreconcilable(cr *v1alpha1.Repository) {
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesetSpec, typeRulesetsPartial, reasonInvalidRulesets)
-	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial, reasonRulesetsForbidden)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetsForbidden, typeRulesetsPartial, reasonRulesetsForbidden)
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedRuleTypes, reasonUnmanagedParameters)
 }
 

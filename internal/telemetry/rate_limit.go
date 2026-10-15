@@ -68,7 +68,7 @@ const (
 	DimensionBranchProtection  = "branch_protection"
 	DimensionArchived          = "archived"
 	DimensionSettings          = "settings"
-	DimensionRulesets          = "rulesets"
+	DimensionRulesetsForbidden = "rulesets_forbidden"
 	DimensionRulesetParameters = "ruleset_parameters"
 	DimensionRulesetSpec       = "ruleset_spec"
 )
@@ -138,7 +138,7 @@ func newRateLimitMetrics() *RateLimitMetrics {
 		repositoryUnreconcilable: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "github_repository_unreconcilable",
-				Help: "1 while the repository has declared state that stays unapplied, per dimension (collaborators, branch_protection, archived, settings, rulesets, ruleset_parameters, ruleset_spec)",
+				Help: "1 while the repository has declared state that stays unapplied, per dimension (collaborators, branch_protection, archived, settings, rulesets_forbidden, ruleset_parameters, ruleset_spec)",
 			},
 			[]string{"organization", "repository", "dimension"},
 		),

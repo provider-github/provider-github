@@ -3585,7 +3585,7 @@ func TestObserveRulesetWithUnmanagedRuleTypesIsLeftAsItIs(t *testing.T) {
 			}
 			for dimension, want := range map[string]float64{
 				telemetry.DimensionRulesetParameters: 1,
-				telemetry.DimensionRulesets:          0,
+				telemetry.DimensionRulesetsForbidden: 0,
 				telemetry.DimensionRulesetSpec:       0,
 			} {
 				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != want {
@@ -4939,8 +4939,8 @@ func TestObserveUnmanagedParametersSetRulesetsPartial(t *testing.T) {
 		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 1 {
 			t.Errorf("Observe %d: unreconcilable{dimension=ruleset_parameters} = %v, want 1", observe, got)
 		}
-		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
-			t.Errorf("Observe %d: unreconcilable{dimension=rulesets} = %v, want 0: GitHub lists the rulesets", observe, got)
+		if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+			t.Errorf("Observe %d: unreconcilable{dimension=rulesets_forbidden} = %v, want 0: GitHub lists the rulesets", observe, got)
 		}
 	}
 
@@ -5675,8 +5675,8 @@ func TestObserveRulesetListForbidden(t *testing.T) {
 			if !strings.HasSuffix(condition.Message, ": "+planWithoutRulesets) {
 				t.Errorf("RulesetsPartial message = %q, want GitHub's message %q", condition.Message, planWithoutRulesets)
 			}
-			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 1 {
-				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 1", got)
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 1 {
+				t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 1", got)
 			}
 			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 0 {
 				t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 0: nothing was fetched", got)
@@ -5702,7 +5702,7 @@ func TestObserveRulesetListForbiddenWithoutDeclaredRulesets(t *testing.T) {
 			cr := repository(func(cr *v1alpha1.Repository) { cr.Spec.ForProvider.RepositoryRules = &[]v1alpha1.RepositoryRuleset{} })
 			cr.Spec.ForProvider.Org = "acme"
 			if tc.forbiddenBefore {
-				metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
+				metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetsForbidden, true)
 				cr.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonRulesetsForbidden})
 			}
 
@@ -5716,8 +5716,8 @@ func TestObserveRulesetListForbiddenWithoutDeclaredRulesets(t *testing.T) {
 			if condition := cr.GetCondition(typeRulesetsPartial); condition.Status != corev1.ConditionFalse || condition.Reason != reasonRulesetsReconciled || condition.Message != "" {
 				t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", condition.Status, condition.Reason, condition.Message, reasonRulesetsReconciled)
 			}
-			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
-				t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
+			if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+				t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 0", got)
 			}
 		})
 	}
@@ -5739,8 +5739,8 @@ func TestObserveRulesetListAllowedClearsRulesetsPartial(t *testing.T) {
 	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsReconciled || got.Message != "" {
 		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsReconciled)
 	}
-	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
-		t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetsForbidden)); got != 0 {
+		t.Errorf("unreconcilable{dimension=rulesets_forbidden} = %v, want 0", got)
 	}
 }
 
@@ -5782,7 +5782,7 @@ func TestObserveInvalidRulesetsSetRulesetsPartial(t *testing.T) {
 			if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, telemetry.DimensionRulesetSpec)); got != 1 {
 				t.Errorf("unreconcilable{dimension=ruleset_spec} = %v, want 1", got)
 			}
-			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters} {
+			for _, dimension := range []string{telemetry.DimensionRulesetsForbidden, telemetry.DimensionRulesetParameters} {
 				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != 0 {
 					t.Errorf("unreconcilable{dimension=%s} = %v, want 0: nothing was read", dimension, got)
 				}
@@ -5874,7 +5874,7 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			metrics := telemetry.NewForTest()
-			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesets, true)
+			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetsForbidden, true)
 			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetParameters, true)
 			metrics.SetRepositoryUnreconcilable("acme", repo, telemetry.DimensionRulesetSpec, true)
 			tc.cr.Spec.ForProvider.Org = "acme"
@@ -5886,7 +5886,7 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 			if got := tc.cr.GetCondition(typeRulesetsPartial).Status; got != corev1.ConditionFalse {
 				t.Errorf("RulesetsPartial = %v, want False", got)
 			}
-			for _, dimension := range []string{telemetry.DimensionRulesets, telemetry.DimensionRulesetParameters, telemetry.DimensionRulesetSpec} {
+			for _, dimension := range []string{telemetry.DimensionRulesetsForbidden, telemetry.DimensionRulesetParameters, telemetry.DimensionRulesetSpec} {
 				if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, dimension)); got != 0 {
 					t.Errorf("unreconcilable{dimension=%s} = %v, want 0", dimension, got)
 				}
