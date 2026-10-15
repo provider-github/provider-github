@@ -5428,9 +5428,10 @@ func TestObserveUnreadRulesetsClearRulesetsPartial(t *testing.T) {
 	}
 }
 
-// While GitHub refuses rulesets, Update leaves them out and brings the rest of the
-// repository to the CR, so the topics converge and Synced can turn True. Without the
-// refusal reported, Update syncs rulesets as before.
+// While GitHub answers the ruleset list with 403, Update leaves rulesets out and brings
+// the rest of the repository to the CR, so the topics converge and Synced can turn True.
+// The CR carries no RulesetsPartial here: Observe returns early on other drift, and the
+// first reconcile after an upgrade has no condition yet, so Update decides from the list.
 func TestUpdateSkipsRulesetsWhileForbidden(t *testing.T) {
 	var replaced []string
 	repos := upToDateRepositories(nil)
@@ -5441,47 +5442,40 @@ func TestUpdateSkipsRulesetsWhileForbidden(t *testing.T) {
 		replaced = topics
 		return topics, fake.GenerateEmptyResponse(), nil
 	}
-	lists := 0
-	rs := rulesetsForbidden(t)
-	forbiddenList := rs.MockGetAllRulesets
-	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
-		lists++
-		return forbiddenList(ctx, owner, repo, opts)
-	}
-	e := external{github: clientFor(repos, rs)}
-	newCR := func() *v1alpha1.Repository {
-		cr := repository(withDifferentTopics())
-		cr.Spec.ForProvider.Webhooks = nil
-		cr.Spec.ForProvider.BranchProtectionRules = nil
-		return cr
-	}
+	cr := repository(withDifferentTopics())
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
 
-	cr := newCR()
-	if got, err := e.Observe(context.Background(), cr); err != nil || got.ResourceUpToDate {
-		t.Fatalf("Observe = %+v, %v; want topic drift and no error", got, err)
-	}
-	lists = 0
-	if _, err := e.Update(context.Background(), cr); err != nil {
+	if _, err := (&external{github: clientFor(repos, rulesetsForbidden(t))}).Update(context.Background(), cr); err != nil {
 		t.Fatalf("Update while forbidden: %v", err)
-	}
-	if lists != 0 {
-		t.Errorf("GetAllRulesets calls during Update = %d, want 0 while GitHub refuses rulesets", lists)
 	}
 	if diff := cmp.Diff(cr.Spec.ForProvider.Topics, replaced); diff != "" {
 		t.Errorf("topics sent: -want, +got:\n%s", diff)
 	}
+}
 
-	_, err := e.Update(context.Background(), newCR())
-	if !ghclient.Is403(err) || lists != 1 {
-		t.Errorf("Update without RulesetsPartial: error = %v, GetAllRulesets calls = %d; want the list's 403 after 1 call", err, lists)
+// A ruleset list that fails for any reason other than 403 fails the update, so a
+// transient error never passes for a refused feature.
+func TestUpdateRulesetListErrorFails(t *testing.T) {
+	errBoom := errors.New("boom")
+	rs := rulesetsWithoutWrites(t)
+	rs.MockGetAllRulesets = func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+		return nil, nil, errBoom
 	}
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr := repository()
+	cr.Spec.ForProvider.Webhooks = nil
+	cr.Spec.ForProvider.BranchProtectionRules = nil
 
-	// Unmanaged parameters are reset by the update, so they leave the rulesets in it.
-	unmanaged := newCR()
-	unmanaged.SetConditions(xpv1.Condition{Type: typeRulesetsPartial, Status: corev1.ConditionTrue, Reason: reasonUnmanagedParameters})
-	_, err = e.Update(context.Background(), unmanaged)
-	if !ghclient.Is403(err) || lists != 2 {
-		t.Errorf("Update with unmanaged parameters reported: error = %v, GetAllRulesets calls = %d; want the list's 403 after 2 calls in all", err, lists)
+	_, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr)
+	if diff := cmp.Diff(errBoom, err, test.EquateErrors()); diff != "" {
+		t.Errorf("Update(...): -want error, +got error:\n%s", diff)
 	}
 }
 

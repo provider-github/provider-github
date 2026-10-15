@@ -3216,6 +3216,10 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	}
 	// Fetch the current repository rules from GitHub
 	ghRepoRules, err := getRepositoryRules(ctx, gh, cr.Spec.ForProvider.Org, repoName)
+	if ghclient.Is403(err) {
+		// GitHub refuses rulesets on this repository; Observe reports it through RulesetsPartial.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -3348,9 +3352,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 			return managed.ExternalUpdate{}, err
 		}
 	}
-	// Rulesets wait while Observe reports GitHub refusing them, so the rest still converges.
-	rulesetsForbidden := cr.GetCondition(typeRulesetsPartial).Reason == reasonRulesetsForbidden
-	if cr.Spec.ForProvider.RepositoryRules != nil && !rulesetsForbidden {
+	if cr.Spec.ForProvider.RepositoryRules != nil {
 		err = updateRepositoryRules(ctx, cr, c.github, name)
 		if err != nil {
 			return managed.ExternalUpdate{}, err
