@@ -4774,6 +4774,26 @@ func TestObserveUnmanagedParametersSetRulesetsPartial(t *testing.T) {
 	}
 }
 
+// The next update resets a nested parameter as well, so RulesetsPartial names it by its
+// path inside the rule's parameters.
+func TestObserveNestedUnmanagedParameterNamesItsPath(t *testing.T) {
+	rs := upToDateRulesets()
+	rulesetWithRules(rs, append(pullRequestOnGitHub()[:6], &rulesets.Rule{Type: "pull_request", Parameters: json.RawMessage(`{
+		"dismiss_stale_reviews_on_push": true,
+		"dismissal_restriction": {"allowed_actors": [], "enabled": false, "foo": true},
+		"required_approving_review_count": 2
+	}`)}))
+	cr := repository(withPullRequestRule(2))
+	want := "ruleset test-ruleset-1: rule pull_request has parameter dismissal_restriction.foo that this provider does not manage; GitHub resets it when the ruleset is next updated"
+
+	if _, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionTrue || got.Reason != reasonUnmanagedParameters || got.Message != want {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", got.Status, got.Reason, got.Message, reasonUnmanagedParameters, want)
+	}
+}
+
 // A surplus ruleset is deleted, never updated, so its parameters leave RulesetsPartial False.
 func TestObserveSurplusRulesetParametersLeaveRulesetsPartialFalse(t *testing.T) {
 	surplus := func() *rulesets.Ruleset {

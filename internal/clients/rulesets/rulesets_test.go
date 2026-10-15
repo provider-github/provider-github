@@ -239,6 +239,52 @@ func TestUnmanagedParameters(t *testing.T) {
 		"UnmodelledRuleType": {
 			rule: &Rule{Type: "workflows", Parameters: json.RawMessage(`{"workflows":[]}`)},
 		},
+		"UnknownKeyInDismissalRestriction": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{"dismissal_restriction":{"allowed_actors":[],"enabled":true,"foo":1}}`)},
+			want: []string{"dismissal_restriction.foo"},
+		},
+		"UnknownKeyInOneRequiredReviewer": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{"required_reviewers":[
+				{"file_patterns":["*.go"],"minimum_approvals":1,"reviewer":{"id":1,"type":"Team"}},
+				{"file_patterns":["*.md"],"minimum_approvals":1,"reviewer":{"id":2,"type":"Team"},"bar":true}
+			]}`)},
+			want: []string{"required_reviewers[].bar"},
+		},
+		"UnknownKeyInRequiredReviewerActor": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{"required_reviewers":[{"reviewer":{"id":1,"type":"Team","slug":"core"}}]}`)},
+			want: []string{"required_reviewers[].reviewer.slug"},
+		},
+		"SameUnknownKeyInEveryStatusCheck": {
+			rule: &Rule{Type: "required_status_checks", Parameters: json.RawMessage(`{"required_status_checks":[
+				{"context":"build","baz":"x"},
+				{"context":"test","integration_id":1,"baz":"y"}
+			]}`)},
+			want: []string{"required_status_checks[].baz"},
+		},
+		"UnknownKeyInCodeScanningTool": {
+			rule: &Rule{Type: "code_scanning", Parameters: json.RawMessage(`{"code_scanning_tools":[{"alerts_threshold":"errors","security_alerts_threshold":"high_or_higher","tool":"CodeQL","qux":[]}]}`)},
+			want: []string{"code_scanning_tools[].qux"},
+		},
+		"TopLevelAndNestedUnknownKeys": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{"zeta":1,"required_reviewers":[{"bar":true}],"dismissal_restriction":{"foo":1},"alpha":2}`)},
+			want: []string{"alpha", "dismissal_restriction.foo", "required_reviewers[].bar", "zeta"},
+		},
+		"NullNestedObject": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{"dismissal_restriction":null,"required_reviewers":null}`)},
+		},
+		// GitHub returns empty and null values for keys the provider models. They are
+		// managed keys whatever their value, so a check that re-encodes the decoded
+		// struct, which drops omitempty fields holding null, must not report them.
+		"KnownNestedKeysWithEmptyValuesAreManaged": {
+			rule: &Rule{Type: "pull_request", Parameters: json.RawMessage(`{
+				"dismissal_restriction":{"allowed_actors":[],"enabled":false},
+				"require_extra_approval_for_unattributed_changes":null,
+				"required_reviewers":[{"file_patterns":[],"minimum_approvals":0,"reviewer":{"id":0,"type":""}}]
+			}`)},
+		},
+		"KnownStatusCheckKeysWithEmptyValuesAreManaged": {
+			rule: &Rule{Type: "required_status_checks", Parameters: json.RawMessage(`{"required_status_checks":[{"context":"","integration_id":null}]}`)},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

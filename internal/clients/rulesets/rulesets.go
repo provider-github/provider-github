@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -266,32 +267,63 @@ func IsModelled(ruleType string) bool {
 	return ok
 }
 
-// UnmanagedParameters returns, sorted, the top-level keys of rule's parameters that
-// its rule type's parameter struct has no JSON field for. It returns nil for a rule
-// type the provider does not model and for parameters that are not a JSON object.
+// UnmanagedParameters returns, sorted, the key paths of rule's parameters, at any
+// depth, that the rule type's parameter structs have no JSON field for. A path joins
+// keys with dots and marks an array element with [], as in required_reviewers[].key.
+// It returns nil for a rule type the provider does not model and for parameters that
+// are not a JSON object.
 func UnmanagedParameters(rule *Rule) []string {
 	i, ok := modelledRuleFields[rule.Type]
 	if !ok || len(rule.Parameters) == 0 {
 		return nil
 	}
-	var params map[string]json.RawMessage
-	if err := json.Unmarshal(rule.Parameters, &params); err != nil {
-		return nil
+	paths := map[string]bool{}
+	unmanagedPaths(rule.Parameters, modelledRulesType.Field(i).Type, "", paths)
+	return slices.Sorted(maps.Keys(paths))
+}
+
+// unmanagedPaths adds to paths the key paths in raw, under prefix, that t has no JSON
+// field for. It walks the struct tags of t, so a known key counts as managed whatever
+// value GitHub returns for it. A map, an interface or a scalar ends the walk, and a
+// JSON null or a value of another shape adds nothing.
+func unmanagedPaths(raw json.RawMessage, t reflect.Type, prefix string, paths map[string]bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
 	}
-	known := map[string]bool{}
-	paramsType := modelledRulesType.Field(i).Type.Elem()
-	for j := range paramsType.NumField() {
-		name, _, _ := strings.Cut(paramsType.Field(j).Tag.Get("json"), ",")
-		known[name] = true
-	}
-	var unmanaged []string
-	for key := range params {
-		if !known[key] {
-			unmanaged = append(unmanaged, key)
+	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		var elements []json.RawMessage
+		if json.Unmarshal(raw, &elements) != nil {
+			return
+		}
+		for _, element := range elements {
+			unmanagedPaths(element, t.Elem(), prefix+"[]", paths)
+		}
+	case reflect.Struct:
+		var object map[string]json.RawMessage
+		if json.Unmarshal(raw, &object) != nil {
+			return
+		}
+		fields := map[string]reflect.Type{}
+		for j := range t.NumField() {
+			field := t.Field(j)
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if field.IsExported() && name != "-" {
+				fields[name] = field.Type
+			}
+		}
+		for key, value := range object {
+			path := key
+			if prefix != "" {
+				path = prefix + "." + key
+			}
+			if fieldType, ok := fields[key]; ok {
+				unmanagedPaths(value, fieldType, path, paths)
+			} else {
+				paths[path] = true
+			}
 		}
 	}
-	slices.Sort(unmanaged)
-	return unmanaged
 }
 
 // Decode returns the rules the provider models, with their modelled parameters.
