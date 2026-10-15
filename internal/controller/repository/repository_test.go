@@ -3636,6 +3636,37 @@ func TestUpdateLeavesRulesetWithUnmanagedRuleTypes(t *testing.T) {
 	}
 }
 
+// Reading the rulesets leaves the caller's CR map as it is: the names of the rulesets
+// left as they are come back in report.skipped, and Observe and Update drop them from
+// the compare and the diff themselves.
+func TestGetRepositoryRulesWithConfigReportsSkippedRulesets(t *testing.T) {
+	rules := *repository(withSecondRuleset()).Spec.ForProvider.RepositoryRules
+	crMap, err := getRepositoryRulesMapFromCr(rules)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesMapFromCr: %v", err)
+	}
+	want, _ := getRepositoryRulesMapFromCr(rules)
+	gh := clientFor(upToDateRepositories(nil), twoRulesets(func(*rulesets.Ruleset) {}, withRuleTypes("repository_create")))
+	ghRulesets, err := getRepositoryRules(context.Background(), gh, "acme", repo)
+	if err != nil {
+		t.Fatalf("getRepositoryRules: %v", err)
+	}
+
+	ghMap, report, err := getRepositoryRulesWithConfig(context.Background(), gh, "acme", repo, ghRulesets, crMap)
+	if err != nil {
+		t.Fatalf("getRepositoryRulesWithConfig: %v", err)
+	}
+	if diff := cmp.Diff(want, crMap); diff != "" {
+		t.Errorf("crRulesets after the call: -want, +got:\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"test-ruleset-2"}, report.skipped); diff != "" {
+		t.Errorf("report.skipped: -want, +got:\n%s", diff)
+	}
+	if _, ok := ghMap["test-ruleset-2"]; ok {
+		t.Errorf("returned map holds test-ruleset-2; a skipped ruleset is left out of it")
+	}
+}
+
 // Unmanaged rule types and unmanaged parameters on different rulesets are both named:
 // the reason is UnmanagedRuleTypes, the rule-type sentences come first, and the
 // ruleset_parameters gauge is 1.

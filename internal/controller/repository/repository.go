@@ -342,6 +342,10 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				setRulesetsPartialCondition(cr, nil, nil, report)
 				c.recordRulesetsUnreconcilable(cr)
 
+				// Rulesets left as they are drop out of the compare.
+				for _, name := range report.skipped {
+					delete(crRepositoryRulesToConfig, name)
+				}
 				if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
 					return notUpToDate, nil
 				}
@@ -442,10 +446,12 @@ const (
 
 // rulesetReport lists, sorted, one sentence per managed ruleset left as it is because
 // it holds rule types the provider does not model, and one per rule holding
-// parameters the provider does not model.
+// parameters the provider does not model. skipped holds the names of those rulesets
+// left as they are, sorted.
 type rulesetReport struct {
 	unmanagedTypes      []string
 	unmanagedParameters []string
+	skipped             []string
 }
 
 // setRulesetsPartialCondition carries the message from invalid, the error naming the
@@ -2551,10 +2557,10 @@ func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRules
 // getRepositoryRulesWithConfig returns the repository's rulesets in CR form, keyed by
 // name. It fetches the rulesets the CR names; the others are listed by name only,
 // because they are going to be deleted. A fetched ruleset holding rule types the
-// provider does not model is left out of the result and removed from crRulesets as
-// well, so compare and diff leave it as it is. The report names those rulesets and
-// the rules of the other fetched rulesets that hold parameters the provider does not
-// manage.
+// provider does not model is left out of the result, and its name is in
+// report.skipped, so the callers drop it from their CR map as well and compare and
+// diff leave it as it is. The report names those rulesets and the rules of the other
+// fetched rulesets that hold parameters the provider does not manage.
 //
 //nolint:gocyclo
 func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, rulesetReport, error) {
@@ -2572,7 +2578,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
 			report.unmanagedTypes = append(report.unmanagedTypes, fmt.Sprintf("ruleset %s has rule types this provider does not manage (%s); it is left as it is until they are removed on GitHub or modelled by the provider", rule.Name, strings.Join(types, ", ")))
-			delete(crRulesets, rule.Name)
+			report.skipped = append(report.skipped, rule.Name)
 			continue
 		}
 		for _, r := range rRuleset.Rules {
@@ -2747,6 +2753,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 
 	slices.Sort(report.unmanagedTypes)
 	slices.Sort(report.unmanagedParameters)
+	slices.Sort(report.skipped)
 	return rulesToConfig, report, nil
 
 }
@@ -3260,10 +3267,14 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 		return err
 	}
 	// Generate a map of the repository rules from GitHub. Rulesets holding rule types the
-	// provider does not model leave both maps, so the diff leaves them as they are.
-	ghRToConfig, _, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
+	// provider does not model are left out of it and named in report.skipped.
+	ghRToConfig, report, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
 	if err != nil {
 		return err
+	}
+	// Rulesets left as they are drop out of the diff.
+	for _, name := range report.skipped {
+		delete(crRToConfig, name)
 	}
 	// Determine which rules need to be deleted, added, or updated
 	toDelete, toAdd, toUpdate := util.DiffRepositoryRulesets(ghRToConfig, crRToConfig)
