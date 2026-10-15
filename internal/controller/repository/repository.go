@@ -317,7 +317,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		crRepositoryRulesToConfig, invalid := getRepositoryRulesMapFromCr(*cr.Spec.ForProvider.RepositoryRules)
 		// An invalid spec leaves the rulesets unread; the other blocks still decide ResourceUpToDate.
 		if invalid != nil {
-			setRulesetsPartialCondition(cr, invalid, nil, nil)
+			setRulesetsPartialCondition(cr, invalid, nil, rulesetReport{})
 			c.recordRulesetsUnreconcilable(cr)
 		} else {
 			ghRepositoryRules, err := getRepositoryRules(ctx, c.github, cr.Spec.ForProvider.Org, name)
@@ -329,17 +329,17 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 				// The refusal leaves the declared rulesets unapplied; a repository that declares
 				// none already has the state it asks for.
 				if len(*cr.Spec.ForProvider.RepositoryRules) > 0 {
-					setRulesetsPartialCondition(cr, nil, err, nil)
+					setRulesetsPartialCondition(cr, nil, err, rulesetReport{})
 				} else {
-					setRulesetsPartialCondition(cr, nil, nil, nil)
+					setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
 				}
 				c.recordRulesetsUnreconcilable(cr)
 			} else {
-				ghRepositoryRulesToConfig, unmanagedParameters, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
+				ghRepositoryRulesToConfig, report, err := getRepositoryRulesWithConfig(ctx, c.github, cr.Spec.ForProvider.Org, name, ghRepositoryRules, crRepositoryRulesToConfig)
 				if err != nil {
 					return managed.ExternalObservation{}, err
 				}
-				setRulesetsPartialCondition(cr, nil, nil, unmanagedParameters)
+				setRulesetsPartialCondition(cr, nil, nil, report)
 				c.recordRulesetsUnreconcilable(cr)
 
 				if !cmp.Equal(crRepositoryRulesToConfig, ghRepositoryRulesToConfig) {
@@ -348,7 +348,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			}
 		}
 	} else {
-		setRulesetsPartialCondition(cr, nil, nil, nil)
+		setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
 		c.recordRulesetsUnreconcilable(cr)
 	}
 
@@ -427,21 +427,32 @@ func setArchivedCondition(cr *v1alpha1.Repository, archived bool, skippedAdds []
 // Condition surfaced while a ruleset in the spec lists the same ref pattern or bypass
 // actor twice, while GitHub answers the ruleset list with 403 on a repository that
 // declares rulesets, such as a private one whose plan has no rulesets, or while a
-// managed ruleset holds parameters the provider does not model. An invalid spec leaves
-// the list unread and a 403 leaves nothing fetched, so one reason at a time applies.
+// managed ruleset holds rule types or parameters the provider does not model. An
+// invalid spec leaves the list unread and a 403 leaves nothing fetched, so either
+// reason stands alone. While rulesets hold both unmanaged rule types and unmanaged
+// parameters, the reason is UnmanagedRuleTypes and the message names both.
 const (
 	typeRulesetsPartial       xpv1.ConditionType   = "RulesetsPartial"
 	reasonInvalidRulesets     xpv1.ConditionReason = "InvalidRulesets"
 	reasonRulesetsForbidden   xpv1.ConditionReason = "RulesetsForbidden"
+	reasonUnmanagedRuleTypes  xpv1.ConditionReason = "UnmanagedRuleTypes"
 	reasonUnmanagedParameters xpv1.ConditionReason = "UnmanagedParameters"
 	reasonRulesetsReconciled  xpv1.ConditionReason = "RulesetsReconciled"
 )
 
+// rulesetReport lists, sorted, one sentence per managed ruleset left as it is because
+// it holds rule types the provider does not model, and one per rule holding
+// parameters the provider does not model.
+type rulesetReport struct {
+	unmanagedTypes      []string
+	unmanagedParameters []string
+}
+
 // setRulesetsPartialCondition carries the message from invalid, the error naming the
 // duplicate in the spec, GitHub's message from forbidden, the 403 of the ruleset list,
-// or the sentences naming unmanaged parameters, in that order, and reports False when
-// there are none.
-func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden error, unmanagedParameters []string) {
+// or the sentences of report, unmanaged rule types first, in that order, and reports
+// False when there are none.
+func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden error, report rulesetReport) {
 	c := xpv1.Condition{Type: typeRulesetsPartial, LastTransitionTime: metav1.Now()}
 	switch {
 	case invalid != nil:
@@ -457,10 +468,14 @@ func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden err
 		c.Status = corev1.ConditionTrue
 		c.Reason = reasonRulesetsForbidden
 		c.Message = "GitHub answers the ruleset list with 403, so rulesets are left as they are: " + msg
-	case len(unmanagedParameters) > 0:
+	case len(report.unmanagedTypes) > 0:
+		c.Status = corev1.ConditionTrue
+		c.Reason = reasonUnmanagedRuleTypes
+		c.Message = strings.Join(slices.Concat(report.unmanagedTypes, report.unmanagedParameters), "; ")
+	case len(report.unmanagedParameters) > 0:
 		c.Status = corev1.ConditionTrue
 		c.Reason = reasonUnmanagedParameters
-		c.Message = strings.Join(unmanagedParameters, "; ")
+		c.Message = strings.Join(report.unmanagedParameters, "; ")
 	default:
 		c.Status = corev1.ConditionFalse
 		c.Reason = reasonRulesetsReconciled
@@ -469,11 +484,11 @@ func setRulesetsPartialCondition(cr *v1alpha1.Repository, invalid, forbidden err
 }
 
 // recordRulesetsUnreconcilable publishes the ruleset_spec, rulesets and ruleset_parameters
-// dimensions, each from its reason of the RulesetsPartial condition.
+// dimensions, each from its reasons of the RulesetsPartial condition.
 func (c *external) recordRulesetsUnreconcilable(cr *v1alpha1.Repository) {
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesetSpec, typeRulesetsPartial, reasonInvalidRulesets)
 	c.recordUnreconcilable(cr, telemetry.DimensionRulesets, typeRulesetsPartial, reasonRulesetsForbidden)
-	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedParameters)
+	c.recordUnreconcilable(cr, telemetry.DimensionRulesetParameters, typeRulesetsPartial, reasonUnmanagedRuleTypes, reasonUnmanagedParameters)
 }
 
 // recordUnreconcilable publishes the dimension's gauge from its condition's current status.
@@ -514,7 +529,7 @@ func (c *external) observeArchived(ctx context.Context, cr *v1alpha1.Repository,
 	cr.Status.AtProvider.UnappliedSettings = nil
 	setSettingsPartialCondition(cr, nil)
 	c.recordUnreconcilable(cr, telemetry.DimensionSettings, typeSettingsPartial)
-	setRulesetsPartialCondition(cr, nil, nil, nil)
+	setRulesetsPartialCondition(cr, nil, nil, rulesetReport{})
 	c.recordRulesetsUnreconcilable(cr)
 
 	setArchivedCondition(cr, true, skippedAdds)
@@ -2535,13 +2550,16 @@ func normalizeRuleset(rule v1alpha1.RepositoryRuleset) (v1alpha1.RepositoryRules
 
 // getRepositoryRulesWithConfig returns the repository's rulesets in CR form, keyed by
 // name. It fetches the rulesets the CR names; the others are listed by name only,
-// because they are going to be deleted. It also returns, sorted, one sentence per rule
-// of a fetched ruleset that holds parameters the provider does not manage.
+// because they are going to be deleted. A fetched ruleset holding rule types the
+// provider does not model is left out of the result and removed from crRulesets as
+// well, so compare and diff leave it as it is. The report names those rulesets and
+// the rules of the other fetched rulesets that hold parameters the provider does not
+// manage.
 //
 //nolint:gocyclo
-func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, []string, error) {
+func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owner, repo string, ghRulesets []*rulesets.Ruleset, crRulesets map[string]v1alpha1.RepositoryRuleset) (map[string]v1alpha1.RepositoryRuleset, rulesetReport, error) {
 	rulesToConfig := make(map[string]v1alpha1.RepositoryRuleset, len(ghRulesets))
-	var unmanagedParameters []string
+	var report rulesetReport
 
 	for _, rule := range ghRulesets {
 		if _, inCR := crRulesets[rule.Name]; !inCR {
@@ -2550,14 +2568,16 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		}
 		rRuleset, _, err := gh.Rulesets.GetRuleset(ctx, owner, repo, *rule.ID, false)
 		if err != nil {
-			return nil, nil, err
+			return nil, rulesetReport{}, err
 		}
 		if types := unmanagedRuleTypes(rRuleset.Rules); len(types) > 0 {
-			return nil, nil, fmt.Errorf("ruleset %s has rule types this provider does not manage (%s); remove them on GitHub or stop managing repositoryRules for this repository", rule.Name, strings.Join(types, ", "))
+			report.unmanagedTypes = append(report.unmanagedTypes, fmt.Sprintf("ruleset %s has rule types this provider does not manage (%s); it is left as it is until they are removed on GitHub or modelled by the provider", rule.Name, strings.Join(types, ", ")))
+			delete(crRulesets, rule.Name)
+			continue
 		}
 		for _, r := range rRuleset.Rules {
 			if keys := rulesets.UnmanagedParameters(r); len(keys) > 0 {
-				unmanagedParameters = append(unmanagedParameters, unmanagedParametersSentence(rule.Name, r.Type, keys))
+				report.unmanagedParameters = append(report.unmanagedParameters, unmanagedParametersSentence(rule.Name, r.Type, keys))
 			}
 		}
 		target := pointer.Deref(rule.Target, "")
@@ -2598,7 +2618,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		if rRuleset.Rules != nil {
 			rules, err := rulesets.Decode(rRuleset.Rules)
 			if err != nil {
-				return nil, nil, err
+				return nil, rulesetReport{}, err
 			}
 			if rules.Creation != nil {
 				ruleset.Rules.Creation = util.ToBoolPtr(true)
@@ -2632,7 +2652,7 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 			}
 			if params := rules.PullRequest; params != nil {
 				if ruleset.Rules.PullRequest, err = pullRequestFromGitHub(params); err != nil {
-					return nil, nil, fmt.Errorf("rule pull_request: %w", err)
+					return nil, rulesetReport{}, fmt.Errorf("rule pull_request: %w", err)
 				}
 			}
 			if params := rules.RequiredDeployments; params != nil {
@@ -2725,8 +2745,9 @@ func getRepositoryRulesWithConfig(ctx context.Context, gh *ghclient.Client, owne
 		rulesToConfig[rule.Name] = ruleset
 	}
 
-	slices.Sort(unmanagedParameters)
-	return rulesToConfig, unmanagedParameters, nil
+	slices.Sort(report.unmanagedTypes)
+	slices.Sort(report.unmanagedParameters)
+	return rulesToConfig, report, nil
 
 }
 
@@ -2754,7 +2775,7 @@ func unmanagedParametersSentence(ruleset, ruleType string, keys []string) string
 }
 
 // unmanagedRuleTypes returns the sorted, unique types of the unmodelled rules in a
-// ruleset. An update would delete these rules, so the caller stops before writing.
+// ruleset. An update would delete these rules, so the caller leaves the ruleset as it is.
 func unmanagedRuleTypes(rules []*rulesets.Rule) []string {
 	var types []string
 	for _, rule := range rules {
@@ -3238,7 +3259,8 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	if err != nil {
 		return err
 	}
-	// Generate a map of the repository rules from GitHub
+	// Generate a map of the repository rules from GitHub. Rulesets holding rule types the
+	// provider does not model leave both maps, so the diff leaves them as they are.
 	ghRToConfig, _, err := getRepositoryRulesWithConfig(ctx, gh, cr.Spec.ForProvider.Org, repoName, ghRepoRules, crRToConfig)
 	if err != nil {
 		return err

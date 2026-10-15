@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -3459,7 +3460,7 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 				"license_compliance_scanning", "require_secret_scanning_alert_resolution"),
 		},
 		"SortedWithModelled": {
-			reason: "the error lists the unmanaged types sorted, whatever order GitHub sends them in",
+			reason: "the condition lists the unmanaged types sorted, whatever order GitHub sends them in",
 			rules:  decode("repository_transfer", "creation", "repository_create"),
 			want:   []string{"repository_create", "repository_transfer"},
 		},
@@ -3484,51 +3485,180 @@ func TestUnmanagedRuleTypes(t *testing.T) {
 	}
 }
 
-// Observe fails and writes nothing when a ruleset holds an unmodelled rule type,
-// including types GitHub adds later.
-func TestObserveRulesetWithUnmanagedRuleFails(t *testing.T) {
+const secondRulesetID int64 = 789
+
+// withSecondRuleset declares a second ruleset, test-ruleset-2, identical to the first.
+func withSecondRuleset() repositoryModifier {
+	return func(cr *v1alpha1.Repository) {
+		second := (*cr.Spec.ForProvider.RepositoryRules)[0]
+		second.Name = "test-ruleset-2"
+		*cr.Spec.ForProvider.RepositoryRules = append(*cr.Spec.ForProvider.RepositoryRules, second)
+	}
+}
+
+// twoRulesets fakes GitHub holding test-ruleset-1 and test-ruleset-2 as declared by
+// withSecondRuleset, each with its change applied.
+func twoRulesets(first, second func(*rulesets.Ruleset)) *fake.MockRulesetsClient {
+	held := func(id int64) *rulesets.Ruleset {
+		r := githubRuleset()[0]
+		if id == secondRulesetID {
+			r.ID = github.Ptr(secondRulesetID)
+			r.Name = "test-ruleset-2"
+			second(r)
+		} else {
+			first(r)
+		}
+		return r
+	}
+	return &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return []*rulesets.Ruleset{held(rr1Id), held(secondRulesetID)}, fake.GenerateEmptyResponse(), nil
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+			return held(rulesetID), fake.GenerateEmptyResponse(), nil
+		},
+	}
+}
+
+// withRuleTypes adds rules of the given types to a ruleset.
+func withRuleTypes(types ...string) func(*rulesets.Ruleset) {
+	return func(r *rulesets.Ruleset) {
+		for _, typ := range types {
+			r.Rules = append(r.Rules, &rulesets.Rule{Type: typ})
+		}
+	}
+}
+
+// withoutCreation drops the creation rule the CR declares, so the ruleset drifts.
+func withoutCreation(r *rulesets.Ruleset) {
+	r.Rules = slices.DeleteFunc(r.Rules, func(rule *rulesets.Rule) bool { return rule.Type == "creation" })
+}
+
+// An update would drop rules of a type the provider does not model, including types
+// GitHub adds later, so a managed ruleset holding one is left as it is and reported on
+// RulesetsPartial and the ruleset_parameters gauge. The other rulesets still decide
+// ResourceUpToDate: one ruleset edited in the GitHub UI must not freeze the repository.
+func TestObserveRulesetWithUnmanagedRuleTypesIsLeftAsItIs(t *testing.T) {
 	cases := map[string]struct {
-		types []string
-		want  string
+		types    []string
+		second   func(*rulesets.Ruleset)
+		upToDate bool
+		want     string
 	}{
 		"RepositoryTarget": {
-			types: []string{"repository_create"},
-			want:  "ruleset test-ruleset-1 has rule types this provider does not manage (repository_create); remove them on GitHub or stop managing repositoryRules for this repository",
+			types:    []string{"repository_create"},
+			second:   func(*rulesets.Ruleset) {},
+			upToDate: true,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider",
 		},
 		"OrganizationLevel": {
-			types: []string{"workflows", "repository_name"},
-			want:  "ruleset test-ruleset-1 has rule types this provider does not manage (repository_name, workflows); remove them on GitHub or stop managing repositoryRules for this repository",
+			types:    []string{"workflows", "repository_name"},
+			second:   func(*rulesets.Ruleset) {},
+			upToDate: true,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_name, workflows); it is left as it is until they are removed on GitHub or modelled by the provider",
+		},
+		"OtherRulesetDrifts": {
+			types:    []string{"repository_create"},
+			second:   withoutCreation,
+			upToDate: false,
+			want:     "ruleset test-ruleset-1 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider",
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			rs := upToDateRulesets()
-			rs.MockGetRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
-				r := githubRuleset()[0]
-				for _, typ := range tc.types {
-					r.Rules = append(r.Rules, &rulesets.Rule{Type: typ})
+			metrics := telemetry.NewForTest()
+			gauge := metrics.RepositoryUnreconcilableForTest()
+			cr := repository(withSecondRuleset())
+			cr.Spec.ForProvider.Org = "acme"
+			e := external{github: clientFor(upToDateRepositories(nil), twoRulesets(withRuleTypes(tc.types...), tc.second)), metrics: metrics}
+
+			got, err := e.Observe(context.Background(), cr)
+			if err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if got.ResourceUpToDate != tc.upToDate {
+				t.Errorf("ResourceUpToDate = %v, want %v: test-ruleset-2 alone decides it", got.ResourceUpToDate, tc.upToDate)
+			}
+			condition := cr.GetCondition(typeRulesetsPartial)
+			if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedRuleTypes || condition.Message != tc.want {
+				t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonUnmanagedRuleTypes, tc.want)
+			}
+			for dimension, want := range map[string]float64{
+				telemetry.DimensionRulesetParameters: 1,
+				telemetry.DimensionRulesets:          0,
+				telemetry.DimensionRulesetSpec:       0,
+			} {
+				if got := testutil.ToFloat64(gauge.WithLabelValues("acme", repo, dimension)); got != want {
+					t.Errorf("unreconcilable{dimension=%s} = %v, want %v", dimension, got, want)
 				}
-				return r, fake.GenerateEmptyResponse(), nil
-			}
-			rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("CreateRuleset called; a ruleset with unmanaged rules must not be written")
-				return nil, nil, nil
-			}
-			rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
-				t.Errorf("UpdateRuleset called; it would drop the %v rules", tc.types)
-				return nil, nil, nil
-			}
-			rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
-				t.Errorf("DeleteRuleset called; a ruleset with unmanaged rules must not be written")
-				return nil, nil
-			}
-
-			_, err := (&external{github: clientFor(upToDateRepositories(nil), rs)}).Observe(context.Background(), repository())
-
-			if diff := cmp.Diff(errors.New(tc.want), err, test.EquateErrors()); diff != "" {
-				t.Errorf("Observe(...): -want error, +got error:\n%s", diff)
 			}
 		})
+	}
+}
+
+// Update leaves a ruleset holding an unmodelled rule type as it is and still writes the
+// rest: the drifting ruleset is updated and the topics are replaced.
+func TestUpdateLeavesRulesetWithUnmanagedRuleTypes(t *testing.T) {
+	rs := twoRulesets(withRuleTypes("repository_create"), withoutCreation)
+	var updated []int64
+	rs.MockUpdateRuleset = func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		updated = append(updated, rulesetID)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockCreateRuleset = func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+		t.Errorf("CreateRuleset called for %q; both declared rulesets exist on GitHub", r.Name)
+		return &r, fake.GenerateEmptyResponse(), nil
+	}
+	rs.MockDeleteRuleset = func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+		t.Errorf("DeleteRuleset called for %d; both rulesets are declared", rulesetID)
+		return fake.GenerateEmptyResponse(), nil
+	}
+	repos := upToDateRepositories(nil)
+	repos.MockEdit = func(ctx context.Context, owner, r string, req *github.Repository) (*github.Repository, *github.Response, error) {
+		return req, fake.GenerateEmptyResponse(), nil
+	}
+	topicWrites := 0
+	repos.MockReplaceAllTopics = func(ctx context.Context, owner, r string, topics []string) ([]string, *github.Response, error) {
+		topicWrites++
+		return topics, fake.GenerateEmptyResponse(), nil
+	}
+	cr := settingsOnlyRepository()
+	cr.Spec.ForProvider.RepositoryRules = repository(withSecondRuleset()).Spec.ForProvider.RepositoryRules
+
+	if _, err := (&external{github: clientFor(repos, rs)}).Update(context.Background(), cr); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if diff := cmp.Diff([]int64{secondRulesetID}, updated); diff != "" {
+		t.Errorf("UpdateRuleset IDs: -want, +got:\n%s", diff)
+	}
+	if topicWrites != 1 {
+		t.Errorf("ReplaceAllTopics calls = %d, want 1", topicWrites)
+	}
+}
+
+// Unmanaged rule types and unmanaged parameters on different rulesets are both named:
+// the reason is UnmanagedRuleTypes, the rule-type sentences come first, and the
+// ruleset_parameters gauge is 1.
+func TestObserveUnmanagedRuleTypesAndParametersShareRulesetsPartial(t *testing.T) {
+	withUnmanagedParameter := func(r *rulesets.Ruleset) {
+		r.Rules = append(r.Rules, &rulesets.Rule{Type: "merge_queue", Parameters: json.RawMessage(`{"actor_controlled_merging":true}`)})
+	}
+	metrics := telemetry.NewForTest()
+	cr := repository(withSecondRuleset())
+	cr.Spec.ForProvider.Org = "acme"
+	e := external{github: clientFor(upToDateRepositories(nil), twoRulesets(withUnmanagedParameter, withRuleTypes("repository_create"))), metrics: metrics}
+	want := "ruleset test-ruleset-2 has rule types this provider does not manage (repository_create); it is left as it is until they are removed on GitHub or modelled by the provider; " +
+		"ruleset test-ruleset-1: rule merge_queue has parameter actor_controlled_merging that this provider does not manage; GitHub resets it when the ruleset is next updated"
+
+	if _, err := e.Observe(context.Background(), cr); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	condition := cr.GetCondition(typeRulesetsPartial)
+	if condition.Status != corev1.ConditionTrue || condition.Reason != reasonUnmanagedRuleTypes || condition.Message != want {
+		t.Errorf("RulesetsPartial = %v/%v %q, want True/%v %q", condition.Status, condition.Reason, condition.Message, reasonUnmanagedRuleTypes, want)
+	}
+	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesetParameters)); got != 1 {
+		t.Errorf("unreconcilable{dimension=ruleset_parameters} = %v, want 1", got)
 	}
 }
 
@@ -3557,8 +3687,8 @@ func withGitHubOnlyRuleset(rs *fake.MockRulesetsClient) {
 }
 
 // The unmanaged-rule guard covers only rulesets named in the CR. A ruleset not named there
-// is deleted, never updated, so no rule of it can be dropped; failing on it would block
-// the reconcile that removes it.
+// is deleted, never updated, so no rule of it can be dropped; leaving it as it is would
+// keep a ruleset the CR leaves out.
 func TestObserveGitHubOnlyRulesetWithUnmanagedRuleIsSurplus(t *testing.T) {
 	rs := upToDateRulesets()
 	withGitHubOnlyRuleset(rs)
