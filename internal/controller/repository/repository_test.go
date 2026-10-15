@@ -3813,6 +3813,108 @@ func TestUpdateRepositoryRulesDeletesGitHubOnlyRuleset(t *testing.T) {
 	}
 }
 
+const renamedRulesetID int64 = 790
+
+// renamedRulesets fakes GitHub holding the fixture's ruleset under the name old-name,
+// followed by kept copies named kept-0, kept-1, ... as declared by withKeptRulesets.
+// It logs every ruleset write in the order it is sent; createErr answers CreateRuleset.
+func renamedRulesets(kept int, createErr error) (*fake.MockRulesetsClient, *[]string) {
+	held := githubRuleset()
+	held[0].ID = github.Ptr(renamedRulesetID)
+	held[0].Name = "old-name"
+	for i := range kept {
+		r := githubRuleset()[0]
+		r.ID = github.Ptr(int64(1000 + i))
+		r.Name = fmt.Sprintf("kept-%d", i)
+		held = append(held, r)
+	}
+	var writes []string
+	rs := &fake.MockRulesetsClient{
+		MockGetAllRulesets: func(ctx context.Context, owner, repo string, opts *github.RepositoryListRulesetsOptions) ([]*rulesets.Ruleset, *github.Response, error) {
+			return held, fake.GenerateEmptyResponse(), nil
+		},
+		MockGetRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, includesParents bool) (*rulesets.Ruleset, *github.Response, error) {
+			for _, r := range held {
+				if *r.ID == rulesetID {
+					return r, fake.GenerateEmptyResponse(), nil
+				}
+			}
+			return nil, nil, fmt.Errorf("ruleset %d not held", rulesetID)
+		},
+		MockCreateRuleset: func(ctx context.Context, owner, repo string, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			writes = append(writes, "create "+r.Name)
+			if createErr != nil {
+				return nil, nil, createErr
+			}
+			return &r, fake.GenerateEmptyResponse(), nil
+		},
+		MockUpdateRuleset: func(ctx context.Context, owner, repo string, rulesetID int64, r rulesets.Ruleset) (*rulesets.Ruleset, *github.Response, error) {
+			writes = append(writes, fmt.Sprintf("update %d", rulesetID))
+			return &r, fake.GenerateEmptyResponse(), nil
+		},
+		MockDeleteRuleset: func(ctx context.Context, owner, repo string, rulesetID int64) (*github.Response, error) {
+			writes = append(writes, fmt.Sprintf("delete %d", rulesetID))
+			return fake.GenerateEmptyResponse(), nil
+		},
+	}
+	return rs, &writes
+}
+
+// withKeptRulesets declares kept-0, kept-1, ... identical to the fixture's ruleset.
+func withKeptRulesets(kept int) repositoryModifier {
+	return func(cr *v1alpha1.Repository) {
+		first := (*cr.Spec.ForProvider.RepositoryRules)[0]
+		for i := range kept {
+			r := first
+			r.Name = fmt.Sprintf("kept-%d", i)
+			*cr.Spec.ForProvider.RepositoryRules = append(*cr.Spec.ForProvider.RepositoryRules, r)
+		}
+	}
+}
+
+// A renamed ruleset is created before the old one is deleted, so the branch stays
+// protected while the create is in flight. Only when the creates would take the
+// repository over GitHub's cap of 75 rulesets do the surplus ones go first.
+func TestUpdateRepositoryRulesCreatesBeforeDeleting(t *testing.T) {
+	createNew := "create " + rr1name
+	deleteOld := fmt.Sprintf("delete %d", renamedRulesetID)
+	cases := map[string]struct {
+		kept int
+		want []string
+	}{
+		"Rename":         {kept: 0, want: []string{createNew, deleteOld}},
+		"ReachesCap":     {kept: 73, want: []string{createNew, deleteOld}},
+		"WouldExceedCap": {kept: 74, want: []string{deleteOld, createNew}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rs, writes := renamedRulesets(tc.kept, nil)
+			cr := repository(withKeptRulesets(tc.kept))
+			if err := updateRepositoryRules(context.Background(), cr, clientFor(upToDateRepositories(nil), rs), repo); err != nil {
+				t.Fatalf("updateRepositoryRules: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, *writes); diff != "" {
+				t.Errorf("ruleset writes: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+// When GitHub refuses the renamed ruleset (422, e.g. a rule the plan does not allow),
+// the old ruleset stays on GitHub and keeps protecting the branch until the spec is fixed.
+func TestUpdateRepositoryRulesFailedCreateKeepsOldRuleset(t *testing.T) {
+	refused := &github.ErrorResponse{Response: &http.Response{StatusCode: http.StatusUnprocessableEntity}, Message: "Validation Failed"}
+	rs, writes := renamedRulesets(0, refused)
+
+	err := updateRepositoryRules(context.Background(), repository(), clientFor(upToDateRepositories(nil), rs), repo)
+	if !errors.Is(err, refused) {
+		t.Errorf("updateRepositoryRules error = %v, want the 422 from CreateRuleset", err)
+	}
+	if diff := cmp.Diff([]string{"create " + rr1name}, *writes); diff != "" {
+		t.Errorf("ruleset writes: -want, +got:\n%s", diff)
+	}
+}
+
 // An empty repositoryRules list survives the provider's write-back as [], so the
 // rulesets on GitHub still get deleted.
 func TestRepositoryRulesEmptyListSurvivesWriteBack(t *testing.T) {

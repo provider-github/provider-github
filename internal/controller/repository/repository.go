@@ -3264,6 +3264,9 @@ func decimalToGitHub(s *string) (*float64, error) {
 	return &f, nil
 }
 
+// maxRulesetsPerRepository is GitHub's per-repository limit on rulesets.
+const maxRulesetsPerRepository = 75
+
 // updateRepositoryRules synchronizes the repository rules of a GitHub repository
 // to match with those detailed in the repository resource object.
 // It performs necessary additions, updates, or deletions based on the difference between
@@ -3295,10 +3298,21 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 	toDelete, toAdd, toUpdate := util.DiffRepositoryRulesets(ghRToConfig, crRToConfig)
 
 	// Delete the rules that are no longer needed
-	for name := range toDelete {
-		rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
-		_, err = gh.Rulesets.DeleteRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID)
-		if err != nil {
+	deleteRules := func() error {
+		for name := range toDelete {
+			rulesetID, _ := findRulesetIDByName(ghRepoRules, name)
+			_, err = gh.Rulesets.DeleteRuleset(ctx, cr.Spec.ForProvider.Org, repoName, rulesetID)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// Create and update before deleting, so a failed create leaves the old ruleset in place.
+	// Over GitHub's cap the surplus rulesets go first, so the creates fit.
+	deleteFirst := len(ghRepoRules)+len(toAdd) > maxRulesetsPerRepository
+	if deleteFirst {
+		if err := deleteRules(); err != nil {
 			return err
 		}
 	}
@@ -3324,6 +3338,9 @@ func updateRepositoryRules(ctx context.Context, cr *v1alpha1.Repository, gh *ghc
 		if err != nil {
 			return err
 		}
+	}
+	if !deleteFirst {
+		return deleteRules()
 	}
 	return nil
 }
