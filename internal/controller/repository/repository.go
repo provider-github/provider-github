@@ -424,7 +424,7 @@ const (
 	typeRulesetsPartial       xpv1.ConditionType   = "RulesetsPartial"
 	reasonRulesetsForbidden   xpv1.ConditionReason = "RulesetsForbidden"
 	reasonUnmanagedParameters xpv1.ConditionReason = "UnmanagedParameters"
-	reasonRulesetsListed      xpv1.ConditionReason = "RulesetsListed"
+	reasonRulesetsReconciled  xpv1.ConditionReason = "RulesetsReconciled"
 )
 
 // setRulesetsPartialCondition carries GitHub's message from forbidden, the 403 of the
@@ -448,7 +448,7 @@ func setRulesetsPartialCondition(cr *v1alpha1.Repository, forbidden error, unman
 		c.Message = strings.Join(unmanagedParameters, "; ")
 	default:
 		c.Status = corev1.ConditionFalse
-		c.Reason = reasonRulesetsListed
+		c.Reason = reasonRulesetsReconciled
 	}
 	cr.SetConditions(c)
 }

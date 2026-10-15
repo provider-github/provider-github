@@ -5340,8 +5340,8 @@ func TestObserveRulesetListAllowedClearsRulesetsPartial(t *testing.T) {
 		t.Fatalf("Observe(200): %v", err)
 	}
 
-	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsListed || got.Message != "" {
-		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsListed)
+	if got := cr.GetCondition(typeRulesetsPartial); got.Status != corev1.ConditionFalse || got.Reason != reasonRulesetsReconciled || got.Message != "" {
+		t.Errorf("RulesetsPartial = %v/%v %q, want False/%v with no message", got.Status, got.Reason, got.Message, reasonRulesetsReconciled)
 	}
 	if got := testutil.ToFloat64(metrics.RepositoryUnreconcilableForTest().WithLabelValues("acme", repo, telemetry.DimensionRulesets)); got != 0 {
 		t.Errorf("unreconcilable{dimension=rulesets} = %v, want 0", got)
