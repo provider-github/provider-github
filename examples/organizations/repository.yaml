@@ -92,18 +92,18 @@ spec:
       - name: test-ruleset-2
         target: branch
         bypassActors:
-          - actorId: 8743474
+          - actorId: 12345
             actorType: Team
             bypassMode: always
-          - actorId: 1
-            actorType: OrganizationAdmin
+          - actorType: OrganizationAdmin
             bypassMode: always
-          - actorId: 397599
+          - actorId: 67890
             actorType: Integration
             bypassMode: always
           - actorId: 2
             actorType: RepositoryRole
             bypassMode: always
+        # Ref patterns are full refs (refs/heads/..., refs/tags/...), ~DEFAULT_BRANCH or ~ALL.
         conditions:
           refName:
             include: []
@@ -126,10 +126,60 @@ spec:
             requireCodeOwnerReview: true
             requireLastPushApproval: true
             requiredReviewThreadResolution: true
+            allowedMergeMethods:
+              - squash
+            requiredReviewers:
+              - filePatterns:
+                  - "*.go"
+                minimumApprovals: 1
+                reviewer:
+                  id: 12345
+                  type: Team
           requiredStatusChecks:
             strictRequiredStatusChecksPolicy: true
+            doNotEnforceOnCreate: true
             requiredStatusChecks:
               - context: validate
+      - name: merge-queue
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          mergeQueue:
+            checkResponseTimeoutMinutes: 60
+            groupingStrategy: ALLGREEN
+            maxEntriesToBuild: 5
+            maxEntriesToMerge: 5
+            mergeMethod: SQUASH
+            minEntriesToMerge: 1
+            minEntriesToMergeWaitMinutes: 5
+          commitMessagePattern:
+            operator: regex
+            pattern: "^(feat|fix|chore): "
+---
+# Push rulesets take no conditions and need a private or internal repository
+# on a GitHub Team or Enterprise plan.
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: sample-private-repository
+spec:
+  forProvider:
+    description: This is a sample private repository
+    orgRef:
+      name: pgh-sample-organization
+    private: true
+    repositoryRules:
+      - name: no-binaries
+        target: push
+        rules:
+          fileExtensionRestriction:
+            restrictedFileExtensions:
+              - "*.exe"
+              - "*.zip"
 ---
 apiVersion: organizations.github.crossplane.io/v1alpha1
 kind: Repository
