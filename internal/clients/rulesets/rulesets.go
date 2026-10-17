@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/google/go-github/v90/github"
 )
 
@@ -338,7 +339,7 @@ func Decode(rules []*Rule) (*ModelledRules, error) {
 		params := reflect.New(modelledRulesType.Field(i).Type.Elem())
 		if params.Elem().Type() != emptyParametersType && len(rule.Parameters) > 0 {
 			if err := json.Unmarshal(rule.Parameters, params.Interface()); err != nil {
-				return nil, fmt.Errorf("rule %s: %w", rule.Type, err)
+				return nil, errors.Wrapf(err, "rule %s", rule.Type)
 			}
 		}
 		v.Field(i).Set(params)
@@ -360,7 +361,7 @@ func (m *ModelledRules) Encode() ([]*Rule, error) {
 		if field.Type().Elem() != emptyParametersType {
 			params, err := json.Marshal(field.Interface())
 			if err != nil {
-				return nil, fmt.Errorf("rule %s: %w", rule.Type, err)
+				return nil, errors.Wrapf(err, "rule %s", rule.Type)
 			}
 			rule.Parameters = params
 		}

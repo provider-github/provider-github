@@ -17,9 +17,9 @@ import (
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
 )
 
 // resolveAllCredentials extracts every credential entry on pc (the primary
@@ -31,9 +31,14 @@ import (
 // Secret key or an unpopulated value, neither of which the extractor
 // surfaces as an error on its own).
 func resolveAllCredentials(ctx context.Context, kube client.Client, pc *apisv1alpha1.ProviderConfig) ([]string, error) {
-	all := make([]apisv1alpha1.ProviderCredentials, 0, 1+len(pc.Spec.AdditionalCredentials))
-	all = append(all, pc.Spec.Credentials)
-	all = append(all, pc.Spec.AdditionalCredentials...)
+	return resolveCredentials(ctx, kube, pc.Spec)
+}
+
+// resolveCredentials is resolveAllCredentials for a bare ProviderConfigSpec.
+func resolveCredentials(ctx context.Context, kube client.Client, spec apisv1alpha1.ProviderConfigSpec) ([]string, error) {
+	all := make([]apisv1alpha1.ProviderCredentials, 0, 1+len(spec.AdditionalCredentials))
+	all = append(all, spec.Credentials)
+	all = append(all, spec.AdditionalCredentials...)
 
 	resolved := make([]string, 0, len(all))
 	for i, cd := range all {

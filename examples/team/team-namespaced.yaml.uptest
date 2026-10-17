@@ -1,0 +1,19 @@
+for: organizations.github.m.crossplane.io/v1alpha1/Team
+meta.upbound.io/example-id: organizations/v1alpha1/team
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-team-namespaced.sh
+crossplane.io/update-test: |
+  - field: description
+    value: Crossplane provider-github updated team description
+  - field: privacy
+    value: secret
+  - field: parent
+    value: developers
+    withValues:
+      privacy: closed
+  - field: members
+    skip:
+      reason: fixture-missing
+      evidence: "the test organization has no member login set aside for the suite, and adding a person to a team notifies them"
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"

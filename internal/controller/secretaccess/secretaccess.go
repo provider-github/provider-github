@@ -21,7 +21,6 @@ package secretaccess
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -29,17 +28,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 )
 
 // VisibilitySelected is the visibility under which a secret has a repository list.
 const VisibilitySelected = "selected"
 
 const (
-	reasonSecretNotFound     xpv1.ConditionReason = "SecretNotFound"
-	reasonVisibilityMismatch xpv1.ConditionReason = "VisibilityMismatch"
+	reasonSecretNotFound     xpv2.ConditionReason = "SecretNotFound"
+	reasonVisibilityMismatch xpv2.ConditionReason = "VisibilityMismatch"
 )
 
 // RepoLister lists the repositories that can use an organization secret.
@@ -48,25 +48,25 @@ type RepoLister interface {
 }
 
 // SecretNotFound is the Ready condition for a secret missing on GitHub.
-func SecretNotFound(name string) xpv1.Condition {
+func SecretNotFound(name string) xpv2.Condition {
 	return notReady(reasonSecretNotFound,
 		fmt.Sprintf("secret %s not found on GitHub; create it there first (this resource only manages repository access)", name))
 }
 
 // VisibilityMismatch is the Ready condition for a visibility the provider cannot change.
-func VisibilityMismatch(ghVisibility, specVisibility string) xpv1.Condition {
+func VisibilityMismatch(ghVisibility, specVisibility string) xpv2.Condition {
 	return notReady(reasonVisibilityMismatch,
 		fmt.Sprintf("visibility is %q on GitHub but %q in spec; change it on GitHub (the API cannot change visibility without the secret value)", ghVisibility, specVisibility))
 }
 
 // SecretNotFoundError is the Create error: the secret must exist on GitHub first.
 func SecretNotFoundError(name string) error {
-	return fmt.Errorf("secret %s not found on GitHub; create it there first", name)
+	return errors.Errorf("secret %s not found on GitHub; create it there first", name)
 }
 
-func notReady(reason xpv1.ConditionReason, message string) xpv1.Condition {
-	return xpv1.Condition{
-		Type:               xpv1.TypeReady,
+func notReady(reason xpv2.ConditionReason, message string) xpv2.Condition {
+	return xpv2.Condition{
+		Type:               xpv2.TypeReady,
 		Status:             corev1.ConditionFalse,
 		Reason:             reason,
 		Message:            message,
@@ -92,35 +92,51 @@ func RepoNames(refs []v1alpha1.SecretSelectedRepo) []string {
 	return names
 }
 
-// ListRepoNames returns the names of all repositories that can use the secret on GitHub.
+// ListRepoNames returns the names of all repositories that can use the secret
+// on GitHub, spelled as GitHub reports them.
 func ListRepoNames(ctx context.Context, l RepoLister, org, name string) ([]string, error) {
-	ids, err := ListRepoIDs(ctx, l, org, name)
+	repos, err := listRepos(ctx, l, org, name)
 	if err != nil {
 		return nil, err
 	}
-	return slices.Collect(maps.Keys(ids)), nil
+	names := make([]string, 0, len(repos))
+	for _, r := range repos {
+		names = append(names, r.GetName())
+	}
+	return names, nil
 }
 
 // ListRepoIDs returns the ID of every repository that can use the secret on
 // GitHub, keyed by lowercased name: GitHub repository names are
 // case-insensitive, so callers must look names up lowercased.
 func ListRepoIDs(ctx context.Context, l RepoLister, org, name string) (map[string]int64, error) {
+	repos, err := listRepos(ctx, l, org, name)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]int64, len(repos))
+	for _, r := range repos {
+		ids[strings.ToLower(r.GetName())] = r.GetID()
+	}
+	return ids, nil
+}
+
+// listRepos pages through the repositories that can use the secret on GitHub.
+func listRepos(ctx context.Context, l RepoLister, org, name string) ([]*github.Repository, error) {
 	opts := &github.ListOptions{PerPage: 100}
-	ids := map[string]int64{}
+	var repos []*github.Repository
 	for {
 		list, resp, err := l.ListSelectedReposForOrgSecret(ctx, org, name, opts)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range list.Repositories {
-			ids[strings.ToLower(r.GetName())] = r.GetID()
-		}
+		repos = append(repos, list.Repositories...)
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
 	}
-	return ids, nil
+	return repos, nil
 }
 
 // RenamedRepoError returns an error if a declared name absent from the list
@@ -135,7 +151,7 @@ func RenamedRepoError(known map[string]int64, added []string, addedIDs []int64) 
 	}
 	for i, n := range added {
 		if current, ok := byID[addedIDs[i]]; ok {
-			return fmt.Errorf("repository %s is named %s on GitHub; update selectedRepositories to the new name", n, current)
+			return errors.Errorf("repository %s is named %s on GitHub; update selectedRepositories to the new name", n, current)
 		}
 	}
 	return nil
@@ -156,4 +172,14 @@ func SameRepos(spec []v1alpha1.SecretSelectedRepo, ghNames []string) bool {
 	slices.Sort(specNames)
 	slices.Sort(gh)
 	return slices.Equal(specNames, gh)
+}
+
+// RepoObservations returns names as observed repositories, sorted.
+func RepoObservations(names []string) []v1alpha1.SecretSelectedRepoObservation {
+	out := make([]v1alpha1.SecretSelectedRepoObservation, 0, len(names))
+	for _, n := range names {
+		out = append(out, v1alpha1.SecretSelectedRepoObservation{Repo: n})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.SecretSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
 }

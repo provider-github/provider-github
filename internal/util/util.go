@@ -27,8 +27,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
 	"github.com/google/go-cmp/cmp"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
 	pointer "k8s.io/utils/ptr"
 )
 
@@ -207,17 +207,17 @@ func SortRequiredStatusChecks(checks []*v1alpha1.RequiredStatusCheck) {
 }
 
 // SortRulesRequiredStatusChecks sorts a slice of RequiredStatusCheck pointers in-place
-// by the Context field in ascending order, then by IntegrationId with nil first.
+// by the Context field in ascending order, then by IntegrationID with nil first.
 func SortRulesRequiredStatusChecks(checks []*v1alpha1.RulesRequiredStatusChecksParameters) {
 	sort.Slice(checks, func(i, j int) bool {
 		a, b := checks[i], checks[j]
 		if a.Context != b.Context {
 			return a.Context < b.Context
 		}
-		if (a.IntegrationId == nil) != (b.IntegrationId == nil) {
-			return a.IntegrationId == nil
+		if (a.IntegrationID == nil) != (b.IntegrationID == nil) {
+			return a.IntegrationID == nil
 		}
-		return a.IntegrationId != nil && *a.IntegrationId < *b.IntegrationId
+		return a.IntegrationID != nil && *a.IntegrationID < *b.IntegrationID
 	})
 }
 
@@ -234,38 +234,21 @@ func SortRulesCodeScanningTools(tools []*v1alpha1.RulesCodeScanningTool) {
 }
 
 // SortRulesBypassActors sorts a slice of RulesetByPassActors pointers in-place by
-// ActorType, then ActorId with nil first, then BypassMode.
+// ActorType, then ActorID with nil first, then BypassMode.
 func SortRulesBypassActors(actors []*v1alpha1.RulesetByPassActors) {
 	sort.Slice(actors, func(i, j int) bool {
 		a, b := actors[i], actors[j]
 		if ta, tb := pointer.Deref(a.ActorType, ""), pointer.Deref(b.ActorType, ""); ta != tb {
 			return ta < tb
 		}
-		if (a.ActorId == nil) != (b.ActorId == nil) {
-			return a.ActorId == nil
+		if (a.ActorID == nil) != (b.ActorID == nil) {
+			return a.ActorID == nil
 		}
-		if a.ActorId != nil && *a.ActorId != *b.ActorId {
-			return *a.ActorId < *b.ActorId
+		if a.ActorID != nil && *a.ActorID != *b.ActorID {
+			return *a.ActorID < *b.ActorID
 		}
 		return pointer.Deref(a.BypassMode, "") < pointer.Deref(b.BypassMode, "")
 	})
-}
-
-// ToBoolPtr converts a boolean value to a pointer to a boolean value.
-func ToBoolPtr(b bool) *bool {
-	return &b
-}
-
-// ToIntPtr is a helper function that takes an integer 'i' as input and returns a pointer to 'i'.
-// This can be useful when you want to create a pointer to an integer value.
-func ToIntPtr(i int) *int {
-	return &i
-}
-
-// ToStringPtr is a helper function that takes a string 's' as input and returns a pointer to 's'.
-// This can be useful when you want to create a pointer to a string value.
-func ToStringPtr(s string) *string {
-	return &s
 }
 
 // BoolDerefToPointer dereferences the pointer to bool 'ptr',

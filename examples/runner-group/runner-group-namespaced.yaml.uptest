@@ -1,0 +1,21 @@
+for: organizations.github.m.crossplane.io/v1alpha1/RunnerGroup
+meta.upbound.io/example-id: organizations/v1alpha1/runnergroup
+uptest.upbound.io/timeout: "600"
+uptest.upbound.io/post-assert-hook: ../../test/hooks/post-assert-runner-group-namespaced.sh
+crossplane.io/update-test: |
+  - field: allowsPublicRepositories
+    value: true
+  - field: visibility
+    value: selected
+  - field: selectedRepositories
+    value:
+      - repo: demo-repository-1
+  - field: selectedRepositories
+    value: []
+  - field: selectedWorkflows
+    value:
+      - pgh-test/pgh-e2e-workflows/.github/workflows/ci.yml@refs/heads/main
+  - field: selectedWorkflows
+    value: []
+  - field: org
+    skip: "organization locator: a different value addresses another organization's object, it is not an update"

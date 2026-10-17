@@ -20,29 +20,19 @@ import (
 	"context"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/go-github/v90/github"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
-	"github.com/crossplane/provider-github/internal/telemetry"
-	"github.com/crossplane/provider-github/internal/util"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
+	"github.com/provider-github/provider-github/internal/util"
 )
 
 const (
@@ -54,76 +44,6 @@ const (
 
 	visibilitySelected = "selected"
 )
-
-// Setup adds a controller that reconciles RunnerGroup managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0)
-}
-
-// SetupWithTimeout adds a controller that reconciles RunnerGroup managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.RunnerGroupGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-	}
-
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.RunnerGroupGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.RunnerGroup{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.RunnerGroup)
-	if !ok {
-		return nil, errors.New(errNotRunnerGroup)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{github: gh}, nil
-}
 
 type external struct {
 	github *ghclient.Client
@@ -145,31 +65,44 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cr.Status.AtProvider.ID = g.GetID()
+	mirrorGroup(&cr.Status.AtProvider, g, org)
 
 	p := cr.Spec.ForProvider
 	want := workflowStrings(p.SelectedWorkflows)
-	if g.GetVisibility() != p.Visibility ||
-		g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories ||
-		g.GetRestrictedToWorkflows() != (len(want) > 0) ||
-		!util.EqualUnordered(g.SelectedWorkflows, want) {
-		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
-	}
+	// Every section is read and mirrored before a difference is reported, so
+	// status.atProvider shows the repositories GitHub gives access to even when
+	// a field before them differs.
+	// An omitted visibility, allowsPublicRepositories or selectedWorkflows
+	// under an Observe-only policy is not compared.
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
+	drift := (p.Visibility != "" && g.GetVisibility() != p.Visibility) ||
+		((p.AllowsPublicRepositories || writes) && g.GetAllowsPublicRepositories() != p.AllowsPublicRepositories) ||
+		((p.SelectedWorkflows != nil || writes) &&
+			(g.GetRestrictedToWorkflows() != (len(want) > 0) || !util.EqualUnordered(g.SelectedWorkflows, want)))
 
-	if p.Visibility == visibilitySelected {
+	// The list exists on GitHub's side while GitHub's visibility is selected,
+	// whatever the spec says.
+	if g.GetVisibility() == visibilitySelected {
 		ghRepos, err := listAccessRepos(ctx, c.github, org, g.GetID())
 		if err != nil {
 			return managed.ExternalObservation{}, err
 		}
-		upToDate, err := repoAccessUpToDate(ctx, c.github, org, repoNamesFromCR(p.SelectedRepositories), ghRepos)
-		if err != nil {
-			return managed.ExternalObservation{}, err
-		}
-		if !upToDate {
-			return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+		cr.Status.AtProvider.SelectedRepositories = mirrorRepos(ghRepos)
+		if !drift && p.Visibility == visibilitySelected {
+			upToDate, err := repoAccessUpToDate(ctx, c.github, org, repoNamesFromCR(p.SelectedRepositories), ghRepos)
+			if err != nil {
+				return managed.ExternalObservation{}, err
+			}
+			drift = !upToDate
 		}
 	}
 
-	cr.SetConditions(xpv1.Available())
+	if drift {
+		cr.SetConditions(xpv2.Unavailable())
+		return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false}, nil
+	}
+
+	cr.SetConditions(xpv2.Available())
 	return managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
@@ -242,22 +175,53 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.RunnerGroup)
 	if !ok {
-		return errors.New(errNotRunnerGroup)
+		return managed.ExternalDelete{}, errors.New(errNotRunnerGroup)
 	}
 
 	id := cr.Status.AtProvider.ID
 	if id == 0 {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
 	_, err := c.github.Actions.DeleteOrganizationRunnerGroup(ctx, cr.Spec.ForProvider.Org, id)
 	if err != nil && !ghclient.Is404(err) {
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return nil
+	return managed.ExternalDelete{}, nil
+}
+
+// mirrorGroup records in status.atProvider what GitHub reports for the runner
+// group g, which was read under org. The repositories with access are not part
+// of the group response and are recorded where they are listed.
+func mirrorGroup(ap *v1alpha1.RunnerGroupObservation, g *github.RunnerGroup, org string) {
+	ap.Org = org
+	ap.Visibility = g.GetVisibility()
+	if g.AllowsPublicRepositories != nil {
+		allows := g.GetAllowsPublicRepositories()
+		ap.AllowsPublicRepositories = &allows
+	} else {
+		ap.AllowsPublicRepositories = nil
+	}
+	// An empty answer is an empty list, not an absent one.
+	ap.SelectedWorkflows = make([]v1alpha1.WorkflowRefObservation, 0, len(g.SelectedWorkflows))
+	for _, w := range g.SelectedWorkflows {
+		ap.SelectedWorkflows = append(ap.SelectedWorkflows, v1alpha1.WorkflowRefObservation(w))
+	}
+	slices.Sort(ap.SelectedWorkflows)
+	ap.SelectedRepositories = nil
+}
+
+// mirrorRepos lists the names of repos, sorted.
+func mirrorRepos(repos []*github.Repository) []v1alpha1.RunnerGroupSelectedRepoObservation {
+	out := make([]v1alpha1.RunnerGroupSelectedRepoObservation, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, v1alpha1.RunnerGroupSelectedRepoObservation{Repo: r.GetName()})
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.RunnerGroupSelectedRepoObservation) int { return strings.Compare(a.Repo, b.Repo) })
+	return out
 }
 
 // findRunnerGroup pages through the organization's runner groups and
@@ -340,4 +304,10 @@ func workflowStrings(wfs []v1alpha1.WorkflowRef) []string {
 		out = append(out, string(w))
 	}
 	return out
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
+	return nil
 }

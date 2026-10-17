@@ -73,6 +73,9 @@ const (
 	DimensionRulesetSpec       = "ruleset_spec"
 )
 
+// labelOrganization is the metric label naming the GitHub org a call targeted.
+const labelOrganization = "organization"
+
 // labels carried by every rate-limit metric:
 //   - organization: the GitHub org the call targeted.
 //   - app_id: the GitHub App ID (identifies the App definition; shared across
@@ -80,7 +83,7 @@ const (
 //   - app_installation_id: the GitHub App Installation ID (identifies one
 //     specific installation in one org/account). Combined with app_id, this
 //     uniquely names the credential.
-var rateLimitLabels = []string{"organization", "app_id", "app_installation_id"}
+var rateLimitLabels = []string{labelOrganization, "app_id", "app_installation_id"}
 
 // newRateLimitMetrics constructs the metric set without registering it. Used
 // directly by tests; production code goes through NewRateLimitMetrics.
@@ -140,7 +143,7 @@ func newRateLimitMetrics() *RateLimitMetrics {
 				Name: "github_repository_unreconcilable",
 				Help: "1 while the repository has declared state that stays unapplied, per dimension (collaborators, branch_protection, archived, settings, rulesets_forbidden, ruleset_parameters, ruleset_spec)",
 			},
-			[]string{"organization", "repository", "dimension"},
+			[]string{labelOrganization, "repository", "dimension"},
 		),
 	}
 }
@@ -248,5 +251,5 @@ func (m *RateLimitMetrics) SetRepositoryUnreconcilable(org, repo, dimension stri
 
 // ForgetRepository deletes every github_repository_unreconcilable series of the repository.
 func (m *RateLimitMetrics) ForgetRepository(org, repo string) {
-	m.repositoryUnreconcilable.DeletePartialMatch(prometheus.Labels{"organization": org, "repository": repo})
+	m.repositoryUnreconcilable.DeletePartialMatch(prometheus.Labels{labelOrganization: org, "repository": repo})
 }

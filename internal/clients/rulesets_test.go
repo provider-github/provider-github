@@ -21,14 +21,14 @@ import (
 
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/internal/clients/fake"
-	"github.com/crossplane/provider-github/internal/clients/rulesets"
+	"github.com/provider-github/provider-github/internal/clients/fake"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 )
 
 // The ruleset calls moved off go-github's Repositories service but dashboards, alerts and
 // E2E scripts key on their method labels, so each must still be counted under its old
 // "Repositories." name.
-func TestRulesets_KeepRepositoriesMethodLabels(t *testing.T) {
+func TestRulesetsKeepRepositoriesMethodLabels(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 	metrics := telemetryNewForTest(t)
 	resp := &github.Response{Response: &http.Response{StatusCode: http.StatusOK}}
@@ -86,7 +86,7 @@ func rulesetsAgainst(t *testing.T, cacheKey string, handler http.HandlerFunc) (*
 // A ruleset that is gone answers 404: the caller must see it as Is404, and the response
 // must reach the quota pool like any go-github call's, or the picker loses that
 // credential's remaining quota.
-func TestRulesets_NotFoundReachesPoolAndIs404(t *testing.T) {
+func TestRulesetsNotFoundReachesPoolAndIs404(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 	client, _ := rulesetsAgainst(t, "k404", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Limit", "5000")
@@ -111,7 +111,7 @@ func TestRulesets_NotFoundReachesPoolAndIs404(t *testing.T) {
 // GitHub answers the ruleset list of a private repository on a plan without rulesets
 // with 403; the repository controller reports that on a condition. Rate-limit 403s stay
 // errors to retry, so Is403 is false for them.
-func TestRulesets_Is403(t *testing.T) {
+func TestRulesetsIs403(t *testing.T) {
 	cases := map[string]struct {
 		headers map[string]string
 		body    string
@@ -159,7 +159,7 @@ func TestRulesets_Is403(t *testing.T) {
 // After a secondary rate limit, go-github answers further calls itself without reaching
 // GitHub. That answer carries a response, so the pool must not count it as a token-mint
 // or network failure of the credential.
-func TestRulesets_SecondaryRateLimitShortCircuitKeepsResponse(t *testing.T) {
+func TestRulesetsSecondaryRateLimitShortCircuitKeepsResponse(t *testing.T) {
 	swapGlobalPool(t, newQuotaPool(time.Now))
 	client, hits := rulesetsAgainst(t, "k403", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "60")

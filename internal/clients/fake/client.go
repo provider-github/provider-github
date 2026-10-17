@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/internal/clients/rulesets"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 )
 
 type MockActionsClient struct {

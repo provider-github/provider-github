@@ -26,9 +26,10 @@ import (
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/google/go-github/v90/github"
 
-	"github.com/crossplane/provider-github/internal/clients/rulesets"
+	"github.com/provider-github/provider-github/internal/clients/rulesets"
 )
 
 // ServicesCache caches *Services keyed by credential hash so that
@@ -100,7 +101,7 @@ func NewCachedServices(creds string) (*Services, error) {
 func ExtractAppIDs(creds string) (appID, installationID string, err error) {
 	parts := strings.SplitN(creds, ",", 3)
 	if len(parts) != 3 {
-		return "", "", fmt.Errorf("invalid format for credentials")
+		return "", "", errors.New("invalid format for credentials")
 	}
 	return parts[0], parts[1], nil
 }
@@ -109,7 +110,7 @@ func ExtractAppIDs(creds string) (appID, installationID string, err error) {
 func createNewServices(creds string) (*Services, error) {
 	credss := strings.Split(creds, ",")
 	if len(credss) != 3 {
-		return nil, fmt.Errorf("invalid format for credentials")
+		return nil, errors.New("invalid format for credentials")
 	}
 
 	appId, err := strconv.Atoi(credss[0])

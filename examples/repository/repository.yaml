@@ -1,0 +1,60 @@
+apiVersion: organizations.github.crossplane.io/v1alpha1
+kind: Repository
+metadata:
+  name: pgh-e2e-repository
+spec:
+  forProvider:
+    org: pgh-test
+    description: Crossplane provider-github example repository
+    private: true
+    # GitHub only deletes a repository when forceDelete is true; without it the
+    # managed resource cannot be removed.
+    forceDelete: true
+    topics:
+      - crossplane
+      - example
+    hasIssues: true
+    hasProjects: false
+    hasWiki: false
+    hasDiscussions: false
+    allowMergeCommit: true
+    allowSquashMerge: true
+    allowRebaseMerge: false
+    allowUpdateBranch: true
+    deleteBranchOnMerge: true
+    mergeCommitTitle: PR_TITLE
+    mergeCommitMessage: PR_BODY
+    squashMergeCommitTitle: PR_TITLE
+    squashMergeCommitMessage: PR_BODY
+    # Rulesets. Listing repositoryRules makes the list authoritative: the
+    # repository ends up with exactly these rulesets, and [] deletes them all.
+    # This one uses rule types and parameters beyond a plain branch protection.
+    # Rules that need a GitHub product, a plan or an ID this example cannot
+    # assume (merge queue, code scanning, Copilot review, push rulesets,
+    # required reviewers) are in the CRD documentation.
+    repositoryRules:
+      - name: pgh-e2e-pull-request-rules
+        enforcement: active
+        target: branch
+        conditions:
+          refName:
+            include:
+              - ~DEFAULT_BRANCH
+            exclude: []
+        rules:
+          pullRequest:
+            requiredApprovingReviewCount: 1
+            allowedMergeMethods:
+              - squash
+              - rebase
+          requiredStatusChecks:
+            strictRequiredStatusChecksPolicy: true
+            doNotEnforceOnCreate: true
+            requiredStatusChecks:
+              - context: validate
+    # Reference an Organization managed resource instead of naming the
+    # organization directly:
+    #   orgRef:
+    #     name: <Organization managed resource>
+  providerConfigRef:
+    name: default

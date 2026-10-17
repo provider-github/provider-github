@@ -21,33 +21,30 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	pointer "k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/google/go-github/v90/github"
 	"github.com/gosimple/slug"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-github/apis/organizations/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
-	ghclient "github.com/crossplane/provider-github/internal/clients"
-	"github.com/crossplane/provider-github/internal/features"
-	"github.com/crossplane/provider-github/internal/telemetry"
+	"github.com/provider-github/provider-github/apis/cluster/organizations/v1alpha1"
+	ghclient "github.com/provider-github/provider-github/internal/clients"
+	"github.com/provider-github/provider-github/internal/controller/mgmtpolicy"
+)
+
+// GitHub team membership roles.
+const (
+	roleMember     = "member"
+	roleMaintainer = "maintainer"
 )
 
 const (
@@ -58,92 +55,21 @@ const (
 	errNewClient = "cannot create new Service"
 )
 
-// Setup adds a controller that reconciles Team managed resources.
-func Setup(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics) error {
-	return SetupWithTimeout(mgr, o, metrics, 0) // Use default timeout
-}
-
-// SetupWithTimeout adds a controller that reconciles Team managed resources with configurable timeout.
-func SetupWithTimeout(mgr ctrl.Manager, o controller.Options, metrics *telemetry.RateLimitMetrics, timeout time.Duration) error {
-	name := managed.ControllerName(v1alpha1.TeamGroupKind)
-
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), apisv1alpha1.StoreConfigGroupVersionKind))
-	}
-
-	reconcilerOptions := []managed.ReconcilerOption{
-		managed.WithExternalConnecter(&connector{
-			kube:    mgr.GetClient(),
-			usage:   resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			metrics: metrics}),
-		managed.WithLogger(o.Logger.WithValues("controller", name)),
-		managed.WithPollInterval(o.PollInterval),
-		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...),
-	}
-
-	// Add timeout if specified
-	if timeout > 0 {
-		reconcilerOptions = append(reconcilerOptions, managed.WithTimeout(timeout))
-	}
-
-	r := managed.NewReconciler(mgr,
-		resource.ManagedKind(v1alpha1.TeamGroupVersionKind),
-		reconcilerOptions...)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha1.Team{}).
-		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
-}
-
-type connector struct {
-	kube    client.Client
-	usage   resource.Tracker
-	metrics *telemetry.RateLimitMetrics
-}
-
-func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha1.Team)
-	if !ok {
-		return nil, errors.New(errNotTeam)
-	}
-
-	if err := c.usage.Track(ctx, mg); err != nil {
-		return nil, errors.Wrap(err, errTrackPCUsage)
-	}
-
-	pc := &apisv1alpha1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: cr.GetProviderConfigReference().Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetPC)
-	}
-
-	gh, err := ghclient.ResolveAndConnect(ctx, c.kube, pc, c.metrics, cr.Spec.ForProvider.Org)
-	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
-	}
-
-	return &external{github: gh}, nil
-}
-
 type external struct {
 	github *ghclient.Client
 }
 
 const (
-	typeTeamMembershipPartial   xpv1.ConditionType   = "TeamMembershipPartial"
-	reasonPendingOrgMembership  xpv1.ConditionReason = "PendingOrgMembership"
-	reasonRoleEnforcedByOrg     xpv1.ConditionReason = "RoleEnforcedByOrg"
-	reasonPendingTeamInvitation xpv1.ConditionReason = "PendingTeamInvitation"
-	reasonAllMembersPresent     xpv1.ConditionReason = "AllMembersPresent"
+	typeTeamMembershipPartial   xpv2.ConditionType   = "TeamMembershipPartial"
+	reasonPendingOrgMembership  xpv2.ConditionReason = "PendingOrgMembership"
+	reasonRoleEnforcedByOrg     xpv2.ConditionReason = "RoleEnforcedByOrg"
+	reasonPendingTeamInvitation xpv2.ConditionReason = "PendingTeamInvitation"
+	reasonAllMembersPresent     xpv2.ConditionReason = "AllMembersPresent"
 )
 
 // setTeamMembershipPartialCondition writes the CR-side condition reporting members the controller skipped.
 func setTeamMembershipPartialCondition(ctx context.Context, cr *v1alpha1.Team, pendingOrg, pendingTeam, roleEnforced []string) {
-	c := xpv1.Condition{
+	c := xpv2.Condition{
 		Type:               typeTeamMembershipPartial,
 		LastTransitionTime: metav1.Now(),
 	}
@@ -203,6 +129,38 @@ type memberCategorization struct {
 	pendingTeam []string
 	// roleEnforced: members whose role GitHub force-applies (org admins → maintainer).
 	roleEnforced []string
+	// direct: the team's members that are not merely inherited from a child team, with their roles.
+	direct map[string]string
+}
+
+// observedMembers lists the direct members of the team, sorted by login.
+func (c *memberCategorization) observedMembers() []v1alpha1.TeamMemberUserObservation {
+	out := make([]v1alpha1.TeamMemberUserObservation, 0, len(c.direct))
+	for user, role := range c.direct {
+		out = append(out, v1alpha1.TeamMemberUserObservation{User: user, Role: role})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].User < out[j].User })
+	return out
+}
+
+// mirrorTeam records in status.atProvider what GitHub reports for the team t,
+// which was read under org.
+func mirrorTeam(ap *v1alpha1.TeamObservation, t *github.Team, org string) {
+	ap.Org = org
+	ap.Description = t.GetDescription()
+	ap.Privacy = nil
+	if t.Privacy != nil {
+		privacy := t.GetPrivacy()
+		ap.Privacy = &privacy
+	}
+	ap.Parent = nil
+	if t.Parent != nil {
+		parent := t.Parent.GetName()
+		if parent == "" {
+			parent = t.Parent.GetSlug()
+		}
+		ap.Parent = &parent
+	}
 }
 
 func (c *memberCategorization) hasMemberDrift() bool {
@@ -240,9 +198,13 @@ func categorizeMembers(ctx context.Context, gh *ghclient.Client, org, slug strin
 		toRemove:   make(map[string]string),
 		roleUpdate: make(map[string]string),
 		inviteable: make(map[string]string),
+		direct:     make(map[string]string),
 	}
 
 	for user, ghRole := range rollup {
+		if !inheritedSet[user] || ghRole == roleMaintainer {
+			out.direct[user] = ghRole
+		}
 		crRole, inCR := crMToPermission[user]
 		verdict, err := classifyRollupUser(ctx, gh, org, user, ghRole, crRole, inCR, inheritedSet[user])
 		if err != nil {
@@ -312,7 +274,7 @@ func classifyRollupUser(ctx context.Context, gh *ghclient.Client, org, user, ghR
 		// rogue direct grant layered on the inherited membership (DELETE demotes it to
 		// inherited member → converges) or an org admin (maintainer of every team;
 		// DELETE can't strip it → would loop). Remove only the former.
-		if ghRole != "maintainer" {
+		if ghRole != roleMaintainer {
 			return verdictNone, nil
 		}
 		admin, err := isOrgAdmin(ctx, gh, org, user)
@@ -330,7 +292,7 @@ func classifyRollupUser(ctx context.Context, gh *ghclient.Client, org, user, ghR
 	}
 	// Role mismatch. Only (GH=maintainer, CR=else) can be GitHub-enforced: GitHub
 	// force-applies maintainer to org admins regardless of the declared role.
-	if ghRole == "maintainer" {
+	if ghRole == roleMaintainer {
 		enforced, err := isOrgAdmin(ctx, gh, org, user)
 		if err != nil {
 			return verdictNone, err
@@ -395,11 +357,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.ID = name
+	mirrorTeam(&cr.Status.AtProvider, t, cr.Spec.ForProvider.Org)
 
 	categorized, err := categorizeMembers(ctx, c.github, cr.Spec.ForProvider.Org, teamSlug, cr.Spec.ForProvider.Members)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
+	cr.Status.AtProvider.Members = categorized.observedMembers()
 
 	crParentTeamSlug := slug.Make(pointer.Deref(cr.Spec.ForProvider.Parent, ""))
 	ghParentTeamSlug := ""
@@ -407,20 +372,26 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ghParentTeamSlug = pointer.Deref(t.Parent.Slug, "")
 	}
 
-	structuralDrift := crParentTeamSlug != ghParentTeamSlug ||
-		pointer.Deref(cr.Spec.ForProvider.Privacy, "secret") != pointer.Deref(t.Privacy, "secret") ||
-		cr.Spec.ForProvider.Description != pointer.Deref(t.Description, "")
+	// Under an Observe-only policy a field the spec omits is not compared: no
+	// write could correct it, so reporting it would hold Ready False.
+	p := cr.Spec.ForProvider
+	writes := mgmtpolicy.WritesDeclared(cr.GetManagementPolicies())
+	structuralDrift := ((p.Parent != nil || writes) && crParentTeamSlug != ghParentTeamSlug) ||
+		((p.Privacy != nil || writes) && pointer.Deref(p.Privacy, "secret") != pointer.Deref(t.Privacy, "secret")) ||
+		((p.Description != "" || writes) && p.Description != pointer.Deref(t.Description, ""))
+	memberDrift := (p.Members != nil || writes) && categorized.hasMemberDrift()
 
 	setTeamMembershipPartialCondition(ctx, cr, categorized.pendingOrg, categorized.pendingTeam, categorized.roleEnforced)
 
-	if structuralDrift || categorized.hasMemberDrift() {
+	if structuralDrift || memberDrift {
+		cr.SetConditions(xpv2.Unavailable())
 		return managed.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: false,
 		}, nil
 	}
 
-	cr.SetConditions(xpv1.Available())
+	cr.SetConditions(xpv2.Available())
 
 	return managed.ExternalObservation{
 		ResourceExists:   true,
@@ -465,7 +436,7 @@ func getPendingTeamInviteeLogins(ctx context.Context, gh *ghclient.Client, org, 
 func getMembersWithPermissions(ctx context.Context, gh *ghclient.Client, org, slug string) (map[string]string, error) {
 	mToPermission := make(map[string]string)
 	// maintainer last: a user can be both an inherited member and a direct maintainer; querying maintainer last makes it win.
-	roles := []string{"member", "maintainer"}
+	roles := []string{roleMember, roleMaintainer}
 
 	for _, role := range roles {
 		opt := &github.TeamListTeamMembersOptions{
@@ -641,10 +612,10 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*v1alpha1.Team)
 	if !ok {
-		return errors.New(errNotTeam)
+		return managed.ExternalDelete{}, errors.New(errNotTeam)
 	}
 
 	name := meta.GetExternalName(cr)
@@ -652,8 +623,14 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 
 	_, err := c.github.Teams.DeleteTeamBySlug(ctx, cr.Spec.ForProvider.Org, teamSlug)
 	if err != nil {
-		return err
+		return managed.ExternalDelete{}, err
 	}
 
+	return managed.ExternalDelete{}, nil
+}
+
+// Disconnect is a no-op: the GitHub client is cached and shared across
+// reconciles, so there is nothing to release per connection.
+func (c *external) Disconnect(_ context.Context) error {
 	return nil
 }
