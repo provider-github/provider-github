@@ -20,9 +20,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	apisv1alpha1 "github.com/crossplane/provider-github/apis/v1alpha1"
+	apisv1alpha1 "github.com/provider-github/provider-github/apis/cluster/v1alpha1"
 )
 
 func newFakeKubeWithSecret(t *testing.T, name, namespace string, data map[string][]byte) *fake.ClientBuilder {
@@ -43,10 +43,10 @@ func pcWithSecretRef(secretName, namespace, key string) *apisv1alpha1.ProviderCo
 	return &apisv1alpha1.ProviderConfig{
 		Spec: apisv1alpha1.ProviderConfigSpec{
 			Credentials: apisv1alpha1.ProviderCredentials{
-				Source: xpv1.CredentialsSourceSecret,
-				CommonCredentialSelectors: xpv1.CommonCredentialSelectors{
-					SecretRef: &xpv1.SecretKeySelector{
-						SecretReference: xpv1.SecretReference{Name: secretName, Namespace: namespace},
+				Source: xpv2.CredentialsSourceSecret,
+				CommonCredentialSelectors: xpv2.CommonCredentialSelectors{
+					SecretRef: &xpv2.SecretKeySelector{
+						SecretReference: xpv2.SecretReference{Name: secretName, Namespace: namespace},
 						Key:             key,
 					},
 				},
@@ -58,7 +58,7 @@ func pcWithSecretRef(secretName, namespace, key string) *apisv1alpha1.ProviderCo
 // A missing Secret key produces an error that names the secret reference
 // and key, not a generic "invalid format for credentials" from deeper in
 // the stack. The error message is the operator's only diagnostic.
-func TestResolveAllCredentials_MissingKey_NamesTheSecret(t *testing.T) {
+func TestResolveAllCredentialsMissingKeyNamesTheSecret(t *testing.T) {
 	kube := newFakeKubeWithSecret(t, "github-secret", "crossplane-system", map[string][]byte{
 		"creds-good": []byte("1,2,PEM"),
 	}).Build()
@@ -82,7 +82,7 @@ func TestResolveAllCredentials_MissingKey_NamesTheSecret(t *testing.T) {
 
 // An existing Secret key holding zero bytes is treated the same as a
 // missing key — the error must still name the secret reference.
-func TestResolveAllCredentials_EmptyValue_NamesTheSecret(t *testing.T) {
+func TestResolveAllCredentialsEmptyValueNamesTheSecret(t *testing.T) {
 	kube := newFakeKubeWithSecret(t, "github-secret", "crossplane-system", map[string][]byte{
 		"creds-empty": {},
 	}).Build()
@@ -103,7 +103,7 @@ func TestResolveAllCredentials_EmptyValue_NamesTheSecret(t *testing.T) {
 
 // Negative control: the empty-bytes validation must not reject legitimate
 // non-empty credentials.
-func TestResolveAllCredentials_GoodKey_ReturnsBytes(t *testing.T) {
+func TestResolveAllCredentialsGoodKeyReturnsBytes(t *testing.T) {
 	kube := newFakeKubeWithSecret(t, "github-secret", "crossplane-system", map[string][]byte{
 		"creds-good": []byte("1,2,PEM"),
 	}).Build()
