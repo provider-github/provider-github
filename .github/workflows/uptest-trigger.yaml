@@ -16,6 +16,7 @@ permissions:
   contents: read       # actions/checkout (get-example-list, uptest jobs)
   pull-requests: read  # GET /repos/{}/pulls/{number} -- verify PR head SHA
   statuses: write       # POST /repos/{}/statuses/{sha} -- pending/success/failure checks
+  actions: write       # Actions cache writes (setup-go, setup-qemu)
 
 jobs:
   check-permissions:

@@ -109,6 +109,7 @@ jobs:
     runs-on: ubuntu-26.04
     permissions:
       contents: read        # actions/checkout; nothing else here touches the API
+      actions: write        # Actions cache writes (setup-go)
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -462,6 +463,7 @@ jobs:
     permissions:
       contents: read        # actions/checkout; the registry push authenticates
                             # with the secrets login below, not GITHUB_TOKEN
+      actions: write        # Actions cache writes (setup-go, setup-qemu)
     outputs:
       digest: ${{ steps.pushed.outputs.digest }}
     steps:
