@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: write        # Actions cache writes (setup-go, setup-qemu)
 
 env:
   # Keep in sync with GOLANGCILINT_VERSION in the Makefile.
